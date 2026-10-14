@@ -47,7 +47,7 @@ test("only exact public pathnames and GET or HEAD are claimed", () => {
 
 test("private API requests fall through without a public authentication bypass", () => {
   const privatePaths = [
-    "/api", "/api/chat", "/api/context", "/api/planning", "/api/schedule",
+    "/api", "/api/chat", "/api/context", "/api/planning", "/api/schedule", "/api/mail", "/api/mail/items",
     "/api/companion", "/api/privacy", "/api/terms", "/privacy/api/chat", "/terms/api/context",
   ];
   for (const path of privatePaths) {

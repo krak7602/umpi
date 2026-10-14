@@ -1,7 +1,7 @@
 ---
 title: Persistent assistant runtime
-aliases: [coordinator, Telegram adapter, reminders, control API]
-updated: 2026-10-14
+aliases: [coordinator, Telegram adapter, reminders, mail follow-through, control API]
+updated: 2026-10-15
 ---
 
 # Persistent assistant runtime
@@ -12,7 +12,7 @@ updated: 2026-10-14
 
 `src/worker/` implements one owner-scoped Cloudflare Durable Object, `Assistant`, reached through a narrow Worker router. It hosts Pi Durable through Cloudflare `PiHarness`. Pi owns conversations, generation, tool execution, and transcript recovery. The Agents lifecycle queue owns wakeups; application code does not replace its alarm handler.
 
-Implemented actions include text conversation/reminders, proactive follow-through, daily-note preparation, approved Mac shell jobs, [coding tasks](#coding-tasks), [browser tasks](#browser-tasks), [native background subagents](#subagents), and the [native companion protocol](phone-companion.md#pairing-tools-and-http-contract). New scheduling and native executor installations start disabled. Browser evidence distinguishes native/model execution, encrypted export, and provider stop behavior. Voice calls remain unimplemented, and implementation alone does not prove delivery to a physical device.
+Implemented actions include text conversation/reminders, proactive follow-through, [read-only mail follow-through](#read-only-mail-follow-through), daily-note preparation, approved Mac shell jobs, [coding tasks](#coding-tasks), [browser tasks](#browser-tasks), [native background subagents](#subagents), and the [native companion protocol](phone-companion.md#pairing-tools-and-http-contract). New scheduling, mail monitoring, and native executor installations start disabled. Browser evidence distinguishes native/model execution, encrypted export, and provider stop behavior. Voice calls remain unimplemented, and implementation alone does not prove delivery to a physical device.
 
 ### Pinned runtime
 
@@ -85,7 +85,24 @@ An optional structured notification requires the commitment's original permissio
 
 Scheduler settings start paused. `/schedule` offers owner-only native Enable/Pause controls; `/status` includes a compact summary. Controls bind to a confirmed Telegram message and the exact settings version. Pausing retains responsibilities and stops proactive runs/notifications, not existing text reminders, approved Mac work, or device alarms. The protected control API also configures quiet hours. [Operation](../runbooks/local-development.md#operate-proactive-follow-through) owns activation and recovery.
 
-Ordinary reviews can inspect selected core context and implemented job/reminder/companion state. Only the explicitly owned daily-planning review receives the scoped note/calendar tools below. A generic wake-up does not confer their capabilities or authorize whole-vault/browser access.
+Ordinary reviews can inspect selected core context and implemented job/reminder/companion state. Only explicitly owned subsystem reviews receive daily-planning or mail tools. A generic wake-up does not confer calendar, vault, mailbox, or browser capabilities.
+
+### Read-only mail follow-through
+
+`mail-store.ts` owns a separate operational inbox view in application SQLite. It is not standing memory, a daily note, or a copy of the full mailbox. Settings start paused and require the existing proactive scheduler. The default poll is 30 minutes and is configurable from 15 minutes to one day. Lifecycle deadlines invoke short Worker/Durable Object work; there is no Cron Trigger, Gmail Pub/Sub resource, polling process, or always-running container.
+
+Enabling requires an owner-selected fixed bootstrap boundary from now through the previous 30 days; `/mail` offers now, 7, 14, and 30 days, with 14 days as the default setting. That boundary never moves backward automatically. One pass discovers at most 200 message changes, ranks at most 50 thread contexts for model triage, retains at most the latest eight bounded messages per selected thread, and permits at most ten owner-notification items. A capped pass is marked partial and keeps the newest candidates; it does not continue through older mailbox history. The first useful result is one digest, not one alert per message.
+
+After bootstrap, the adapter advances a Gmail `historyId` cursor and reads only added-message history. Duplicate provider versions do not reopen an item. A later incoming message reopens handled or ignored state; a later sent message resolves a thread whose latest incoming message was answered. An expired Gmail history cursor stops polling and requires an explicit bounded re-bootstrap. Provider failures remain sanitized and retry only at the configured poll interval; they never become an empty successful inbox.
+
+The Gmail OAuth credential is independent from Calendar, even when both use the same owner-controlled Google Cloud project or installed-client JSON. It requests only `gmail.readonly`. Refresh and API requests use fixed Google HTTPS endpoints, reject redirects, and do not expose account identity or provider error bodies. The adapter reads inbox/history metadata and bounded inline text; it does not download attachments.
+
+Pending thread context, sender, subject, timestamps, Gmail URL, summaries, reasons, and owner-action state are private Durable Object records. The explicitly owned Pi review receives only the bounded pending batch. Mail text is untrusted data, never instructions or authorization. Ignored and resolved items clear message excerpts; marking an item handled also clears them. Selected attention items retain bounded context so an owner can request a proposed reply in chat. The model provider receives the selected batch for triage, and Telegram receives the resulting digest or owner-requested draft text.
+
+The structured triage tool must decide every version-bound item as `notify` or `ignore`. Application code generates the notification from committed decisions and routes it through normal proactive permission, quiet-hour, deduplication, and expiry checks. No model prose can widen the scan or notify outside those checks. `/mail` binds settings and item actions to the exact confirmed Telegram message and versions. It supports pause, check now, bounded re-bootstrap after cursor expiry, draft-in-chat, 24-hour snooze, and handled. These actions change only Umpi state.
+
+Gmail mutation is intentionally unavailable. Umpi cannot send, save a Gmail draft, mark read, archive, delete, or change labels. A proposed reply is only chat text for owner review. Foreground `read_mail_follow_through` reads selected operational status; only the owned background review can call `read_mail_triage_inputs` and `commit_mail_triage`. Generic commitment and wake tools cannot repurpose the mail-owned responsibility. [Mail operation](../runbooks/local-development.md#operate-read-only-mail-follow-through) owns authorization, secret installation, activation, revocation, and verification.
+
 
 ### Daily-note preparation
 
@@ -119,7 +136,7 @@ Foreground tools are `read_daily_plan`, `set_daily_brief`, and `prepare_daily_pl
 
 ### Telegram
 
-`POST /telegram/webhook` requires the configured secret header, exact owner ID, exact chat ID, and a private non-bot sender. It handles ordinary text, voice notes, native callback queries, `/status`, `/pair`, `/memory`, `/schedule`, `/plan`, `/code`, `/browse`, `/approve ID VERSION`, and `/cancel ID [VERSION]`. `/status` is a bounded readable summary, not JSON or a guarantee that the Mac is online. `/pair` sends a short-lived companion pairing code outside Pi and the durable plaintext outbox; webhook replay does not mint another code. `/memory` opens owner review and revision history; `/plan` controls daily preparation; `/code` opens [coding-task controls](#coding-tasks); `/browse` opens [browser-task controls](#browser-tasks). Group chats and ordinary audio/document attachments remain unsupported.
+`POST /telegram/webhook` requires the configured secret header, exact owner ID, exact chat ID, and a private non-bot sender. It handles ordinary text, voice notes, native callback queries, `/status`, `/pair`, `/memory`, `/schedule`, `/plan`, `/mail`, `/code`, `/browse`, `/approve ID VERSION`, and `/cancel ID [VERSION]`. `/status` is a bounded readable summary, not JSON or a guarantee that the Mac is online. `/pair` sends a short-lived companion pairing code outside Pi and the durable plaintext outbox; webhook replay does not mint another code. `/memory` opens owner review and revision history; `/plan` controls daily preparation; `/mail` controls [read-only mail follow-through](#read-only-mail-follow-through); `/code` opens [coding-task controls](#coding-tasks); `/browse` opens [browser-task controls](#browser-tasks). Group chats and ordinary audio/document attachments remain unsupported.
 
 Voice notes become ordinary owner input after real [subscription-backed transcription](model-auth.md#voice-note-transcription). Replies remain text; this does not add live calls. Telegram's native voice recorder needs no new bot command or BotFather configuration.
 
@@ -129,7 +146,7 @@ The durable inbox preserves text/voice admission order. Pending transcription co
 
 One update ID binds immutable input, one transcription dispatch, and normal Pi admission. Download can recover before transcription; a restart during possibly performed transcription fails visibly rather than repeating it. Actual speech text persists before Core delivery, which can recover under the same identity without re-transcription. Empty, oversized, unavailable, or interrupted speech produces a readable error and releases later messages, never a placeholder model input. Protected `telegram.voiceNotes` status reports the model, credential presence, bounded queue metadata, and outcomes; credential presence is not connectivity proof.
 
-The owner's Telegram command menu lists argument-free `/pair`, `/status`, `/memory`, `/schedule`, `/plan`, `/code`, and `/browse` actions. Job approval/cancellation remains on contextual buttons. The command list is maintained in source and published through the Bot API after successful deployments, with readback verification; it is not model-authored per turn. [Menu operation](../runbooks/local-development.md#maintain-the-telegram-command-menu) owns synchronization and recovery. Menu visibility does not grant authorization or bypass webhook owner checks.
+The owner's Telegram command menu lists argument-free `/pair`, `/status`, `/memory`, `/schedule`, `/plan`, `/mail`, `/code`, and `/browse` actions. Job approval/cancellation remains on contextual buttons. The command list is maintained in source and published through the Bot API after successful deployments, with readback verification; it is not model-authored per turn. [Menu operation](../runbooks/local-development.md#maintain-the-telegram-command-menu) owns synchronization and recovery. Menu visibility does not grant authorization or bypass webhook owner checks.
 
 Memory cards show complete before/after content and native Approve/Reject buttons. Long reviews use ordered Unicode-safe chunks; all chunks must have confirmed delivery, and the button must match its exact message, before a decision is accepted. History navigation exposes per-topic reviewed restores, not an immediate rollback button. Durable UI projection and replay-safe native decisions recover across the separate Pi and outbox commits. Failed or uncertain card delivery is not automatically retried; `/memory` provides an explicit fresh review path. The trusted review surface is Telegram or the control API, not agent-authored phone forms.
 
@@ -229,6 +246,12 @@ Exact `GET` and `HEAD` requests to `/`, `/privacy`, and `/terms` serve public st
 | `POST /api/schedule/wakeups` | Control | `{id, commitmentId, purpose, dueAt, expiresAt, repeatEveryMinutes}`; recurrence may be `null` |
 | `PUT /api/schedule/wakeups/:id` | Control | Complete purpose/time/window/recurrence fields plus `expectedVersion`; linkage stays fixed |
 | `POST /api/schedule/wakeups/:id/cancel` | Control | `{expectedVersion}`; invalidate the scheduled/running wake without cancelling its responsibility |
+| `GET /api/mail` | Control | Read-only authorization presence, settings, fixed bootstrap boundary, sync status/issues, and state counts; no credential or message body |
+| `PUT /api/mail/settings` | Control | `{expectedVersion, enabled, lookbackDays, pollMinutes, bootstrapAfter?}`; enabling requires an established owner Telegram session |
+| `POST /api/mail/check` | Control | Optional `{rebootstrap: true}`; queue a check or explicit bounded cursor recovery, never expand past 30 days |
+| `GET /api/mail/items` | Control | At most 50 selected attention/snoozed items with summaries, reasons, suggested actions, and Gmail links; no retained message bodies |
+| `POST /api/mail/items/:id/handled` | Control | `{expectedVersion}`; clear retained excerpts and mark Umpi operational state handled without changing Gmail |
+| `POST /api/mail/items/:id/snooze` | Control | `{expectedVersion, until}` within 30 days; defer Umpi review without changing Gmail |
 | `GET /api/planning` | Control | Settings, bounded day status, source availability, and unresolved write metadata |
 | `PUT /api/planning/settings` | Control | `{expectedVersion, enabled, time}`; local `HH:mm`, cancels stale active preparations but retains write evidence |
 | `GET /api/planning/days/:day` | Control | Saved preparation projection and owner brief, not a live note/calendar |
@@ -278,3 +301,4 @@ The [development and operation runbook](../runbooks/local-development.md) owns l
 - 2026-10-11: Added current-day preparation, read-only Calendar inputs, direct journal merges, recoverable writes, and a separate on-demand Headless Sync adapter.
 - 2026-10-13: Added native private-copy coding, separately approved source-only cloud coding, native background subagents, and bounded Telegram voice-note input.
 - 2026-10-14: Removed private rollout chronology while preserving reusable contracts and evidence boundaries.
+- 2026-10-15: Added bounded read-only Gmail history checks, model triage, one-digest notification, version-bound owner actions, and separate OAuth.

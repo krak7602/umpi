@@ -7,6 +7,7 @@ const commands = [
   { command: "memory", description: "Review memory changes and history" },
   { command: "schedule", description: "Manage proactive reviews and wake-ups" },
   { command: "plan", description: "Prepare today and control daily preparation" },
+  { command: "mail", description: "Review read-only mail follow-through" },
   { command: "code", description: "Review coding tasks and execution controls" },
   { command: "browse", description: "Review browser tasks and approved site scope" },
 ];

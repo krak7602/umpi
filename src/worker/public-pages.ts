@@ -38,11 +38,11 @@ const pages: Record<"/" | "/privacy" | "/terms", string> = {
 <h1>Umpi</h1>
 <p>Umpi is an owner-operated personal assistant for private, personal use. It brings together chat, selected context and planning, with Obsidian notes and a native companion app.</p>
 <h2>Personal assistant integrations</h2>
-<p>Umpi can use a separately authorized, read-only Google Calendar grant to help plan around calendar availability and events. Each operator supplies and controls their own OAuth registration and credentials.</p>
+<p>Umpi can use separately authorized, read-only Google Calendar and Gmail grants. Calendar data helps plan around availability and events. Bounded Gmail data supports owner-enabled follow-through for recent messages. Each operator supplies and controls their own OAuth registration and credentials.</p>
 <h2>How Umpi is used</h2>
 <ul>
 <li>The owner chats with the assistant and chooses the context available to it.</li>
-<li>Planning can use selected calendar information and selected Obsidian notes, and apply approved note updates through Obsidian Sync.</li>
+<li>Planning can use selected calendar information and selected Obsidian notes, and apply approved note updates through Obsidian Sync. Optional mail follow-through can inspect bounded recent Gmail threads and notify the owner about selected follow-up.</li>
 <li>Telegram and the native companion provide assistant interactions and delivery when configured.</li>
 </ul>
 <p>This site provides app information, not public registration or a Google sign-in flow. Configuration and authorization are controlled by the owner.</p>
@@ -55,15 +55,17 @@ const pages: Record<"/" | "/privacy" | "/terms", string> = {
 <ul>
 <li>Chat messages, selected context and notes, planning inputs and outputs, and operational records needed for assistant jobs, approvals, reminders and delivery.</li>
 <li>Selected Google Calendar metadata and event information, including titles, start and end times, all-day and event status, event links when available, and the owner's attendance status used to exclude declined events.</li>
+<li>For optional mail follow-through: bounded Gmail sender, subject, timestamps, labels, links and message excerpts after an owner-selected cutoff, plus generated summaries, reasons and owner-action status.</li>
 <li>Configured account credentials and delivery settings needed to access authorized providers and channels.</li>
 </ul>
-<p>Umpi's Google grant is limited to read-only calendar-list and calendar-event access. It does not authorize Umpi to modify calendars or import credentials from other clients.</p>
+<p>Umpi uses separate read-only Google grants. The Calendar grant is limited to calendar-list and calendar-event access. The Gmail grant is limited to <code>gmail.readonly</code>. Umpi does not authorize Calendar or Gmail mutation, import credentials from other clients, download Gmail attachments, send mail, save Gmail drafts, mark messages read, archive, delete or change labels.</p>
 <h2>Storage and processing</h2>
-<p>Assistant state and operational records are stored in private Cloudflare SQLite storage. Selected vault snapshots and related planning data can be stored in private Cloudflare R2 storage. Approved Obsidian note updates propagate through Obsidian Sync to the owner's connected vault devices.</p>
-<p>Selected context and requests are sent to the owner-selected model provider for inference. Responses and notifications are delivered through Telegram or the native companion app as configured; those delivery services receive the content and routing information needed for delivery. Google, Cloudflare, Obsidian, model providers and delivery providers have their own terms and data practices. Umpi does not make guarantees about external providers' retention, training or security practices.</p>
+<p>Assistant state and operational records are stored in private Cloudflare SQLite storage. Selected Gmail thread excerpts are stored there while they remain relevant for triage or owner action; ignored, resolved and handled message excerpts are cleared, while bounded metadata, summaries and action history can remain. Selected vault snapshots and related planning data can be stored in private Cloudflare R2 storage. Approved Obsidian note updates propagate through Obsidian Sync to the owner's connected vault devices.</p>
+<p>Selected context, planning inputs and bounded mail candidates are sent to the owner-selected model provider for inference. Responses and notifications are delivered through Telegram or the native companion app as configured; those delivery services receive the content and routing information needed for delivery. Google, Cloudflare, Obsidian, model providers and delivery providers have their own terms and data practices. Umpi does not make guarantees about external providers' retention, training or security practices.</p>
+<p>Operators must use Google user data consistently with the Google API Services User Data Policy, including its Limited Use requirements. Umpi uses that data only to provide the owner-facing calendar, planning and mail follow-through features described here.</p>
 <h2>Retention and controls</h2>
-<p>Stored operational records and notes are retained until explicitly removed. Revoking Google access stops future authorized calendar access; it does not erase information already stored in assistant records, notes, synced devices or provider systems.</p>
-<p>The owner can revoke Google access through Google account controls, manage other provider authorizations through their account controls, and disable configured integrations. Stored assistant data and notes must be removed separately using the relevant owner and provider controls. Obsidian Sync and offline devices can affect when note changes or removals propagate.</p>
+<p>Stored operational records and notes are retained until explicitly removed. Revoking Google access stops future authorized Calendar or Gmail access; it does not erase information already stored in assistant records, model-provider systems, Telegram messages, notes, synced devices or other provider systems.</p>
+<p>The owner can pause mail follow-through, revoke Google access through Google account controls, manage other provider authorizations through their account controls, and disable configured integrations. Stored assistant data and notes must be removed separately using the relevant owner and provider controls. Obsidian Sync and offline devices can affect when note changes or removals propagate.</p>
 <h2>Use and contact</h2>
 <p>Umpi does not sell personal data, use it for advertising, or use it for app-side training of general-purpose models. Data is used to operate the owner's personal assistant and configured integrations.</p>
 <p>For privacy questions or help with stored data, contact the owner using the support email shown on the Google consent screen. There is no public account creation on this site.</p>
@@ -72,9 +74,9 @@ const pages: Record<"/" | "/privacy" | "/terms", string> = {
 <h1>Terms of use</h1>
 <p>Umpi is configured and authorized by its owner for personal use. This informational site does not offer public accounts, public sign-up or access to the owner's assistant.</p>
 <h2>Authorization and approvals</h2>
-<p>The owner is responsible for selecting accounts, providers, context and delivery channels they are authorized to use. Connecting a provider does not replace separate approvals required for assistant actions or note updates. Umpi's Google Calendar grant is read-only.</p>
-<h2>Planning and notes</h2>
-<p>Assistant output depends on the supplied context, available sources and the time at which they were checked. Calendar coverage can be partial or unavailable; plans are not a guarantee of current availability or completed work. The owner should review proposed changes and time-sensitive information while they are still useful.</p>
+<p>The owner is responsible for selecting accounts, providers, context and delivery channels they are authorized to use. Connecting a provider does not replace separate approvals required for assistant actions or note updates. Umpi's Google Calendar and Gmail grants are read-only.</p>
+<h2>Planning, mail and notes</h2>
+<p>Assistant output depends on the supplied context, available sources and the time at which they were checked. Calendar or Gmail coverage can be partial or unavailable; plans and mail triage are not guarantees of current availability, importance, completed work or required replies. The owner should review proposed changes, reply drafts and time-sensitive information while they are still useful.</p>
 <p>Obsidian updates follow normal Sync behavior. Offline devices, propagation delays and concurrent edits can delay updates or produce conflicts. A note update does not guarantee that every connected device immediately has the same content.</p>
 <h2>Delivery and availability</h2>
 <p>Reminders, background work and notifications depend on configured services, connectivity and device operating-system permissions and background limits. Delivery at an exact time or to every device is not guaranteed. Disabled scheduling remains disabled until the owner enables it.</p>

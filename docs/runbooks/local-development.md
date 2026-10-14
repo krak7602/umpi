@@ -1,7 +1,7 @@
 ---
 title: Development and operation
-aliases: [setup, startup, local assistant, executor recovery, hosted deployment]
-updated: 2026-10-14
+aliases: [setup, startup, local assistant, executor recovery, hosted deployment, Gmail follow-through]
+updated: 2026-10-15
 ---
 
 # Development and operation
@@ -342,6 +342,42 @@ Pausing preserves future intent but does not stop already-approved Mac work, tex
 For an unexplained silence, inspect `lastCheck`, the responsibility's next review/blocker, its wake expiry, recent structured run outcomes, model configuration, and delivery state. Empty/blocked work may correctly produce no model turn. A failed or unstructured review is retained without an automatic repeated nudge; reconcile its actual effects before explicitly scheduling another review. Foreground-interrupted reviews preserve useful eligibility. `held` delivery is paused/quiet, `cancelled` is invalidated, and `uncertain` is never an instruction to resend blindly.
 
 Verification for a scheduling change must include an actual independent wake before the next heartbeat, a real process restart on the same isolated storage, stale-version rejection, cancellation, quiet outcomes, and foreground-priority behavior. Do not clone the hosted refresh credential into a test Worker. The [verification record](../learning/assistant-core-verification.md#proactive-scheduling-verification) distinguishes real alarms and native Pi tool rounds from live-model/Telegram evidence.
+
+### Operate read-only mail follow-through
+
+The [mail runtime contract](../subsystems/assistant-runtime.md#read-only-mail-follow-through) owns bounds, storage, triage, and unavailable actions. Source support is not evidence that a hosted installation has its secret, live route, menu, or a working Gmail grant. New mail settings start paused. The existing `/schedule` follow-through setting must also be enabled.
+
+The Gmail grant may use the same owner-controlled Google Cloud project and Desktop OAuth client JSON as Calendar, but it must use its own consent and output credential. In that project, enable the Gmail API and add only `https://www.googleapis.com/auth/gmail.readonly` to the OAuth consent configuration. Keep the Calendar and Gmail refresh credentials separate. Do not replace `UMPI_CALENDAR_CREDENTIALS`.
+
+`gmail.readonly` is a [restricted Gmail scope](https://developers.google.com/workspace/gmail/api/auth/scopes). Google's verification and restricted-data requirements depend on the OAuth audience, distribution, and whether restricted data is stored or transmitted through a server. An owner-operated installation does not justify documenting an exemption. Review the current [OAuth verification requirements](https://developers.google.com/identity/protocols/oauth2/production-readiness/restricted-scope-verification) before publishing or expanding the audience.
+
+Authorize in a private interactive terminal. The client file and output directory must be owner-only and outside the repository:
+
+```sh
+GOOGLE_CLIENT_JSON="$HOME/.config/umpi/google/desktop-client.json"
+npm run mail -- login --client-config "$GOOGLE_CLIENT_JSON"
+npm run mail -- status
+```
+
+The loopback flow uses state and PKCE, requires an exact scope response, and refuses to replace an existing output. It stores `~/.config/umpi/mail/credentials.json` by default. `status` validates protected local presence and schema only; it does not prove refresh or Gmail access. Reuse of the client registration does not combine the Calendar and Gmail grants.
+
+After explicit hosted-deployment and credential-upload authorization, install only the Gmail credential JSON as a Worker secret through private standard input:
+
+```sh
+npx wrangler secret put UMPI_GMAIL_CREDENTIALS \
+  --config wrangler.local.jsonc \
+  < "$HOME/.config/umpi/mail/credentials.json"
+```
+
+Never put the JSON in `wrangler*.jsonc`, `.dev.vars`, command arguments, source, screenshots, or shared logs. Preserve the existing Durable Object, migrations, model refresh owner, Calendar secret, Telegram configuration, and other private values during rollout. No Pub/Sub topic, push subscription, Cron Trigger, R2 bucket, or container is required.
+
+After an authorized deployment, verify protected `GET /api/mail` reports `authorizationConfigured: true`; this is still not a successful provider read. Confirm the source-maintained Telegram menu was synchronized and open `/schedule` first. Then open `/mail` and choose the fixed initial boundary: now, 7 days, 14 days, or 30 days. The setting does not search older mail later. `Check now` queues a bounded read. Cursor expiry exposes a version-bound bounded re-scan control instead of silently reading the mailbox again.
+
+The first useful pass must produce at most one digest. Open `/mail` to review one selected item at a time. `Draft reply` creates review text in chat only. `Tomorrow` and `Handled` change private Umpi state only. They do not save a Gmail draft, send, mark read, archive, delete, or label. Pause preserves existing review records and stops checks; `/schedule` pause also stops them.
+
+For private verification, use controlled synthetic or disposable threads around the selected cutoff. Observe: no item older than the exact boundary, one initial digest, no duplicate for an unchanged provider version, a new incoming message reopening handled state, a later sent reply resolving it, quiet-hour deferral, stale button rejection, restart recovery, and no Gmail mutation. Inspect `GET /api/mail/items` only through the control credential. Keep sender, subject, excerpts, links, and model output out of shared logs and fixtures.
+
+For an expired cursor or unexplained silence, inspect `lastStatus`, `issue`, `bootstrapAfter`, `nextSyncAt`, scheduler state, model status, and Telegram delivery state. Do not repeatedly widen or rerun bootstrap. Revoking Google access stops future reads but does not erase existing Umpi operational records, model-provider processing, or Telegram messages. Pause first, revoke through Google account controls, remove the Worker secret only under separate deployment authorization, and remove retained private state through owner-controlled storage administration when required.
 
 ### Operate daily-note preparation
 
@@ -692,3 +728,4 @@ Publish reviewed Git content, not an archive of the working directory: ignored l
 - 2026-10-13: Added daily planning, private-copy coding, source-only cloud coding, native browser export, and background-subagent operation.
 - 2026-10-13: Added independent voice-transcription OAuth setup and explicit refresh-ownership handoff.
 - 2026-10-14: Replaced private installation chronology and resource names with reusable setup, verification, and placeholder guidance.
+- 2026-10-15: Added separate read-only Gmail authorization, bounded activation, operational controls, revocation, and verification guidance.

@@ -31,6 +31,11 @@ import { PlanningRuntime, type VaultPlanningClient } from "./planning-runtime.js
 import { planningTools, guardPlanningReviewTools, PLANNING_INSTRUCTIONS } from "./planning-tools.js";
 import { planningRequest } from "./planning-http.js";
 import { enqueuePlanningControls, handlePlanningCallback, formatPlanningStatus } from "./planning-telegram.js";
+import { MailStore } from "./mail-store.js";
+import { MailRuntime } from "./mail-runtime.js";
+import { mailTools, guardMailReviewTools, MAIL_INSTRUCTIONS } from "./mail-tools.js";
+import { mailRequest } from "./mail-http.js";
+import { enqueueMailControls, handleMailCallback, formatMailStatus } from "./mail-telegram.js";
 import { VaultSync } from "./vault-sync.js";
 import { publicPage } from "./public-pages.js";
 import { CodingStore } from "./coding-store.js";
@@ -71,6 +76,7 @@ export interface Env extends TelegramConfig, CompanionPushConfig {
   BROWSER?: BrowserWorkerEnvironment["BROWSER"];
   UMPI_BROWSER_SYNC_TOKEN?: string;
   UMPI_CALENDAR_CREDENTIALS?: string;
+  UMPI_GMAIL_CREDENTIALS?: string;
   UMPI_CONTROL_TOKEN?: string;
   UMPI_EXECUTOR_TOKEN?: string;
   UMPI_MODEL_PROVIDER?: string;
@@ -93,7 +99,7 @@ class Coordinator extends LifecycleCapability {
     this.assistant.telegramInbox.recover();
     // Recover both new proposals and decisions committed before their SQL delivery projection.
     await reconcileMemoryTelegram(await this.assistant.harness.pi(), BACKGROUND_CONTEXT, this.assistant.store);
-    if (this.assistant.telegramInbox.hasPending() || this.assistant.store.pendingOperations().length || this.assistant.store.nextReminder() !== undefined || this.assistant.store.readyDeliveries().length || this.assistant.companion.nextPush() || this.assistant.proactive.settings().enabled || this.assistant.planning.settings().enabled || this.assistant.coding.active().length || this.assistant.browserRuntime.nextDue() !== undefined || this.assistant.browser.active().length || await this.assistant.subagents.nextDue() !== undefined) await this.wake();
+    if (this.assistant.telegramInbox.hasPending() || this.assistant.store.pendingOperations().length || this.assistant.store.nextReminder() !== undefined || this.assistant.store.readyDeliveries().length || this.assistant.companion.nextPush() || this.assistant.proactive.settings().enabled || this.assistant.planning.settings().enabled || this.assistant.mailRuntime.nextDue() !== undefined || this.assistant.coding.active().length || this.assistant.browserRuntime.nextDue() !== undefined || this.assistant.browser.active().length || await this.assistant.subagents.nextDue() !== undefined) await this.wake();
   }
 
   async onJob({ job }: LifecycleJobContext): Promise<LifecycleJobOutcome> {
@@ -103,6 +109,7 @@ class Coordinator extends LifecycleCapability {
       store.fireReminders();
       await this.assistant.telegramInbox.drive();
       this.assistant.planning.drive("control", store.session("control")!, this.assistant.planningRuntime.available());
+      await this.assistant.mailRuntime.drive();
       await this.assistant.driveProactive();
       this.assistant.planning.reconcile();
       await this.assistant.subagents.drive();
@@ -172,7 +179,7 @@ class Coordinator extends LifecycleCapability {
       // Missing credentials do not justify a two-second polling loop; auth updates wake the queue.
       const pending = store.pendingOperations().some(op => op.status === "submitted");
       const outbox = store.readyDeliveries().length > 0;
-      const wakeAt = Math.min(due ?? Infinity, proactive.nextDue(Date.now(), store.hasForegroundInput()) ?? Infinity, this.assistant.planning.nextDue() ?? Infinity, this.assistant.codingRuntime.nextDue() ?? Infinity, this.assistant.browserRuntime.nextDue() ?? Infinity, await this.assistant.subagents.nextDue() ?? Infinity, this.assistant.telegramInbox.nextDue() ?? Infinity, pending ? Date.now() + 2_000 : Infinity, outbox || this.assistant.companion.nextPush() ? Date.now() + 100 : Infinity);
+      const wakeAt = Math.min(due ?? Infinity, proactive.nextDue(Date.now(), store.hasForegroundInput()) ?? Infinity, this.assistant.planning.nextDue() ?? Infinity, this.assistant.mailRuntime.nextDue() ?? Infinity, this.assistant.codingRuntime.nextDue() ?? Infinity, this.assistant.browserRuntime.nextDue() ?? Infinity, await this.assistant.subagents.nextDue() ?? Infinity, this.assistant.telegramInbox.nextDue() ?? Infinity, pending ? Date.now() + 2_000 : Infinity, outbox || this.assistant.companion.nextPush() ? Date.now() + 100 : Infinity);
       if (Number.isFinite(wakeAt)) return { rescheduleAt: wakeAt };
     } catch {
       this.assistant.modelIssue = "Coordinator reconciliation failed; work is retained and retry is scheduled. Check configuration and protected status.";
@@ -188,6 +195,8 @@ export class Assistant extends Agent<Env> {
   readonly proactive: ProactiveStore;
   readonly planning: PlanningStore;
   readonly planningRuntime: PlanningRuntime;
+  readonly mail: MailStore;
+  readonly mailRuntime: MailRuntime;
   readonly coding: CodingStore;
   readonly codingRuntime: CodingRuntime;
   readonly browser: BrowserStore;
@@ -220,6 +229,7 @@ export class Assistant extends Agent<Env> {
     this.timezone = env.UMPI_TIMEZONE || "UTC";
     this.proactive = new ProactiveStore(this.store, this.timezone);
     this.planning = new PlanningStore(this.proactive, this.timezone);
+    this.mail = new MailStore(this.proactive);
     this.coding = new CodingStore(this.store);
     this.browser = new BrowserStore(this.store);
     const models = createAssistantModels(this.credentials);
@@ -236,6 +246,7 @@ export class Assistant extends Agent<Env> {
     this.planningRuntime = new PlanningRuntime(this.planning, () => this.vaultClient(),
       async () => (await readCoreContext(await this.harness.pi(), BACKGROUND_CONTEXT)).revision,
       () => this.config.UMPI_CALENDAR_CREDENTIALS, () => this.coordinator.wake());
+    this.mailRuntime = new MailRuntime(this.mail, this.config.UMPI_GMAIL_CREDENTIALS, () => this.coordinator.wake());
     this.codingRuntime = new CodingRuntime(this.coding, {
       harness: () => this.harness, extension: () => codingProfile, archive: () => this.config.CODING_ARCHIVE,
       cloudAvailable: () => Boolean(this.config.CODING_WORKER),
@@ -274,8 +285,9 @@ export class Assistant extends Agent<Env> {
     });
     const browserProfile = browserExtension(this.browserRuntime);
     const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...delegation.tools ?? []];
-    const umpiExtension: Extension = { name: "umpi", tools: [...guardBackgroundTools(foregroundTools, this.proactive), ...guardPlanningReviewTools(proactiveTools(this.proactive, () => this.coordinator.wake()), this.planningRuntime), ...planningTools(this.planningRuntime)],
-      sections: [{ key: "umpi", tag: false, render: () => `${ASSISTANT_INSTRUCTIONS}\n${COMPANION_INSTRUCTIONS}\n${PROACTIVE_INSTRUCTIONS}\n${PLANNING_INSTRUCTIONS}\n${CODING_OWNER_INSTRUCTIONS}\n${BROWSER_OWNER_INSTRUCTIONS}\n${SUBAGENT_INSTRUCTIONS}\nOwner timezone: ${this.timezone}.` }, coreContextSection, { key: "response-style", tag: false, render: () => RESPONSE_STYLE_INSTRUCTIONS }] };
+    const guardedProactiveTools = guardMailReviewTools(guardPlanningReviewTools(proactiveTools(this.proactive, () => this.coordinator.wake()), this.planningRuntime), this.mailRuntime);
+    const umpiExtension: Extension = { name: "umpi", tools: [...guardBackgroundTools(foregroundTools, this.proactive), ...guardedProactiveTools, ...planningTools(this.planningRuntime), ...mailTools(this.mailRuntime)],
+      sections: [{ key: "umpi", tag: false, render: () => `${ASSISTANT_INSTRUCTIONS}\n${COMPANION_INSTRUCTIONS}\n${PROACTIVE_INSTRUCTIONS}\n${PLANNING_INSTRUCTIONS}\n${MAIL_INSTRUCTIONS}\n${CODING_OWNER_INSTRUCTIONS}\n${BROWSER_OWNER_INSTRUCTIONS}\n${SUBAGENT_INSTRUCTIONS}\nOwner timezone: ${this.timezone}.` }, coreContextSection, { key: "response-style", tag: false, render: () => RESPONSE_STYLE_INSTRUCTIONS }] };
     registry.install(umpiExtension); registry.install(codingProfile); registry.install(browserProfile);
     registry.install(delegation); registry.install(assistantChild); registry.install(codingChild);
     this.harness = new PiHarness({
@@ -460,6 +472,7 @@ export class Assistant extends Agent<Env> {
       coreContext: { revision: core.revision, blocks: core.blocks.length, pendingSource: core.blocks.filter(block => block.pendingSource).length },
       schedule: this.proactive.status(),
       planning: this.planningRuntime.status(),
+      mail: this.mailRuntime.status(),
       coding: this.codingRuntime.status(),
       browser: this.browserRuntime.status(),
       subagents: await this.subagents.status(),
@@ -513,7 +526,9 @@ export class Assistant extends Agent<Env> {
       }
       const planning = await planningRequest(request, this.planningRuntime, () => this.coordinator.wake(), () => this.session("control"));
       if (planning) return planning;
-      const schedule = await scheduleRequest(request, this.proactive, () => this.coordinator.wake(), () => this.session("control"), id => this.planning.ownsCommitment(id));
+      const mail = await mailRequest(request, this.mailRuntime, () => this.store.session("telegram"));
+      if (mail) { mail.headers.set("cache-control", "no-store"); return mail; }
+      const schedule = await scheduleRequest(request, this.proactive, () => this.coordinator.wake(), () => this.session("control"), id => this.planning.ownsCommitment(id) || this.mail.ownsCommitment(id));
       if (schedule) return schedule;
       if (path === "/api/status" && request.method === "GET") return Response.json(await this.status());
       if (path === "/api/jobs" && request.method === "GET") return Response.json({ jobs: this.store.jobs() });
@@ -627,6 +642,20 @@ export class Assistant extends Agent<Env> {
               await this.coordinator.wake();
               return Response.json({ ok: true });
             }
+            const mail = await handleMailCallback(this.mailRuntime, input.data, input.messageId);
+            if (mail) {
+              await Promise.all([
+                answerTelegramCallback(input.callbackId, mail.text, this.config),
+                editTelegramKeyboard(input.messageId, mail.replyMarkup, this.config),
+              ]);
+              if (mail.prompt) {
+                const sessionId = await this.session("telegram");
+                this.proactive.deferForForeground();
+                this.store.admitResult(`mail-draft:${input.data}`, mail.prompt, "telegram", sessionId);
+              }
+              await this.coordinator.wake();
+              return Response.json({ ok: true });
+            }
             result = await handlePlanningCallback(this.planningRuntime, input.data, input.messageId)
               ?? handleScheduleCallback(this.proactive, input.data, input.messageId)
               ?? await handleMemoryTelegramCallback(await this.harness.pi(), BACKGROUND_CONTEXT, this.store, input.data, input.messageId)
@@ -667,6 +696,12 @@ export class Assistant extends Agent<Env> {
           enqueuePlanningControls(this.planningRuntime, input.id);
           return Response.json({ ok: true });
         }
+        if (input.text.trim() === "/mail") {
+          await this.session("telegram");
+          await this.coordinator.wake();
+          enqueueMailControls(this.mailRuntime, input.id);
+          return Response.json({ ok: true });
+        }
         if (input.text.trim() === "/schedule") {
           await this.coordinator.wake();
           enqueueScheduleControls(this.proactive, input.id);
@@ -703,7 +738,7 @@ export class Assistant extends Agent<Env> {
                 const job = control[1] === "approve" ? this.store.approveJob(control[2]!, expectedVersion) : this.store.cancelJob(control[2]!, expectedVersion);
                 text = `Job ${job.jobId} v${job.version}: ${job.status}${job.cancelRequested ? "; cancellation requested, awaiting Mac confirmation" : ""}.`;
               } else {
-                text = `${formatTelegramStatus({ jobs: this.store.jobs(), reminders: this.store.reminders(), executors: this.store.executors(), choices: this.store.choices().filter(choice => choice.channel === "telegram"), timezone: this.timezone })}\n\n${formatScheduleStatus(this.proactive)}\n\n${formatPlanningStatus(this.planningRuntime)}\n\n${subagentSummary}`;
+                text = `${formatTelegramStatus({ jobs: this.store.jobs(), reminders: this.store.reminders(), executors: this.store.executors(), choices: this.store.choices().filter(choice => choice.channel === "telegram"), timezone: this.timezone })}\n\n${formatScheduleStatus(this.proactive)}\n\n${formatPlanningStatus(this.planningRuntime)}\n\n${formatMailStatus(this.mailRuntime)}\n\n${subagentSummary}`;
               }
             } catch (error) {
               if (!(error instanceof InputError || error instanceof StateError)) throw error;

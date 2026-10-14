@@ -9,7 +9,7 @@ This repository is a reference implementation for personal operation. It is not 
 | Area | Implemented behavior |
 | --- | --- |
 | Conversation | Persistent Pi conversations through Telegram or a protected control API, with text replies and subscription-backed voice-note transcription |
-| Follow-through | Durable reminders, a lightweight 15-minute review cadence, custom wake-ups, quiet hours, and explicit pause/resume controls |
+| Follow-through | Durable reminders, a lightweight 15-minute review cadence, custom wake-ups, quiet hours, explicit pause/resume controls, and optional bounded read-only Gmail review |
 | Execution | Version-bound Mac command approval, private-copy coding on macOS, and separately approved source-only cloud coding |
 | Planning and memory | Reviewable and reversible core context, dated owner briefs, read-only Google Calendar input, and scoped Obsidian daily-note updates |
 | Browser | A native Aside lane plus encrypted, one-way, site-scoped snapshots for isolated Cloudflare Browser Run tasks |
@@ -43,7 +43,7 @@ The Worker exposes public informational pages at `/`, `/privacy`, and `/terms`. 
 - macOS for the native executor and Aside integration.
 - A Cloudflare Workers Paid account for a hosted installation that uses Durable Objects, Containers, R2, or Browser Run.
 - A Telegram bot for the primary hosted chat interface.
-- Optional: Obsidian Sync for daily-note integration and Xcode/XcodeGen for the iPhone companion.
+- Optional: a Google Cloud OAuth registration for separate read-only Calendar or Gmail grants, Obsidian Sync for daily-note integration, and Xcode/XcodeGen for the iPhone companion.
 
 Provider subscriptions, Cloudflare resources, Telegram, Obsidian, Apple, and other integrations retain their own limits and costs.
 
@@ -70,7 +70,7 @@ npm run auth -- sync http://127.0.0.1:8787 openai
 npm run mac -- run
 ```
 
-Run those commands in separate terminals where necessary. Setup creates owner-only files, refuses to replace an existing installation, and does not deploy or register a bot. The complete [development and operation runbook](docs/runbooks/local-development.md) covers Telegram, hosted deployment, coding, browser access, vault sync, native signing, and recovery.
+Run those commands in separate terminals where necessary. Setup creates owner-only files, refuses to replace an existing installation, and does not deploy or register a bot. The complete [development and operation runbook](docs/runbooks/local-development.md) covers Telegram, hosted deployment, mail follow-through, coding, browser access, vault sync, native signing, and recovery.
 
 ## Private configuration
 
@@ -85,7 +85,7 @@ Security reports belong in [SECURITY.md](SECURITY.md). The repository's publicat
 | Question | Authoritative page |
 | --- | --- |
 | System boundaries, runtime choices, and costs | [Architecture](docs/architecture.md) |
-| Coordinator, Telegram, scheduling, memory, coding, and API contracts | [Assistant runtime](docs/subsystems/assistant-runtime.md) |
+| Coordinator, Telegram, scheduling, mail follow-through, memory, coding, and API contracts | [Assistant runtime](docs/subsystems/assistant-runtime.md) |
 | Native execution and crash recovery | [Mac executor](docs/subsystems/mac-executor.md) |
 | OAuth credentials and refresh ownership | [Model authentication](docs/subsystems/model-auth.md) |
 | Browser access and authentication snapshots | [Browser access](docs/subsystems/browser-access.md) |
