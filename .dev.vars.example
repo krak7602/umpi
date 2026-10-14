@@ -1,0 +1,21 @@
+# Copy to .dev.vars with owner-only permissions, then configure locally.
+# Use different random secrets of at least 32 characters. Never commit real values.
+UMPI_CONTROL_TOKEN=""
+UMPI_EXECUTOR_TOKEN=""
+
+UMPI_TIMEZONE="UTC"
+UMPI_MODEL_PROVIDER="openai"
+UMPI_MODEL_ID="gpt-5.6-sol"
+
+# Dedicated Telegram bot; leave unset until you provision it.
+TELEGRAM_BOT_TOKEN=""
+TELEGRAM_WEBHOOK_SECRET=""
+TELEGRAM_OWNER_ID=""
+TELEGRAM_CHAT_ID=""
+
+# Optional native push delivery. Keep identifiers private as well as the signing key.
+# APNS_PRIVATE_KEY is the PKCS#8 .p8 PEM, with literal \n escapes if needed.
+APNS_TEAM_ID=""
+APNS_KEY_ID=""
+APNS_PRIVATE_KEY=""
+APNS_BUNDLE_ID=""

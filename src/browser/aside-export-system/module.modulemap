@@ -1,0 +1,5 @@
+module AsideExportSystem [system] {
+  header "shim.h"
+  link "sqlite3"
+  export *
+}

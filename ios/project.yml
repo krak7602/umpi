@@ -1,0 +1,93 @@
+name: Umpi
+options:
+  bundleIdPrefix: org.example
+  deploymentTarget:
+    iOS: "18.0"
+  xcodeVersion: "27.0"
+  createIntermediateGroups: true
+configs:
+  Debug: debug
+  Release: release
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SDKROOT: iphoneos
+    TARGETED_DEVICE_FAMILY: "1,2"
+    CODE_SIGN_STYLE: Automatic
+  configs:
+    Debug:
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+targets:
+  Umpi:
+    type: application
+    platform: iOS
+    sources:
+      - path: Umpi
+        excludes:
+          - Info.plist
+          - Umpi.entitlements
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(UMPI_BUNDLE_IDENTIFIER)
+        PRODUCT_NAME: Umpi
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: Umpi/Umpi.entitlements
+        INFOPLIST_FILE: Umpi/Info.plist
+    dependencies:
+      - target: UmpiWidgets
+  UmpiWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: UmpiWidgets
+        excludes:
+          - Info.plist
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(UMPI_BUNDLE_IDENTIFIER).widgets
+        PRODUCT_NAME: UmpiWidgets
+        INFOPLIST_FILE: UmpiWidgets/Info.plist
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+  UmpiTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - UmpiTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(UMPI_BUNDLE_IDENTIFIER).tests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: Umpi
+  UmpiUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - UmpiUITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(UMPI_BUNDLE_IDENTIFIER).uitests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: Umpi
+schemes:
+  Umpi:
+    build:
+      targets:
+        Umpi: all
+        UmpiWidgets: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - UmpiTests
+        - UmpiUITests
+    archive:
+      config: Release

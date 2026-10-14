@@ -1,0 +1,45 @@
+{
+  "name": "umpi",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "dev": "tsx src/cli/dev.ts",
+    "mac": "tsx src/mac/cli.ts",
+    "auth": "node --env-file-if-exists=.dev.vars --import tsx src/model/cli.ts",
+    "memory": "node --env-file-if-exists=.dev.vars --import tsx src/cli/core-context.ts",
+    "calendar": "tsx src/cli/calendar.ts",
+    "vault": "node --env-file-if-exists=.dev.vars --import tsx src/cli/vault.ts",
+    "coding": "node --env-file-if-exists=.dev.vars --import tsx src/cli/coding.ts",
+    "browser": "tsx src/cli/browser.ts",
+    "setup": "tsx src/cli/setup.ts",
+    "telegram": "node --env-file-if-exists=.dev.vars --import tsx src/cli/telegram.ts",
+    "typecheck": "tsc -p tsconfig.worker.json --noEmit && tsc -p tsconfig.mac.json --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "deploy": "node --env-file-if-exists=.dev.vars --import tsx src/cli/deploy.ts"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "0.3.7",
+    "@cloudflare/playwright": "1.3.6",
+    "@earendil-works/chord": "1.1.0",
+    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/pi-durable": "1.1.0",
+    "@js-temporal/polyfill": "0.5.1",
+    "agents": "0.28.1",
+    "tldts": "7.4.18"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261010.1",
+    "@types/node": "24.19.2",
+    "esbuild": "0.28.2",
+    "obsidian-headless": "0.0.14",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "wrangler": "4.149.0"
+  }
+}

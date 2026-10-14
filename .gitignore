@@ -1,0 +1,47 @@
+# Local operating-system files
+.DS_Store
+
+# Local credentials and Cloudflare development state
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+.wrangler/
+
+# Private deployment and native signing configuration
+wrangler.local.*
+wrangler.private.*
+*.cer
+*.der
+*.local.xcconfig
+*.local.xcconfig.*
+*.private.xcconfig
+*.private.xcconfig.*
+*.p8
+*.p12
+*.pfx
+*.pem
+*.key
+*.mobileprovision
+*.provisionprofile
+
+# Native build output and per-user Xcode state
+DerivedData/
+.build/
+.swiftpm/
+xcuserdata/
+*.xcuserstate
+*.xcarchive/
+*.ipa
+*.app/
+*.dSYM/
+*.dSYM.zip
+*.xcresult/
+build/
+
+# Dependencies and generated build output
+node_modules/
+dist/
+*.tsbuildinfo

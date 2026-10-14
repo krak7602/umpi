@@ -1,0 +1,717 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0843D9CE8FFDD2832A974F5F /* StateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F467CBD3BAFE6FE088492B4 /* StateTests.swift */; };
+		0C1F5213DE603F56F342F856 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 561433B418D0D1EEC60CAB97 /* Assets.xcassets */; };
+		15C8F301EEBA31B08FC2C3AB /* UmpiWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 079A89E620BD8E3222C7B1F0 /* UmpiWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		22FCF7D0DFC1336220C26A31 /* TaskActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4C30AA88504D79B39CFAED6 /* TaskActivityAttributes.swift */; };
+		3431D1D839E0D5CBED583675 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5130E3C64EA03895D3F8EA5A /* SettingsView.swift */; };
+		39FA14005F9953715C52D2C2 /* CompanionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A14AEACCCD7F5BCD8694CBB0 /* CompanionClient.swift */; };
+		3B9BC5DD46428D9D14E85F25 /* CompanionStateRecords.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D31EFDBA636E32983025960 /* CompanionStateRecords.swift */; };
+		3C9049CC28F66DF23648C256 /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BD1FAC447B1DB858AB1D01C /* PairingView.swift */; };
+		4128364E436BEDDEC99F85E6 /* CompanionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2041A9A0FEAF44FB88A99CE /* CompanionStore.swift */; };
+		47ADED72318B97BAC5E24841 /* DeviceCapabilities.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03E2817ADC042FF3F4F9ADC5 /* DeviceCapabilities.swift */; };
+		49744912F7986A50CA9EAF63 /* SecureStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F3BFD0B54AB075C19E95F37 /* SecureStorage.swift */; };
+		4B6AC8CE963474A77BF240D0 /* UmpiWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = B03D8E3B2D22491EDB445A6F /* UmpiWidgets.swift */; };
+		6E39EDAB10F668DDCD9CE1C1 /* QueuedChangesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FA63C5DF1830458AA277C57 /* QueuedChangesView.swift */; };
+		739848E9D839C9C0920C965B /* CompanionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9129706318F50FC4F4F18210 /* CompanionUITests.swift */; };
+		7E285273D4B84D89118C79BC /* EffectTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C89BF2E15E70A77ECE98E0C9 /* EffectTests.swift */; };
+		97C6D73E46001174A5545FEB /* ActivityViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81F84A3AD0BC60BAA18413D7 /* ActivityViews.swift */; };
+		9AD329F34051545AC797E5F9 /* BackgroundSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6398981AA3C9F6DDCC9FC8BA /* BackgroundSync.swift */; };
+		BFA62599AE6A3111BF0AD2B6 /* WorkflowViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01688E9D5D74AA1EB9A37D45 /* WorkflowViews.swift */; };
+		DEF9887A7D5D7B3061B7DB8C /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1279E4B7032997728B14B81D /* Models.swift */; };
+		F12A0C1F25530247B442FD27 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09F78D13F600AC1683D4AF01 /* AppDelegate.swift */; };
+		FCE345FBCA4731BC372CBFFE /* UmpiApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 691633D0AABEF045AC98D419 /* UmpiApp.swift */; };
+		FE57803808D9A0F6E9042BE6 /* TaskActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4C30AA88504D79B39CFAED6 /* TaskActivityAttributes.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		89A5A5C4AEF1D79CC119CBB7 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7BD395503C53B1459ABFEB6B /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = BC3431F2B4D4BCA0C8622B3D;
+			remoteInfo = Umpi;
+		};
+		B1B6DE8505C0204F7CA533F5 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7BD395503C53B1459ABFEB6B /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = BC3431F2B4D4BCA0C8622B3D;
+			remoteInfo = Umpi;
+		};
+		C52276F3A74B104B5D9849E5 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7BD395503C53B1459ABFEB6B /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 16682D7F659ACB19FCDDB6B6;
+			remoteInfo = UmpiWidgets;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		EB8440E3862AAAC51AE86113 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				15C8F301EEBA31B08FC2C3AB /* UmpiWidgets.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		01688E9D5D74AA1EB9A37D45 /* WorkflowViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkflowViews.swift; sourceTree = "<group>"; };
+		03E2817ADC042FF3F4F9ADC5 /* DeviceCapabilities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceCapabilities.swift; sourceTree = "<group>"; };
+		079A89E620BD8E3222C7B1F0 /* UmpiWidgets.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = UmpiWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		09F78D13F600AC1683D4AF01 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		0BD1FAC447B1DB858AB1D01C /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
+		1279E4B7032997728B14B81D /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		1FA63C5DF1830458AA277C57 /* QueuedChangesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueuedChangesView.swift; sourceTree = "<group>"; };
+		2D31EFDBA636E32983025960 /* CompanionStateRecords.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionStateRecords.swift; sourceTree = "<group>"; };
+		5130E3C64EA03895D3F8EA5A /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		561433B418D0D1EEC60CAB97 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		5A8E584FECEF00D284F2F7B8 /* UmpiTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = UmpiTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		6398981AA3C9F6DDCC9FC8BA /* BackgroundSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundSync.swift; sourceTree = "<group>"; };
+		691633D0AABEF045AC98D419 /* UmpiApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UmpiApp.swift; sourceTree = "<group>"; };
+		6F3BFD0B54AB075C19E95F37 /* SecureStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureStorage.swift; sourceTree = "<group>"; };
+		7F467CBD3BAFE6FE088492B4 /* StateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StateTests.swift; sourceTree = "<group>"; };
+		81F84A3AD0BC60BAA18413D7 /* ActivityViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityViews.swift; sourceTree = "<group>"; };
+		9129706318F50FC4F4F18210 /* CompanionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionUITests.swift; sourceTree = "<group>"; };
+		A14AEACCCD7F5BCD8694CBB0 /* CompanionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionClient.swift; sourceTree = "<group>"; };
+		A1EAB9A47CBFD4B231E2F243 /* Umpi.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Umpi.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B03D8E3B2D22491EDB445A6F /* UmpiWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UmpiWidgets.swift; sourceTree = "<group>"; };
+		B2041A9A0FEAF44FB88A99CE /* CompanionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionStore.swift; sourceTree = "<group>"; };
+		C89BF2E15E70A77ECE98E0C9 /* EffectTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EffectTests.swift; sourceTree = "<group>"; };
+		D67BDF4B4A305A1FFFCF7299 /* UmpiUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = UmpiUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		DD9641B7A4D3BADDF36418BD /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
+		E4C30AA88504D79B39CFAED6 /* TaskActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskActivityAttributes.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		36F016704D9AC76566B8B668 /* Umpi */ = {
+			isa = PBXGroup;
+			children = (
+				09F78D13F600AC1683D4AF01 /* AppDelegate.swift */,
+				561433B418D0D1EEC60CAB97 /* Assets.xcassets */,
+				6398981AA3C9F6DDCC9FC8BA /* BackgroundSync.swift */,
+				A14AEACCCD7F5BCD8694CBB0 /* CompanionClient.swift */,
+				2D31EFDBA636E32983025960 /* CompanionStateRecords.swift */,
+				B2041A9A0FEAF44FB88A99CE /* CompanionStore.swift */,
+				03E2817ADC042FF3F4F9ADC5 /* DeviceCapabilities.swift */,
+				1279E4B7032997728B14B81D /* Models.swift */,
+				6F3BFD0B54AB075C19E95F37 /* SecureStorage.swift */,
+				691633D0AABEF045AC98D419 /* UmpiApp.swift */,
+				38BBF0088149767131CD7635 /* Views */,
+			);
+			path = Umpi;
+			sourceTree = "<group>";
+		};
+		38BBF0088149767131CD7635 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				81F84A3AD0BC60BAA18413D7 /* ActivityViews.swift */,
+				0BD1FAC447B1DB858AB1D01C /* PairingView.swift */,
+				1FA63C5DF1830458AA277C57 /* QueuedChangesView.swift */,
+				5130E3C64EA03895D3F8EA5A /* SettingsView.swift */,
+				01688E9D5D74AA1EB9A37D45 /* WorkflowViews.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		58D2EF90181E6AC1B3111E0F = {
+			isa = PBXGroup;
+			children = (
+				D398A11762369485E297BD40 /* Config */,
+				D0AE96A16D92885043BA1590 /* Shared */,
+				36F016704D9AC76566B8B668 /* Umpi */,
+				8B581E8420866A72EE10F503 /* UmpiTests */,
+				7A3A0E2C10F541D8F2124B49 /* UmpiUITests */,
+				BE8AFD67F306A1427D644ED4 /* UmpiWidgets */,
+				77781A24EF9ECA8DE26E53C3 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		77781A24EF9ECA8DE26E53C3 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A1EAB9A47CBFD4B231E2F243 /* Umpi.app */,
+				5A8E584FECEF00D284F2F7B8 /* UmpiTests.xctest */,
+				D67BDF4B4A305A1FFFCF7299 /* UmpiUITests.xctest */,
+				079A89E620BD8E3222C7B1F0 /* UmpiWidgets.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		7A3A0E2C10F541D8F2124B49 /* UmpiUITests */ = {
+			isa = PBXGroup;
+			children = (
+				9129706318F50FC4F4F18210 /* CompanionUITests.swift */,
+			);
+			path = UmpiUITests;
+			sourceTree = "<group>";
+		};
+		8B581E8420866A72EE10F503 /* UmpiTests */ = {
+			isa = PBXGroup;
+			children = (
+				C89BF2E15E70A77ECE98E0C9 /* EffectTests.swift */,
+				7F467CBD3BAFE6FE088492B4 /* StateTests.swift */,
+			);
+			path = UmpiTests;
+			sourceTree = "<group>";
+		};
+		BE8AFD67F306A1427D644ED4 /* UmpiWidgets */ = {
+			isa = PBXGroup;
+			children = (
+				B03D8E3B2D22491EDB445A6F /* UmpiWidgets.swift */,
+			);
+			path = UmpiWidgets;
+			sourceTree = "<group>";
+		};
+		D0AE96A16D92885043BA1590 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				E4C30AA88504D79B39CFAED6 /* TaskActivityAttributes.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		D398A11762369485E297BD40 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				DD9641B7A4D3BADDF36418BD /* Base.xcconfig */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		16682D7F659ACB19FCDDB6B6 /* UmpiWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5F0A8CC98377C4FF993680E5 /* Build configuration list for PBXNativeTarget "UmpiWidgets" */;
+			buildPhases = (
+				238ACDACF0ECD7255023270C /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = UmpiWidgets;
+			packageProductDependencies = (
+			);
+			productName = UmpiWidgets;
+			productReference = 079A89E620BD8E3222C7B1F0 /* UmpiWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		3F8D4A8DDBF52D81222DBD07 /* UmpiTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0E82E86BDD78E682367B6F58 /* Build configuration list for PBXNativeTarget "UmpiTests" */;
+			buildPhases = (
+				5ED13A12EA33FC173106B6AE /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				54088E32D65961C62EF34436 /* PBXTargetDependency */,
+			);
+			name = UmpiTests;
+			packageProductDependencies = (
+			);
+			productName = UmpiTests;
+			productReference = 5A8E584FECEF00D284F2F7B8 /* UmpiTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		6A4941976019F46D66BCDA81 /* UmpiUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 256F40FF0C226C7583E29075 /* Build configuration list for PBXNativeTarget "UmpiUITests" */;
+			buildPhases = (
+				D716784290766A22CA066FD9 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				C12B9C856A594E2608F3744A /* PBXTargetDependency */,
+			);
+			name = UmpiUITests;
+			packageProductDependencies = (
+			);
+			productName = UmpiUITests;
+			productReference = D67BDF4B4A305A1FFFCF7299 /* UmpiUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		BC3431F2B4D4BCA0C8622B3D /* Umpi */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FB40BC1EC8B6E85FF9425BB2 /* Build configuration list for PBXNativeTarget "Umpi" */;
+			buildPhases = (
+				4CC64C4FE0518657D45726F8 /* Sources */,
+				56E68CCC9BB41C9C4E38A728 /* Resources */,
+				EB8440E3862AAAC51AE86113 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				E9CB764324F4A11BDA416EA7 /* PBXTargetDependency */,
+			);
+			name = Umpi;
+			packageProductDependencies = (
+			);
+			productName = Umpi;
+			productReference = A1EAB9A47CBFD4B231E2F243 /* Umpi.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		7BD395503C53B1459ABFEB6B /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					16682D7F659ACB19FCDDB6B6 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+					3F8D4A8DDBF52D81222DBD07 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+					6A4941976019F46D66BCDA81 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+						TestTargetID = BC3431F2B4D4BCA0C8622B3D;
+					};
+					BC3431F2B4D4BCA0C8622B3D = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 6B473B0AACDC83F2E99AB1E7 /* Build configuration list for PBXProject "Umpi" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 58D2EF90181E6AC1B3111E0F;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 77781A24EF9ECA8DE26E53C3 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				BC3431F2B4D4BCA0C8622B3D /* Umpi */,
+				16682D7F659ACB19FCDDB6B6 /* UmpiWidgets */,
+				3F8D4A8DDBF52D81222DBD07 /* UmpiTests */,
+				6A4941976019F46D66BCDA81 /* UmpiUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		56E68CCC9BB41C9C4E38A728 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0C1F5213DE603F56F342F856 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		238ACDACF0ECD7255023270C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				22FCF7D0DFC1336220C26A31 /* TaskActivityAttributes.swift in Sources */,
+				4B6AC8CE963474A77BF240D0 /* UmpiWidgets.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4CC64C4FE0518657D45726F8 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				97C6D73E46001174A5545FEB /* ActivityViews.swift in Sources */,
+				F12A0C1F25530247B442FD27 /* AppDelegate.swift in Sources */,
+				9AD329F34051545AC797E5F9 /* BackgroundSync.swift in Sources */,
+				39FA14005F9953715C52D2C2 /* CompanionClient.swift in Sources */,
+				3B9BC5DD46428D9D14E85F25 /* CompanionStateRecords.swift in Sources */,
+				4128364E436BEDDEC99F85E6 /* CompanionStore.swift in Sources */,
+				47ADED72318B97BAC5E24841 /* DeviceCapabilities.swift in Sources */,
+				DEF9887A7D5D7B3061B7DB8C /* Models.swift in Sources */,
+				3C9049CC28F66DF23648C256 /* PairingView.swift in Sources */,
+				6E39EDAB10F668DDCD9CE1C1 /* QueuedChangesView.swift in Sources */,
+				49744912F7986A50CA9EAF63 /* SecureStorage.swift in Sources */,
+				3431D1D839E0D5CBED583675 /* SettingsView.swift in Sources */,
+				FE57803808D9A0F6E9042BE6 /* TaskActivityAttributes.swift in Sources */,
+				FCE345FBCA4731BC372CBFFE /* UmpiApp.swift in Sources */,
+				BFA62599AE6A3111BF0AD2B6 /* WorkflowViews.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		5ED13A12EA33FC173106B6AE /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7E285273D4B84D89118C79BC /* EffectTests.swift in Sources */,
+				0843D9CE8FFDD2832A974F5F /* StateTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D716784290766A22CA066FD9 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				739848E9D839C9C0920C965B /* CompanionUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		54088E32D65961C62EF34436 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = BC3431F2B4D4BCA0C8622B3D /* Umpi */;
+			targetProxy = 89A5A5C4AEF1D79CC119CBB7 /* PBXContainerItemProxy */;
+		};
+		C12B9C856A594E2608F3744A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = BC3431F2B4D4BCA0C8622B3D /* Umpi */;
+			targetProxy = B1B6DE8505C0204F7CA533F5 /* PBXContainerItemProxy */;
+		};
+		E9CB764324F4A11BDA416EA7 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 16682D7F659ACB19FCDDB6B6 /* UmpiWidgets */;
+			targetProxy = C52276F3A74B104B5D9849E5 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		25EEA389F14E17E6BC4B9117 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				INFOPLIST_FILE = UmpiWidgets/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UMPI_BUNDLE_IDENTIFIER).widgets";
+				PRODUCT_NAME = UmpiWidgets;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		2B3A2457D1B520DB953722C5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UMPI_BUNDLE_IDENTIFIER).uitests";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Umpi;
+			};
+			name = Release;
+		};
+		4094998C17C8AEC59008F0E2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UMPI_BUNDLE_IDENTIFIER).uitests";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Umpi;
+			};
+			name = Debug;
+		};
+		40B3FD999131EF029BB3E0B9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UMPI_BUNDLE_IDENTIFIER).tests";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Umpi.app/Umpi";
+			};
+			name = Release;
+		};
+		98120479EFC70486EA28392B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Umpi/Umpi.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = Umpi/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UMPI_BUNDLE_IDENTIFIER)";
+				PRODUCT_NAME = Umpi;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		B9539CFFB9A7F26D2913B9A4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UMPI_BUNDLE_IDENTIFIER).tests";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Umpi.app/Umpi";
+			};
+			name = Debug;
+		};
+		CF519FFF49DB251815D5A23E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				INFOPLIST_FILE = UmpiWidgets/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UMPI_BUNDLE_IDENTIFIER).widgets";
+				PRODUCT_NAME = UmpiWidgets;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		D062985683A6CC25FC8F1F4A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = DD9641B7A4D3BADDF36418BD /* Base.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		E89B9D576992209FF84E7FCC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Umpi/Umpi.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = Umpi/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(UMPI_BUNDLE_IDENTIFIER)";
+				PRODUCT_NAME = Umpi;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		F93A089A8E8090E073062F50 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = DD9641B7A4D3BADDF36418BD /* Base.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		0E82E86BDD78E682367B6F58 /* Build configuration list for PBXNativeTarget "UmpiTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B9539CFFB9A7F26D2913B9A4 /* Debug */,
+				40B3FD999131EF029BB3E0B9 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		256F40FF0C226C7583E29075 /* Build configuration list for PBXNativeTarget "UmpiUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4094998C17C8AEC59008F0E2 /* Debug */,
+				2B3A2457D1B520DB953722C5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		5F0A8CC98377C4FF993680E5 /* Build configuration list for PBXNativeTarget "UmpiWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				25EEA389F14E17E6BC4B9117 /* Debug */,
+				CF519FFF49DB251815D5A23E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		6B473B0AACDC83F2E99AB1E7 /* Build configuration list for PBXProject "Umpi" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D062985683A6CC25FC8F1F4A /* Debug */,
+				F93A089A8E8090E073062F50 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		FB40BC1EC8B6E85FF9425BB2 /* Build configuration list for PBXNativeTarget "Umpi" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				98120479EFC70486EA28392B /* Debug */,
+				E89B9D576992209FF84E7FCC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 7BD395503C53B1459ABFEB6B /* Project object */;
+}

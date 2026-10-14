@@ -1,0 +1,23 @@
+# Only publishable sources and dependency locks enter the image build context.
+**
+!package.json
+!package-lock.json
+!src/
+!src/shared/
+!src/shared/*.ts
+!src/vault/
+!src/vault/*.ts
+!containers/
+!containers/vault-sync/
+!containers/vault-sync/Dockerfile
+!containers/vault-sync/package.json
+!containers/vault-sync/package-lock.json
+!src/coding/
+!src/coding/rpc.ts
+!src/coding/shell.ts
+!src/coding/workspace.ts
+!src/coding/server.ts
+!src/coding/process-supervisor.c
+!src/coding/process-supervisor.ts
+!containers/coding/
+!containers/coding/Dockerfile
