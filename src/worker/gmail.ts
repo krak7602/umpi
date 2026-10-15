@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer";
 
 export const GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"] as const;
-export const MAIL_BOOTSTRAP_THREAD_LIMIT = 200;
+export const MAIL_SYNC_MESSAGE_BATCH_LIMIT = 50;
 export const MAIL_TRIAGE_THREAD_LIMIT = 50;
 export const MAIL_CONTEXT_MESSAGE_LIMIT = 8;
 
@@ -28,15 +28,24 @@ export interface GmailThreadSnapshot {
   webUrl: string;
   messages: GmailMessageContext[];
 }
+export interface GmailSyncContinuation {
+  mode: "bootstrap" | "incremental";
+  startHistoryId: string;
+  resultHistoryId: string;
+  pageToken: string | null;
+  pendingMessageIds: string[];
+}
 export interface GmailSyncRequest {
   mode: "bootstrap" | "incremental";
   after: string;
   historyId?: string;
+  continuation?: GmailSyncContinuation;
 }
 export interface GmailSyncResult {
   status: "complete" | "partial" | "unavailable" | "cursor_expired";
   checkedAt: string;
   historyId: string | null;
+  continuation: GmailSyncContinuation | null;
   threads: GmailThreadSnapshot[];
   discovered: number;
   issues: string[];
@@ -58,6 +67,11 @@ function providerId(value: unknown): string {
 }
 function historyId(value: unknown): string {
   if (typeof value !== "string" || !/^\d{1,32}$/.test(value)) throw new Error("Invalid Gmail history cursor");
+  return value;
+}
+function pageToken(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string" || value.length < 1 || value.length > 4_096 || /[\s\u0000-\u001f\u007f]/.test(value)) throw new Error("Invalid Gmail page token");
   return value;
 }
 function instant(value: unknown): string {
@@ -108,13 +122,41 @@ async function client(credentials: GmailCredentials, fetcher: typeof fetch, sign
   if (!tokenResponse.ok) throw new Error("Gmail authorization could not be refreshed");
   const token = object(await boundedJson(tokenResponse, 65_536));
   if (!secret(token.access_token)) throw new Error("Gmail authorization could not be refreshed");
+  // Gmail's strictest read in this flow costs 10 quota units. Start at most 20
+  // provider reads per second so concurrent hydration remains below 15,000 units/minute.
+  const requestInterval = fetcher === globalThis.fetch ? 50 : 0;
+  let nextRequestAt = 0, gate = Promise.resolve();
+  async function waitForQuota(): Promise<void> {
+    if (!requestInterval) return;
+    const previous = gate, next = Promise.withResolvers<void>();
+    gate = next.promise;
+    await previous;
+    const delay = Math.max(0, nextRequestAt - Date.now());
+    if (delay) {
+      const sleeper = Promise.withResolvers<void>();
+      setTimeout(sleeper.resolve, delay);
+      await sleeper.promise;
+    }
+    nextRequestAt = Date.now() + requestInterval;
+    next.resolve();
+  }
   return {
     async get(path, parameters = new URLSearchParams(), maxBytes = 524_288) {
+      await waitForQuota();
       const url = new URL(`${API}${path}`);
       url.search = parameters.toString();
       const response = await fetcher(url, { method: "GET", redirect: "manual", signal, headers: { Authorization: `Bearer ${token.access_token}` } });
       if (!response.ok) return { response };
-      return { response, value: await boundedJson(response, maxBytes) };
+      try {
+        return { response, value: await boundedJson(response, maxBytes) };
+      } catch (error) {
+        if (error instanceof Error && error.message === "Gmail response exceeded the read limit") {
+          const kind = path.startsWith("/threads/") ? "thread metadata"
+            : path.startsWith("/messages/") && parameters.get("format") === "full" ? "message body" : "provider";
+          throw new Error(`Gmail ${kind} exceeded the bounded read limit`);
+        }
+        throw error;
+      }
     },
   };
 }
@@ -161,17 +203,24 @@ interface Metadata {
   labels: Set<string>;
   from: string;
   subject: string;
+  excerpt: string;
 }
 function metadata(value: unknown): Metadata {
   const data = object(value), values = headers(data.payload);
   return {
     id: providerId(data.id), threadId: providerId(data.threadId), sentAt: instant(data.internalDate), labels: labels(data.labelIds),
     from: clean(values.get("from"), 500, "Unknown sender"), subject: clean(values.get("subject"), 500, "(no subject)"),
+    excerpt: clean(data.snippet, 2_000),
   };
 }
 function metadataQuery(): URLSearchParams {
   const query = new URLSearchParams({ format: "metadata" });
   for (const name of ["From", "Subject", "Date", "Message-ID"]) query.append("metadataHeaders", name);
+  return query;
+}
+function threadMetadataQuery(): URLSearchParams {
+  const query = metadataQuery();
+  query.set("fields", "messages(id,threadId,internalDate,labelIds,snippet,payload(headers))");
   return query;
 }
 async function mapConcurrent<T, R>(values: readonly T[], limit: number, run: (value: T) => Promise<R>): Promise<R[]> {
@@ -187,65 +236,80 @@ async function mapConcurrent<T, R>(values: readonly T[], limit: number, run: (va
   return result;
 }
 
-async function candidateMessageIds(api: GmailClient, request: GmailSyncRequest): Promise<{ ids: string[]; current: string; partial: boolean; expired: boolean }> {
-  const profile = await api.get("/profile", undefined, 65_536);
-  if (!profile.response.ok) throw new Error("Gmail profile is unavailable");
-  const current = historyId(object(profile.value).historyId);
-  const ids: string[] = [];
-  let partial = false;
+const MAIL_PENDING_MESSAGE_LIMIT = 1_000;
+interface CandidateBatch {
+  ids: string[];
+  historyId: string | null;
+  continuation: GmailSyncContinuation | null;
+  expired: boolean;
+}
+function savedContinuation(request: GmailSyncRequest): GmailSyncContinuation | undefined {
+  if (!request.continuation) return;
+  const value = object(request.continuation);
+  if (value.mode !== request.mode) throw new Error("Invalid Gmail continuation mode");
+  const startHistoryId = historyId(value.startHistoryId), resultHistoryId = historyId(value.resultHistoryId);
+  if (request.mode === "incremental" && startHistoryId !== historyId(request.historyId)) throw new Error("Gmail continuation cursor changed");
+  if (!Array.isArray(value.pendingMessageIds) || value.pendingMessageIds.length > MAIL_PENDING_MESSAGE_LIMIT) throw new Error("Invalid Gmail continuation queue");
+  return {
+    mode: request.mode, startHistoryId, resultHistoryId, pageToken: pageToken(value.pageToken),
+    pendingMessageIds: value.pendingMessageIds.map(providerId),
+  };
+}
+function candidateBatch(ids: string[], state: Omit<GmailSyncContinuation, "pendingMessageIds">): CandidateBatch {
+  const unique = [...new Set(ids.map(providerId))];
+  if (unique.length > MAIL_PENDING_MESSAGE_LIMIT) throw new Error("Gmail change page exceeded the safe queue");
+  const selected = unique.slice(0, MAIL_SYNC_MESSAGE_BATCH_LIMIT), pendingMessageIds = unique.slice(MAIL_SYNC_MESSAGE_BATCH_LIMIT);
+  const continuation = pendingMessageIds.length || state.pageToken ? { ...state, pendingMessageIds } : null;
+  return { ids: selected, historyId: continuation ? null : state.resultHistoryId, continuation, expired: false };
+}
+async function candidateMessageIds(api: GmailClient, request: GmailSyncRequest): Promise<CandidateBatch> {
+  const saved = savedContinuation(request);
+  if (saved?.pendingMessageIds.length) {
+    return candidateBatch(saved.pendingMessageIds, {
+      mode: saved.mode, startHistoryId: saved.startHistoryId, resultHistoryId: saved.resultHistoryId, pageToken: saved.pageToken,
+    });
+  }
   if (request.mode === "bootstrap") {
     const cutoff = Date.parse(request.after);
     if (!Number.isFinite(cutoff)) throw new Error("Invalid Gmail bootstrap boundary");
-    let pageToken: string | undefined;
-    for (let page = 0; page < 2 && ids.length < MAIL_BOOTSTRAP_THREAD_LIMIT; page++) {
-      // Gmail's date query uses a provider timezone. Query one earlier date, then enforce the exact ISO boundary locally.
-      const query = new URLSearchParams({ labelIds: "INBOX", maxResults: "100", q: `after:${new Date(cutoff - 86_400_000).toISOString().slice(0, 10).replace(/-/g, "/")}` });
-      if (pageToken) query.set("pageToken", pageToken);
-      const response = await api.get("/messages", query, 262_144);
-      if (!response.response.ok) throw new Error("Gmail bootstrap is unavailable");
-      const data = object(response.value);
-      if (data.messages !== undefined && !Array.isArray(data.messages)) throw new Error("Invalid Gmail message list");
-      for (const value of data.messages as unknown[] | undefined ?? []) {
-        const message = object(value);
-        ids.push(providerId(message.id));
-        if (ids.length >= MAIL_BOOTSTRAP_THREAD_LIMIT) break;
-      }
-      pageToken = typeof data.nextPageToken === "string" && data.nextPageToken ? data.nextPageToken : undefined;
-      if (!pageToken) break;
-      if (page === 1 || ids.length >= MAIL_BOOTSTRAP_THREAD_LIMIT) partial = true;
+    let startHistoryId = saved?.startHistoryId;
+    if (!startHistoryId) {
+      const profile = await api.get("/profile", undefined, 65_536);
+      if (!profile.response.ok) throw new Error("Gmail profile is unavailable");
+      startHistoryId = historyId(object(profile.value).historyId);
     }
-  } else {
-    if (!request.historyId) throw new Error("Gmail incremental sync requires a cursor");
-    let pageToken: string | undefined;
-    for (let page = 0; page < 5 && ids.length < MAIL_BOOTSTRAP_THREAD_LIMIT; page++) {
-      const query = new URLSearchParams({ startHistoryId: historyId(request.historyId), historyTypes: "messageAdded", maxResults: "100" });
-      if (pageToken) query.set("pageToken", pageToken);
-      const response = await api.get("/history", query, 524_288);
-      if (response.response.status === 404) return { ids: [], current, partial: false, expired: true };
-      if (!response.response.ok) throw new Error("Gmail history is unavailable");
-      const data = object(response.value);
-      if (data.history !== undefined && !Array.isArray(data.history)) throw new Error("Invalid Gmail history");
-      for (const value of data.history as unknown[] | undefined ?? []) {
-        const entry = object(value);
-        if (entry.messagesAdded !== undefined && !Array.isArray(entry.messagesAdded)) throw new Error("Invalid Gmail history messages");
-        for (const added of entry.messagesAdded as unknown[] | undefined ?? []) {
-          const message = object(object(added).message);
-          ids.push(providerId(message.id));
-          if (ids.length >= MAIL_BOOTSTRAP_THREAD_LIMIT) break;
-        }
-        if (ids.length >= MAIL_BOOTSTRAP_THREAD_LIMIT) break;
-      }
-      pageToken = typeof data.nextPageToken === "string" && data.nextPageToken ? data.nextPageToken : undefined;
-      if (!pageToken) break;
-      if (page === 4 || ids.length >= MAIL_BOOTSTRAP_THREAD_LIMIT) partial = true;
-    }
+    // Gmail's date query uses a provider timezone. Query one earlier date, then enforce the exact ISO boundary locally.
+    const query = new URLSearchParams({ labelIds: "INBOX", maxResults: String(MAIL_SYNC_MESSAGE_BATCH_LIMIT),
+      q: `after:${new Date(cutoff - 86_400_000).toISOString().slice(0, 10).replace(/-/g, "/")}` });
+    if (saved?.pageToken) query.set("pageToken", saved.pageToken);
+    const response = await api.get("/messages", query, 262_144);
+    if (!response.response.ok) throw new Error("Gmail bootstrap is unavailable");
+    const data = object(response.value);
+    if (data.messages !== undefined && !Array.isArray(data.messages)) throw new Error("Invalid Gmail message list");
+    const ids = (data.messages as unknown[] | undefined ?? []).map(value => providerId(object(value).id));
+    return candidateBatch(ids, { mode: "bootstrap", startHistoryId, resultHistoryId: startHistoryId, pageToken: pageToken(data.nextPageToken) });
   }
-  return { ids: [...new Set(ids)], current, partial, expired: false };
+  if (!request.historyId) throw new Error("Gmail incremental sync requires a cursor");
+  const startHistoryId = saved?.startHistoryId ?? historyId(request.historyId);
+  const query = new URLSearchParams({ startHistoryId, historyTypes: "messageAdded", maxResults: "25" });
+  if (saved?.pageToken) query.set("pageToken", saved.pageToken);
+  const response = await api.get("/history", query, 524_288);
+  if (response.response.status === 404) return { ids: [], historyId: null, continuation: null, expired: true };
+  if (!response.response.ok) throw new Error("Gmail history is unavailable");
+  const data = object(response.value);
+  if (data.history !== undefined && !Array.isArray(data.history)) throw new Error("Invalid Gmail history");
+  const ids: string[] = [];
+  for (const value of data.history as unknown[] | undefined ?? []) {
+    const entry = object(value);
+    if (entry.messagesAdded !== undefined && !Array.isArray(entry.messagesAdded)) throw new Error("Invalid Gmail history messages");
+    for (const added of entry.messagesAdded as unknown[] | undefined ?? []) ids.push(providerId(object(object(added).message).id));
+  }
+  return candidateBatch(ids, { mode: "incremental", startHistoryId, resultHistoryId: historyId(data.historyId), pageToken: pageToken(data.nextPageToken) });
 }
 
 async function threadSnapshot(api: GmailClient, threadId: string, cutoff: number): Promise<GmailThreadSnapshot | undefined> {
-  const query = metadataQuery();
-  const response = await api.get(`/threads/${encodeURIComponent(threadId)}`, query, 524_288);
+  const query = threadMetadataQuery();
+  const response = await api.get(`/threads/${encodeURIComponent(threadId)}`, query, 2_097_152);
   if (!response.response.ok) return;
   const data = object(response.value);
   if (!Array.isArray(data.messages)) throw new Error("Invalid Gmail thread");
@@ -256,14 +320,24 @@ async function threadSnapshot(api: GmailClient, threadId: string, cutoff: number
   const outgoing = all.filter(message => message.labels.has("SENT"));
   const latestOutgoing = outgoing.at(-1);
   const selected = all.slice(-MAIL_CONTEXT_MESSAGE_LIMIT);
-  const contexts = await mapConcurrent(selected, 4, async message => {
-    const full = await api.get(`/messages/${encodeURIComponent(message.id)}`, new URLSearchParams({ format: "full" }), 393_216);
-    if (!full.response.ok) return { id: message.id, sentAt: message.sentAt, direction: message.labels.has("SENT") ? "outgoing" as const : "incoming" as const, from: message.from, subject: message.subject, excerpt: "" };
-    const value = object(full.value), parsed = metadata(value);
-    return { id: parsed.id, sentAt: parsed.sentAt, direction: parsed.labels.has("SENT") ? "outgoing" as const : "incoming" as const,
-      from: parsed.from, subject: parsed.subject, excerpt: clean(bodyText(value.payload), 2_000) };
-  });
+  const context = (message: Metadata) => ({ id: message.id, sentAt: message.sentAt,
+    direction: message.labels.has("SENT") ? "outgoing" as const : "incoming" as const,
+    from: message.from, subject: message.subject, excerpt: message.excerpt });
+  const contexts = selected.map(context);
   const lastOutgoingAt = latestOutgoing?.sentAt ?? null;
+  const awaitingReply = !lastOutgoingAt || lastOutgoingAt < latestIncoming.sentAt;
+  const latestIndex = selected.findIndex(message => message.id === latestIncoming.id);
+  if (awaitingReply && latestIndex >= 0) {
+    try {
+      const full = await api.get(`/messages/${encodeURIComponent(latestIncoming.id)}`, new URLSearchParams({ format: "full" }), 393_216);
+      if (full.response.ok) {
+        const value = object(full.value), parsed = metadata(value);
+        contexts[latestIndex] = { ...context(parsed), excerpt: clean(bodyText(value.payload), 2_000) || parsed.excerpt };
+      }
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== "Gmail message body exceeded the bounded read limit") throw error;
+    }
+  }
   return {
     id: threadId,
     versionKey: `${latestIncoming.id}:${latestOutgoing?.id ?? "none"}`,
@@ -274,15 +348,15 @@ async function threadSnapshot(api: GmailClient, threadId: string, cutoff: number
     lastOutgoingAt,
     unread: latestIncoming.labels.has("UNREAD"),
     important: latestIncoming.labels.has("IMPORTANT"),
-    awaitingReply: !lastOutgoingAt || lastOutgoingAt < latestIncoming.sentAt,
+    awaitingReply,
     webUrl: `https://mail.google.com/mail/#all/${encodeURIComponent(threadId)}`,
     messages: contexts,
   };
 }
 
-/** One bounded mailbox pass. Provider errors and account identity never enter the result. */
+/** One bounded mailbox pass. Durable continuation drains every provider page before the history cursor advances. */
 export async function readGmailChanges(credentials: string | undefined, request: GmailSyncRequest, now = Date.now(), fetcher: typeof fetch = fetch): Promise<GmailSyncResult> {
-  const result: GmailSyncResult = { status: "unavailable", checkedAt: new Date(now).toISOString(), historyId: null, threads: [], discovered: 0, issues: [] };
+  const result: GmailSyncResult = { status: "unavailable", checkedAt: new Date(now).toISOString(), historyId: null, continuation: null, threads: [], discovered: 0, issues: [] };
   const issue = (message: string) => { if (!result.issues.includes(message)) result.issues.push(message); };
   let auth: GmailCredentials;
   try { auth = parseGmailCredentials(JSON.parse(credentials ?? "null")); }
@@ -293,7 +367,8 @@ export async function readGmailChanges(credentials: string | undefined, request:
   try {
     const api = await client(auth, fetcher, signal);
     const candidates = await candidateMessageIds(api, request);
-    result.historyId = candidates.current;
+    result.historyId = candidates.historyId;
+    result.continuation = candidates.continuation;
     if (candidates.expired) { result.status = "cursor_expired"; issue("Gmail incremental history expired; explicit bounded re-bootstrap is required."); return result; }
     const metadataRows = await mapConcurrent(candidates.ids, 8, async id => {
       const response = await api.get(`/messages/${encodeURIComponent(id)}`, metadataQuery(), 131_072);
@@ -308,15 +383,15 @@ export async function readGmailChanges(credentials: string | undefined, request:
     const ranked = [...newest.values()].sort((a, b) => Number(b.labels.has("UNREAD")) - Number(a.labels.has("UNREAD"))
       || Number(b.labels.has("IMPORTANT")) - Number(a.labels.has("IMPORTANT")) || b.sentAt.localeCompare(a.sentAt));
     result.discovered = ranked.length;
-    if (ranked.length > MAIL_TRIAGE_THREAD_LIMIT) { ranked.length = MAIL_TRIAGE_THREAD_LIMIT; candidates.partial = true; }
     const snapshots = await mapConcurrent(ranked, 4, item => threadSnapshot(api, item.threadId, cutoff));
     result.threads = snapshots.filter((value): value is GmailThreadSnapshot => value !== undefined)
       .sort((a, b) => Number(b.unread) - Number(a.unread) || Number(b.important) - Number(a.important) || b.receivedAt.localeCompare(a.receivedAt));
-    result.status = candidates.partial ? "partial" : "complete";
-    if (candidates.partial) issue("Gmail changes exceeded the bounded scan; the newest candidate threads were retained.");
+    result.status = candidates.continuation ? "partial" : "complete";
+    if (candidates.continuation) issue("Gmail scan has more bounded batches; durable progress will continue.");
     return result;
-  } catch {
-    issue("Gmail could not be read within the bounded sync attempt.");
+  } catch (error) {
+    const safeDetail = error instanceof Error && /^(?:Gmail|Invalid Gmail|Missing Gmail)/.test(error.message) ? error.message : null;
+    issue(safeDetail ? `${safeDetail}.` : "Gmail could not be read within the bounded sync attempt.");
     return result;
   }
 }

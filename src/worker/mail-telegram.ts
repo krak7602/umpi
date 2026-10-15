@@ -16,7 +16,7 @@ export function formatMailStatus(runtime: MailRuntime): string {
     + `Initial boundary: ${meta.bootstrapAfter ?? "not selected"}. It never expands automatically.\n`
     + `Last check: ${meta.lastSyncAt ?? "not run"}${meta.lastStatus ? ` · ${meta.lastStatus}` : ""}.\n`
     + `Awaiting triage: ${counts.counts.pending ?? 0} · needs you: ${counts.counts.attention ?? 0} · snoozed: ${counts.counts.snoozed ?? 0}.`;
-  if (meta.truncated) text += "\nThe bounded scan retained only the newest candidate threads.";
+  if (meta.continuation) text += "\nThe bounded scan is continuing from saved provider progress; its cursor has not advanced.";
   if (meta.issue) text += `\nIssue: ${meta.issue}`;
   if (settings.enabled && !runtime.store.proactive.settings().enabled) text += "\nFollow-through is paused in /schedule, so mailbox checks are also paused.";
   if (item) text += `\n\nNext item\n${item.subject}\nFrom: ${item.sender}\nReceived: ${item.receivedAt}\nWhy: ${item.reason}\nSuggested: ${item.suggestedAction}\nOpen: ${item.webUrl}`;
