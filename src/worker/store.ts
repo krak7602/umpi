@@ -1,5 +1,6 @@
 import { InputError, identifier, boundedText, timestamp, parseAssignment, parsePoll, parseCompletion, type JobCompletion, type JobStatus, type ExecutorPollResult, record } from "../shared/protocol.js";
 import { formatTelegramApproval } from "./telegram-view.js";
+import { renderTelegramMarkdown } from "./telegram-markdown.js";
 
 export interface Database {
   all<T extends object>(query: string, ...bindings: (string | number | null)[]): T[];
@@ -38,9 +39,11 @@ export interface Choice {
 export interface TelegramMarkup {
   inline_keyboard: { text: string; callback_data: string }[][];
 }
-export interface TelegramEntity {
-  type: "bold" | "pre" | "blockquote"; offset: number; length: number;
-}
+export type TelegramEntity = { offset: number; length: number } & (
+  | { type: "bold" | "italic" | "strikethrough" | "code" | "blockquote" }
+  | { type: "pre"; language?: string }
+  | { type: "text_link"; url: string }
+);
 type TelegramInteraction = {
   groupId: string; used?: boolean;
 } & (
@@ -220,7 +223,13 @@ export class Store {
       if (!op || op.status === "done" || op.status === "failed") return;
       this.operationWrite({ ...op, status: failed ? "failed" : "done", ...(failed ? { error: result } : { result }) });
       // A successful tool-only turn may already have posted its native interaction.
-      if (!op.background && (result.trim() || failed)) this.enqueue(`answer:${id}`, op.channel, result.trim() ? result : "The model request failed. Check protected model status.");
+      if (!op.background && (result.trim() || failed)) {
+        const output = result.trim() || "The model request failed. Check protected model status.";
+        if (op.channel === "telegram") {
+          const rich = renderTelegramMarkdown(output);
+          this.enqueue(`answer:${id}`, op.channel, rich.text, undefined, rich.entities);
+        } else this.enqueue(`answer:${id}`, op.channel, output);
+      }
     });
   }
   effectResult<T>(key: string): T | undefined {

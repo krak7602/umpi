@@ -46,6 +46,33 @@ test("message admission is durable/idempotent and channel-specific; changed text
   assert.equal(store.deliveries(`answer:${first.id}`)[0]?.channel, "control");
   assert.equal(store.readyDeliveries().length, 0);
 });
+test("model Markdown is rendered only for Telegram conversation deliveries", t => {
+  const { store, close } = open(); t.after(close);
+  const markdown = "**Background lane:** Keep going.";
+  const telegram = store.admit("rich-response", "request", "telegram", "2");
+  store.settle(telegram.id, markdown);
+  const telegramDelivery = store.deliveries(`answer:${telegram.id}`)[0]!;
+  assert.equal(telegramDelivery.text, "Background lane: Keep going.");
+  assert.deepEqual(telegramDelivery.entities?.map(entity => ({
+    type: entity.type, text: telegramDelivery.text.slice(entity.offset, entity.offset + entity.length),
+  })), [{ type: "bold", text: "Background lane:" }]);
+
+  const control = store.admit("markdown-response", "request", "control", "1");
+  store.settle(control.id, markdown);
+  const controlDelivery = store.deliveries(`answer:${control.id}`)[0]!;
+  assert.equal(controlDelivery.text, markdown);
+  assert.equal(controlDelivery.entities, undefined);
+
+  const long = store.admit("long-markdown-response", "request", "telegram", "2");
+  store.settle(long.id, `**${"x".repeat(4_001)}**`);
+  const parts = store.deliveries(`answer:${long.id}`);
+  assert.equal(parts.map(part => part.text).join(""), "x".repeat(4_001));
+  assert.deepEqual(parts.map(part => part.entities), [
+    [{ type: "bold", offset: 0, length: 4_000 }],
+    [{ type: "bold", offset: 0, length: 1 }],
+  ]);
+});
+
 
 test("Mac work requires explicit approval and returns only to its original execution owner", t => {
   const { store, close } = open(); t.after(close);
