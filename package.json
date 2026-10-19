@@ -32,7 +32,6 @@
     "@earendil-works/pi-durable": "1.1.0",
     "@js-temporal/polyfill": "0.5.1",
     "agents": "0.28.1",
-    "email-reply-parser": "2.3.9",
     "html-to-text": "10.0.1",
     "marked": "18.1.1",
     "tldts": "7.4.18"
