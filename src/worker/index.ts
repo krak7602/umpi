@@ -36,6 +36,11 @@ import { MailRuntime } from "./mail-runtime.js";
 import { mailTools, guardMailReviewTools, MAIL_INSTRUCTIONS } from "./mail-tools.js";
 import { mailRequest } from "./mail-http.js";
 import { enqueueMailControls, handleMailCallback, formatMailStatus } from "./mail-telegram.js";
+import { SituationStore } from "./situation-store.js";
+import { situationTools, SITUATION_INSTRUCTIONS } from "./situation-tools.js";
+import { BriefStore } from "./brief-store.js";
+import { briefTools, guardBriefReviewTools, BRIEF_INSTRUCTIONS } from "./brief-tools.js";
+import { briefRequest, enqueueBriefControls, formatBriefStatus, handleBriefCallback } from "./brief-telegram.js";
 import { VaultSync } from "./vault-sync.js";
 import { publicPage } from "./public-pages.js";
 import { CodingStore } from "./coding-store.js";
@@ -64,8 +69,10 @@ import { MAX_VOICE_NOTE_BYTES, MAX_VOICE_NOTE_SECONDS, VoiceNoteError, type Tele
 export { VaultSync, CodingWorker, BrowserWorker };
 
 registerBunOAuthFlows();
-/** Foreground and proactive conversations; subagents inherit it, coding and browser runs set their own. */
+/** Owner-facing conversations; subagents inherit it, coding and browser runs set their own. */
 const MAIN_THINKING_LEVEL = "high";
+/** Background reviews are bounded, well-instructed extraction and summarizing, so medium is enough. */
+const BACKGROUND_THINKING_LEVEL = "medium";
 
 export interface Env extends TelegramConfig, CompanionPushConfig {
   ASSISTANT: DurableObjectNamespace<Assistant>;
@@ -101,7 +108,7 @@ class Coordinator extends LifecycleCapability {
     this.assistant.telegramInbox.recover();
     // Recover both new proposals and decisions committed before their SQL delivery projection.
     await reconcileMemoryTelegram(await this.assistant.harness.pi(), BACKGROUND_CONTEXT, this.assistant.store);
-    if (this.assistant.telegramInbox.hasPending() || this.assistant.store.pendingOperations().length || this.assistant.store.nextReminder() !== undefined || this.assistant.store.readyDeliveries().length || this.assistant.companion.nextPush() || this.assistant.proactive.settings().enabled || this.assistant.planning.settings().enabled || this.assistant.mailRuntime.nextDue() !== undefined || this.assistant.coding.active().length || this.assistant.browserRuntime.nextDue() !== undefined || this.assistant.browser.active().length || await this.assistant.subagents.nextDue() !== undefined) await this.wake();
+    if (this.assistant.telegramInbox.hasPending() || this.assistant.store.pendingOperations().length || this.assistant.store.nextReminder() !== undefined || this.assistant.store.readyDeliveries().length || this.assistant.companion.nextPush() || this.assistant.proactive.settings().enabled || this.assistant.planning.settings().enabled || this.assistant.brief.settings().enabled || this.assistant.mailRuntime.nextDue() !== undefined || this.assistant.coding.active().length || this.assistant.browserRuntime.nextDue() !== undefined || this.assistant.browser.active().length || await this.assistant.subagents.nextDue() !== undefined) await this.wake();
   }
 
   async onJob({ job }: LifecycleJobContext): Promise<LifecycleJobOutcome> {
@@ -112,6 +119,8 @@ class Coordinator extends LifecycleCapability {
       await this.assistant.telegramInbox.drive();
       this.assistant.planning.drive("control", store.session("control")!, this.assistant.planningRuntime.available());
       await this.assistant.mailRuntime.drive();
+      this.assistant.situation.purge();
+      this.assistant.brief.drive();
       await this.assistant.driveProactive();
       this.assistant.planning.reconcile();
       await this.assistant.subagents.drive();
@@ -181,7 +190,7 @@ class Coordinator extends LifecycleCapability {
       // Missing credentials do not justify a two-second polling loop; auth updates wake the queue.
       const pending = store.pendingOperations().some(op => op.status === "submitted");
       const outbox = store.readyDeliveries().length > 0;
-      const wakeAt = Math.min(due ?? Infinity, proactive.nextDue(Date.now(), store.hasForegroundInput()) ?? Infinity, this.assistant.planning.nextDue() ?? Infinity, this.assistant.mailRuntime.nextDue() ?? Infinity, this.assistant.codingRuntime.nextDue() ?? Infinity, this.assistant.browserRuntime.nextDue() ?? Infinity, await this.assistant.subagents.nextDue() ?? Infinity, this.assistant.telegramInbox.nextDue() ?? Infinity, pending ? Date.now() + 2_000 : Infinity, outbox || this.assistant.companion.nextPush() ? Date.now() + 100 : Infinity);
+      const wakeAt = Math.min(due ?? Infinity, proactive.nextDue(Date.now(), store.hasForegroundInput()) ?? Infinity, this.assistant.planning.nextDue() ?? Infinity, this.assistant.brief.nextDue() ?? Infinity, this.assistant.mailRuntime.nextDue() ?? Infinity, this.assistant.codingRuntime.nextDue() ?? Infinity, this.assistant.browserRuntime.nextDue() ?? Infinity, await this.assistant.subagents.nextDue() ?? Infinity, this.assistant.telegramInbox.nextDue() ?? Infinity, pending ? Date.now() + 2_000 : Infinity, outbox || this.assistant.companion.nextPush() ? Date.now() + 100 : Infinity);
       if (Number.isFinite(wakeAt)) return { rescheduleAt: wakeAt };
     } catch {
       this.assistant.modelIssue = "Coordinator reconciliation failed; work is retained and retry is scheduled. Check configuration and protected status.";
@@ -199,6 +208,8 @@ export class Assistant extends Agent<Env> {
   readonly planningRuntime: PlanningRuntime;
   readonly mail: MailStore;
   readonly mailRuntime: MailRuntime;
+  readonly situation: SituationStore;
+  readonly brief: BriefStore;
   readonly coding: CodingStore;
   readonly codingRuntime: CodingRuntime;
   readonly browser: BrowserStore;
@@ -231,7 +242,9 @@ export class Assistant extends Agent<Env> {
     this.timezone = env.UMPI_TIMEZONE || "UTC";
     this.proactive = new ProactiveStore(this.store, this.timezone);
     this.planning = new PlanningStore(this.proactive, this.timezone);
-    this.mail = new MailStore(this.proactive);
+    this.situation = new SituationStore(this.store.db, this.timezone);
+    this.mail = new MailStore(this.proactive, this.situation);
+    this.brief = new BriefStore(this.proactive);
     this.coding = new CodingStore(this.store);
     this.browser = new BrowserStore(this.store);
     const models = createAssistantModels(this.credentials);
@@ -286,10 +299,11 @@ export class Assistant extends Agent<Env> {
       track: work => this.lifecycle.trackAlarmWork(work),
     });
     const browserProfile = browserExtension(this.browserRuntime);
-    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...delegation.tools ?? []];
-    const guardedProactiveTools = guardMailReviewTools(guardPlanningReviewTools(proactiveTools(this.proactive, () => this.coordinator.wake()), this.planningRuntime), this.mailRuntime);
-    const umpiExtension: Extension = { name: "umpi", tools: [...guardBackgroundTools(foregroundTools, this.proactive), ...guardedProactiveTools, ...planningTools(this.planningRuntime), ...mailTools(this.mailRuntime)],
-      sections: [{ key: "umpi", tag: false, render: () => `${ASSISTANT_INSTRUCTIONS}\n${COMPANION_INSTRUCTIONS}\n${PROACTIVE_INSTRUCTIONS}\n${PLANNING_INSTRUCTIONS}\n${MAIL_INSTRUCTIONS}\n${CODING_OWNER_INSTRUCTIONS}\n${BROWSER_OWNER_INSTRUCTIONS}\n${SUBAGENT_INSTRUCTIONS}\nOwner timezone: ${this.timezone}.` }, coreContextSection, { key: "response-style", tag: false, render: () => RESPONSE_STYLE_INSTRUCTIONS }] };
+    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...delegation.tools ?? []];
+    const guardedProactiveTools = guardBriefReviewTools(guardMailReviewTools(guardPlanningReviewTools(proactiveTools(this.proactive, () => this.coordinator.wake()), this.planningRuntime), this.mailRuntime), this.brief);
+    const briefSources = { brief: this.brief, situation: this.situation, mail: this.mail, planning: this.planningRuntime, calendarCredentials: () => this.config.UMPI_CALENDAR_CREDENTIALS };
+    const umpiExtension: Extension = { name: "umpi", tools: [...guardBackgroundTools(foregroundTools, this.proactive), ...guardedProactiveTools, ...planningTools(this.planningRuntime), ...mailTools(this.mailRuntime), ...briefTools(briefSources)],
+      sections: [{ key: "umpi", tag: false, render: () => `${ASSISTANT_INSTRUCTIONS}\n${COMPANION_INSTRUCTIONS}\n${PROACTIVE_INSTRUCTIONS}\n${PLANNING_INSTRUCTIONS}\n${MAIL_INSTRUCTIONS}\n${SITUATION_INSTRUCTIONS}\n${BRIEF_INSTRUCTIONS}\n${CODING_OWNER_INSTRUCTIONS}\n${BROWSER_OWNER_INSTRUCTIONS}\n${SUBAGENT_INSTRUCTIONS}\nOwner timezone: ${this.timezone}.` }, coreContextSection, { key: "response-style", tag: false, render: () => RESPONSE_STYLE_INSTRUCTIONS }] };
     registry.install(umpiExtension); registry.install(codingProfile); registry.install(browserProfile);
     registry.install(delegation); registry.install(assistantChild); registry.install(codingChild);
     this.harness = new PiHarness({
@@ -377,7 +391,8 @@ export class Assistant extends Agent<Env> {
     }
     for (const session of sessions) {
       await this.harness.sessions.get(session).setModel(model);
-      await (await this.harness.conversation(session)).configure({ thinkingLevel: MAIN_THINKING_LEVEL }, BACKGROUND_CONTEXT);
+      const thinkingLevel = this.store.isBackgroundSession(session) ? BACKGROUND_THINKING_LEVEL : MAIN_THINKING_LEVEL;
+      await (await this.harness.conversation(session)).configure({ thinkingLevel }, BACKGROUND_CONTEXT);
     }
   }
 
@@ -417,7 +432,8 @@ export class Assistant extends Agent<Env> {
         const key = `background:${channel}`;
         let opening = this.openingSessions.get(key);
         if (!opening) {
-          opening = this.harness.sessions.create().then(session => {
+          opening = this.harness.sessions.create().then(async session => {
+            await (await this.harness.conversation(session.id)).configure({ thinkingLevel: BACKGROUND_THINKING_LEVEL }, BACKGROUND_CONTEXT);
             this.store.registerBackgroundSession(session.id, channel);
             return session.id;
           });
@@ -478,6 +494,8 @@ export class Assistant extends Agent<Env> {
       schedule: this.proactive.status(),
       planning: this.planningRuntime.status(),
       mail: this.mailRuntime.status(),
+      situation: this.situation.status(),
+      brief: this.brief.status(),
       coding: this.codingRuntime.status(),
       browser: this.browserRuntime.status(),
       subagents: await this.subagents.status(),
@@ -533,7 +551,9 @@ export class Assistant extends Agent<Env> {
       if (planning) return planning;
       const mail = await mailRequest(request, this.mailRuntime, () => this.store.session("telegram"));
       if (mail) { mail.headers.set("cache-control", "no-store"); return mail; }
-      const schedule = await scheduleRequest(request, this.proactive, () => this.coordinator.wake(), () => this.session("control"), id => this.planning.ownsCommitment(id) || this.mail.ownsCommitment(id));
+      const brief = await briefRequest(request, this.brief, this.situation, () => this.store.session("telegram"), () => this.coordinator.wake());
+      if (brief) { brief.headers.set("cache-control", "no-store"); return brief; }
+      const schedule = await scheduleRequest(request, this.proactive, () => this.coordinator.wake(), () => this.session("control"), id => this.planning.ownsCommitment(id) || this.mail.ownsCommitment(id) || this.brief.ownsCommitment(id));
       if (schedule) return schedule;
       if (path === "/api/status" && request.method === "GET") return Response.json(await this.status());
       if (path === "/api/jobs" && request.method === "GET") return Response.json({ jobs: this.store.jobs() });
@@ -661,7 +681,8 @@ export class Assistant extends Agent<Env> {
               await this.coordinator.wake();
               return Response.json({ ok: true });
             }
-            result = await handlePlanningCallback(this.planningRuntime, input.data, input.messageId)
+            result = await handleBriefCallback(this.brief, input.data, input.messageId, () => this.coordinator.wake())
+              ?? await handlePlanningCallback(this.planningRuntime, input.data, input.messageId)
               ?? handleScheduleCallback(this.proactive, input.data, input.messageId)
               ?? await handleMemoryTelegramCallback(await this.harness.pi(), BACKGROUND_CONTEXT, this.store, input.data, input.messageId)
               ?? this.store.resolveTelegramCallback(input.data, input.messageId);
@@ -699,6 +720,12 @@ export class Assistant extends Agent<Env> {
           await this.session("telegram");
           await this.coordinator.wake();
           enqueuePlanningControls(this.planningRuntime, input.id);
+          return Response.json({ ok: true });
+        }
+        if (input.text.trim() === "/brief") {
+          await this.session("telegram");
+          await this.coordinator.wake();
+          enqueueBriefControls(this.brief, input.id);
           return Response.json({ ok: true });
         }
         if (input.text.trim() === "/mail") {
@@ -743,7 +770,7 @@ export class Assistant extends Agent<Env> {
                 const job = control[1] === "approve" ? this.store.approveJob(control[2]!, expectedVersion) : this.store.cancelJob(control[2]!, expectedVersion);
                 text = `Job ${job.jobId} v${job.version}: ${job.status}${job.cancelRequested ? "; cancellation requested, awaiting Mac confirmation" : ""}.`;
               } else {
-                text = `${formatTelegramStatus({ jobs: this.store.jobs(), reminders: this.store.reminders(), executors: this.store.executors(), choices: this.store.choices().filter(choice => choice.channel === "telegram"), timezone: this.timezone })}\n\n${formatScheduleStatus(this.proactive)}\n\n${formatPlanningStatus(this.planningRuntime)}\n\n${formatMailStatus(this.mailRuntime)}\n\n${subagentSummary}`;
+                text = `${formatTelegramStatus({ jobs: this.store.jobs(), reminders: this.store.reminders(), executors: this.store.executors(), choices: this.store.choices().filter(choice => choice.channel === "telegram"), timezone: this.timezone })}\n\n${formatScheduleStatus(this.proactive)}\n\n${formatPlanningStatus(this.planningRuntime)}\n\n${formatMailStatus(this.mailRuntime)}\n\n${formatBriefStatus(this.brief)}\n\n${subagentSummary}`;
               }
             } catch (error) {
               if (!(error instanceof InputError || error instanceof StateError)) throw error;

@@ -1,9 +1,12 @@
 import { Buffer } from "node:buffer";
+import { cleanEmailText } from "./mail-text.js";
 
 export const GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"] as const;
 export const MAIL_SYNC_MESSAGE_BATCH_LIMIT = 50;
 export const MAIL_TRIAGE_THREAD_LIMIT = 50;
 export const MAIL_CONTEXT_MESSAGE_LIMIT = 8;
+/** Characters of the cleaned latest incoming body given to the model. */
+export const MAIL_BODY_EXCERPT_LIMIT = 2_500;
 
 export interface GmailCredentials { clientId: string; clientSecret: string; refreshToken: string }
 export interface GmailMessageContext {
@@ -14,6 +17,8 @@ export interface GmailMessageContext {
   subject: string;
   excerpt: string;
 }
+/** Gmail's inbox tab for the latest incoming message; "primary" when no category label is present. */
+export type GmailCategory = "primary" | "updates" | "promotions" | "social" | "forums";
 export interface GmailThreadSnapshot {
   id: string;
   versionKey: string;
@@ -24,6 +29,8 @@ export interface GmailThreadSnapshot {
   lastOutgoingAt: string | null;
   unread: boolean;
   important: boolean;
+  starred: boolean;
+  category: GmailCategory;
   awaitingReply: boolean;
   webUrl: string;
   messages: GmailMessageContext[];
@@ -179,21 +186,21 @@ function decodeBody(value: unknown): string {
   if (typeof value !== "string" || value.length > 131_072 || !/^[A-Za-z0-9_-]*$/.test(value)) return "";
   try { return decoder.decode(Buffer.from(value, "base64url")); } catch { return ""; }
 }
-function stripHtml(value: string): string {
-  return value.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ").replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
-    .replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">");
-}
-function bodyText(payload: unknown, depth = 0): string {
-  if (depth > 8) return "";
+function bodyParts(payload: unknown, parts = { plain: [] as string[], html: [] as string[] }, depth = 0): { plain: string[]; html: string[] } {
+  if (depth > 8) return parts;
   const data = object(payload), mime = typeof data.mimeType === "string" ? data.mimeType.toLowerCase() : "";
   const body = data.body === undefined ? {} : object(data.body);
   const direct = decodeBody(body.data);
-  if (direct && (mime === "text/plain" || !mime)) return direct;
-  if (Array.isArray(data.parts)) {
-    const plain = data.parts.map(part => bodyText(part, depth + 1)).filter(Boolean);
-    if (plain.length) return plain.join("\n");
-  }
-  return direct && mime === "text/html" ? stripHtml(direct) : "";
+  if (direct && (mime === "text/plain" || !mime)) parts.plain.push(direct);
+  else if (direct && mime === "text/html") parts.html.push(direct);
+  if (Array.isArray(data.parts)) for (const part of data.parts) bodyParts(part, parts, depth + 1);
+  return parts;
+}
+/** Newlines are kept: they cost little and make receipts and alerts much easier to read. */
+function bodyText(payload: unknown): string {
+  const parts = bodyParts(payload);
+  const text = cleanEmailText(parts.plain.join("\n"), parts.html.join("\n")).replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, " ");
+  return text.length > MAIL_BODY_EXCERPT_LIMIT ? `${text.slice(0, MAIL_BODY_EXCERPT_LIMIT)}…` : text;
 }
 
 interface Metadata {
@@ -212,6 +219,10 @@ function metadata(value: unknown): Metadata {
     from: clean(values.get("from"), 500, "Unknown sender"), subject: clean(values.get("subject"), 500, "(no subject)"),
     excerpt: clean(data.snippet, 2_000),
   };
+}
+function category(labels: Set<string>): GmailCategory {
+  for (const name of ["promotions", "social", "forums", "updates"] as const) if (labels.has(`CATEGORY_${name.toUpperCase()}`)) return name;
+  return "primary";
 }
 function metadataQuery(): URLSearchParams {
   const query = new URLSearchParams({ format: "metadata" });
@@ -332,7 +343,7 @@ async function threadSnapshot(api: GmailClient, threadId: string, cutoff: number
       const full = await api.get(`/messages/${encodeURIComponent(latestIncoming.id)}`, new URLSearchParams({ format: "full" }), 393_216);
       if (full.response.ok) {
         const value = object(full.value), parsed = metadata(value);
-        contexts[latestIndex] = { ...context(parsed), excerpt: clean(bodyText(value.payload), 2_000) || parsed.excerpt };
+        contexts[latestIndex] = { ...context(parsed), excerpt: bodyText(value.payload) || parsed.excerpt };
       }
     } catch (error) {
       if (!(error instanceof Error) || error.message !== "Gmail message body exceeded the bounded read limit") throw error;
@@ -348,6 +359,8 @@ async function threadSnapshot(api: GmailClient, threadId: string, cutoff: number
     lastOutgoingAt,
     unread: latestIncoming.labels.has("UNREAD"),
     important: latestIncoming.labels.has("IMPORTANT"),
+    starred: latestIncoming.labels.has("STARRED"),
+    category: category(latestIncoming.labels),
     awaitingReply,
     webUrl: `https://mail.google.com/mail/#all/${encodeURIComponent(threadId)}`,
     messages: contexts,

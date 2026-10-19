@@ -9,7 +9,7 @@ This repository is a reference implementation for personal operation. It is not 
 | Area | Implemented behavior |
 | --- | --- |
 | Conversation | Persistent Pi conversations through Telegram or a protected control API, with text replies and subscription-backed voice-note transcription |
-| Follow-through | Durable reminders, a lightweight 15-minute review cadence, custom wake-ups, quiet hours, explicit pause/resume controls, and optional bounded read-only Gmail review |
+| Follow-through | Durable reminders, a lightweight 15-minute review cadence, custom wake-ups, quiet hours, explicit pause/resume controls, optional bounded read-only Gmail review across mailboxes, a situation record of orders, spending, subscriptions, and applications, and a daily morning brief |
 | Execution | Version-bound Mac command approval, private-copy coding on macOS, and separately approved source-only cloud coding |
 | Planning and memory | Reviewable and reversible core context, dated owner briefs, read-only Google Calendar input, and scoped Obsidian daily-note updates |
 | Browser | A native Aside lane plus encrypted, one-way, site-scoped snapshots for isolated Cloudflare Browser Run tasks |

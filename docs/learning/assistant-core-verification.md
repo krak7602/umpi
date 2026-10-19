@@ -186,6 +186,22 @@ On 2026-10-19, the primary model changed to `anthropic/claude-opus-5-5` through 
 - A real hosted control-channel message completed in about 6 seconds, with time and reminder tool calls. The `openai-codex` voice credential remained present.
 - Pi issue #10063 reports `Invalid effort level` for accounts with a capped effort. This account accepted high effort, so no workaround was added.
 
+### Mail review and situation verification
+
+On 2026-10-19, hosted status showed 49 consecutive failed mail reviews and 627 threads waiting for triage under both the earlier and the current model. Each turn ended without a structured result. Pi Durable truncates tool results above 50 KB by default, and a 50-thread mail batch exceeded it, so the model received a partial list and the all-thread commit was rejected. Batches are now packed to 36 KB and 40 threads; a test asserts that batches with long threads stay under the limit.
+
+An offline comparison on 40 recent non-promotional emails measured characters sent to the model:
+
+| Method | Total characters | Median per email |
+| --- | --- | --- |
+| Previous extractor (plain part preferred, regex HTML stripping) | 198,459 | 1,436 |
+| `markdown-for-agents` | 155,364 | 990 |
+| `html-to-text` + `email-reply-parser` + footer cut | 111,278 | 829 |
+
+`markdown-for-agents` rendered email layout tables as single Markdown table rows, which lost the line structure. In the chosen pipeline, currency amounts visible in the first 2,000 characters rose from 16 to 25. Every apparent loss of an order, reference, or date was a tracking parameter, bounce header, or link target, not message content. The benchmark used a private temporary copy that was deleted afterward.
+
+Unit tests cover fact merging and expiry, owner corrections, rejected facts, facts-only backfill without notification, bulk-tab skipping, multiple mailboxes, timezone-correct spending windows, the brief schedule, and route authorization. Hosted extraction quality and brief delivery were not yet verified at the time of this entry.
+
 ### Automated checks and limits
 
 The publication check passed `npm run typecheck`, 600 Node tests (597 passed, 3 environment-gated skips), and the complete `npm run build` Wrangler dry run with both container images. Root and vault-runtime `npm audit --audit-level=high` reported zero vulnerabilities. All 18 maintained documentation pages were reachable from `README.md` with no missing local target or heading fragment. Candidate-source privacy scanning and the public `/`, `/privacy`, and `/terms` smoke also passed.
@@ -206,3 +222,4 @@ Not established by the current evidence:
 - 2026-10-13: Added bounded native/cloud coding, browser, subagent, and voice-note verification.
 - 2026-10-14: Verified the configured primary model and direct response-style behavior, then replaced private deployment/account/device timelines with bounded public evidence for the first open-source commit.
 - 2026-10-19: Verified the Claude subscription route locally and on the hosted coordinator.
+- 2026-10-19: Diagnosed the stalled mail reviews, measured email cleaning, and added situation and brief test coverage.

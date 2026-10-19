@@ -361,17 +361,26 @@ npm run mail -- status
 
 The loopback flow uses state and PKCE, requires an exact scope response, and refuses to replace an existing output. It stores `~/.config/umpi/mail/credentials.json` by default. `status` validates protected local presence and schema only; it does not prove refresh or Gmail access. Reuse of the client registration does not combine the Calendar and Gmail grants.
 
-After explicit hosted-deployment and credential-upload authorization, install only the Gmail credential JSON as a Worker secret through private standard input:
+To add another mailbox, authorize it under its own account ID and choose that Google account in the browser. If the OAuth consent screen is in testing mode, first add that address as a test user in the Google Cloud project:
 
 ```sh
-npx wrangler secret put UMPI_GMAIL_CREDENTIALS \
-  --config wrangler.local.jsonc \
-  < "$HOME/.config/umpi/mail/credentials.json"
+npm run mail -- login --client-config "$GOOGLE_CLIENT_JSON" --account domain
+npm run mail -- status
 ```
+
+After explicit hosted-deployment and credential-upload authorization, upload every stored mailbox as one Worker secret. The command assembles the grants in memory and sends them to `wrangler secret put` on standard input:
+
+```sh
+npm run mail -- upload-secret --config wrangler.local.jsonc
+```
+
+A single-mailbox installation can still install only `credentials.json` as `UMPI_GMAIL_CREDENTIALS`.
 
 Never put the JSON in `wrangler*.jsonc`, `.dev.vars`, command arguments, source, screenshots, or shared logs. Preserve the existing Durable Object, migrations, model refresh owner, Calendar secret, Telegram configuration, and other private values during rollout. No Pub/Sub topic, push subscription, Cron Trigger, R2 bucket, or container is required.
 
 After an authorized deployment, verify protected `GET /api/mail` reports `authorizationConfigured: true`; this is still not a successful provider read. Confirm the source-maintained Telegram menu was synchronized and open `/schedule` first. Then open `/mail` and choose the fixed initial boundary: now, 7 days, 14 days, or 30 days. The setting does not search older mail later. `Check now` queues a bounded read. Cursor expiry exposes a version-bound bounded re-scan control instead of silently reading the mailbox again.
+
+To build the [situation record](../subsystems/assistant-runtime.md#situation-record) from existing mail, raise the lookback through the protected settings route (for example to 30 days) while mail is enabled. Every mailbox re-scans that window; unchanged threads are not re-triaged, but each is read once for facts. Expect roughly one minute of Gmail reading per 300 messages and one model turn per 15–40 remaining threads. Bulk tabs cost no model turns.
 
 A large bootstrap or incremental change set spans multiple short lifecycle invocations. `scanInProgress: true` means a provider page token or bounded message-ID queue is saved in SQLite. During that state, the committed Gmail history cursor remains unchanged and model triage waits. Do not treat `lastStatus: partial` as lost coverage or trigger another bootstrap. The scheduler resumes the saved continuation; a transient interruption retries within five minutes without discarding progress. A provider response beyond the continuation safety bound fails without advancing the cursor.
 
@@ -380,6 +389,10 @@ After all provider pages drain, Pi may need multiple bounded 50-thread triage tu
 For private verification, use controlled synthetic or disposable threads around the selected cutoff. Observe: no item older than the exact boundary; persisted page continuation across a restart; no cursor advancement until the final page; one aggregate digest after all triage batches; no duplicate for an unchanged provider version; a new incoming message reopening handled state; a later sent reply resolving it; quiet-hour deferral; stale button rejection; and no Gmail mutation. Inspect `GET /api/mail/items` only through the control credential. Keep sender, subject, excerpts, links, and model output out of shared logs and fixtures.
 
 For an expired cursor or unexplained silence, inspect `lastStatus`, `issue`, `scanInProgress`, `bootstrapAfter`, `nextSyncAt`, scheduler state, model status, and Telegram delivery state. Do not repeatedly widen or rerun bootstrap. Revoking Google access stops future reads but does not erase existing Umpi operational records, model-provider processing, or Telegram messages. Pause first, revoke through Google account controls, remove the Worker secret only under separate deployment authorization, and remove retained private state through owner-controlled storage administration when required.
+
+### Operate the morning brief
+
+Open `/brief` and choose **Enable at 03:30**. The existing `/schedule` follow-through setting must also be enabled. Enabling after that day's time starts the next morning; **Brief now** writes one immediately. Change the time through `PUT /api/brief/settings` with the current `expectedVersion`. A morning with nothing worth saying stays silent. Check `GET /api/brief` and the schedule run history when a brief is missing; the brief is a normal proactive notification, so quiet hours and pause also apply.
 
 ### Operate daily-note preparation
 
@@ -743,3 +756,4 @@ Publish reviewed Git content, not an archive of the working directory: ignored l
 - 2026-10-15: Added separate read-only Gmail authorization, lossless bounded continuation, aggregate digest behavior, operational controls, revocation, and verification guidance.
 - 2026-10-15: Added live verification guidance for channel-specific conversational Markdown rendering through Telegram-native entities.
 - 2026-10-19: Made Claude subscription login the default and recorded the zero-downtime provider switch.
+- 2026-10-19: Added multi-mailbox login and secret upload, the 30-day situation backfill, and morning brief operation.
