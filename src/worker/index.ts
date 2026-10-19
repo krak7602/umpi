@@ -64,6 +64,8 @@ import { MAX_VOICE_NOTE_BYTES, MAX_VOICE_NOTE_SECONDS, VoiceNoteError, type Tele
 export { VaultSync, CodingWorker, BrowserWorker };
 
 registerBunOAuthFlows();
+/** Foreground and proactive conversations; subagents inherit it, coding and browser runs set their own. */
+const MAIN_THINKING_LEVEL = "high";
 
 export interface Env extends TelegramConfig, CompanionPushConfig {
   ASSISTANT: DurableObjectNamespace<Assistant>;
@@ -293,7 +295,7 @@ export class Assistant extends Agent<Env> {
     this.harness = new PiHarness({
       // Use HTTP/SSE, not a Node-style WebSocket constructor with custom headers.
       harness: ({ storage, context }) => Harness.open(storage, { models, registry, settings: { extensions: [umpiExtension], stream: { transport: "sse" } }, onReport: () => { this.modelIssue = "A model extension operation failed; check protected model and job status"; } }, context),
-      defaults: { ...(model ? { model } : {}), thinkingLevel: "low" },
+      defaults: { ...(model ? { model } : {}), thinkingLevel: MAIN_THINKING_LEVEL },
     });
     this.telegramInbox = new TelegramInbox({
       db: this.store.db,
@@ -373,7 +375,10 @@ export class Assistant extends Agent<Env> {
       if (foreground) sessions.add(foreground);
       if (background) sessions.add(background);
     }
-    for (const session of sessions) await this.harness.sessions.get(session).setModel(model);
+    for (const session of sessions) {
+      await this.harness.sessions.get(session).setModel(model);
+      await (await this.harness.conversation(session)).configure({ thinkingLevel: MAIN_THINKING_LEVEL }, BACKGROUND_CONTEXT);
+    }
   }
 
   async modelReady(): Promise<boolean> {

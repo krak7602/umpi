@@ -6,6 +6,8 @@ import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import { assertOutsideRepository } from "../mac/config.ts";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../model/provider.ts";
+
+const PROVIDER_MODELS: Record<string, string> = { anthropic: DEFAULT_MODEL, openai: "gpt-5.6-sol", "openai-codex": "gpt-5.6-sol" };
 import { coordinatorUrl } from "../shared/coordinator-url.ts";
 
 const help = `Usage: npm run setup -- local [options]
@@ -14,7 +16,7 @@ const help = `Usage: npm run setup -- local [options]
   --config PATH         Mac configuration (default: ~/.config/umpi/mac/config.json)
   --workspace PATH      Approved working-directory root; repeat for more roots
   --server-url URL      Coordinator origin (default: http://127.0.0.1:8787)
-  --provider PROVIDER   openai or openai-codex
+  --provider PROVIDER   anthropic (default), openai, or openai-codex
   --timezone ZONE       IANA timezone (default: this computer's timezone)
 
 Creates new owner-only files. Refuses to replace existing configuration.
@@ -45,7 +47,8 @@ async function main(): Promise<void> {
   if (envPath !== fileURLToPath(new URL("../../.dev.vars", import.meta.url))) assertOutsideRepository(envPath);
   const serverUrl = coordinatorUrl(values["server-url"] ?? "http://127.0.0.1:8787").origin;
   const provider = values.provider ?? DEFAULT_PROVIDER;
-  if (provider !== "openai" && provider !== "openai-codex") throw new Error("Unsupported subscription provider");
+  const model = PROVIDER_MODELS[provider];
+  if (!model) throw new Error("Unsupported subscription provider");
   const timezone = values.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
   new Intl.DateTimeFormat("en", { timeZone: timezone }).format(new Date());
   const workspaces = [...new Set(await Promise.all((values.workspace ?? [process.cwd()]).map(path => realpath(resolve(path)))))];
@@ -60,7 +63,7 @@ async function main(): Promise<void> {
     UMPI_EXECUTOR_TOKEN: executorToken,
     UMPI_TIMEZONE: timezone,
     UMPI_MODEL_PROVIDER: provider,
-    UMPI_MODEL_ID: DEFAULT_MODEL,
+    UMPI_MODEL_ID: model,
     TELEGRAM_WEBHOOK_SECRET: webhookSecret,
     TELEGRAM_BOT_TOKEN: "",
     TELEGRAM_OWNER_ID: "",

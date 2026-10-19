@@ -1,6 +1,6 @@
 import type { OAuthCredential } from "@earendil-works/pi-ai";
 
-export const ASSISTANT_PROVIDERS = ["openai", "openai-codex"] as const;
+export const ASSISTANT_PROVIDERS = ["anthropic", "openai", "openai-codex"] as const;
 export type AssistantProvider = (typeof ASSISTANT_PROVIDERS)[number];
 
 /** Safe to display; never includes the rejected value or a provider response. */
@@ -13,7 +13,7 @@ export class AuthInputError extends Error {
 
 export function assertAssistantProvider(providerId: string): asserts providerId is AssistantProvider {
   if (!(ASSISTANT_PROVIDERS as readonly string[]).includes(providerId)) {
-    throw new AuthInputError("Supported OAuth providers: openai, openai-codex");
+    throw new AuthInputError("Supported OAuth providers: anthropic, openai, openai-codex");
   }
 }
 
@@ -24,7 +24,12 @@ function text(value: unknown, limit: number): string {
   return value;
 }
 
-/** Accept only the fields used by the installed OpenAI OAuth implementations. */
+/** Claude subscription OAuth access tokens; Pi sends any other Anthropic token as a billed API key. */
+export function isClaudeSubscriptionToken(value: unknown): value is string {
+  return typeof value === "string" && value.startsWith("sk-ant-oat");
+}
+
+/** Accept only the fields used by the installed subscription OAuth implementations. */
 export function parseAssistantCredential(providerId: string, value: unknown): OAuthCredential {
   assertAssistantProvider(providerId);
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -40,7 +45,11 @@ export function parseAssistantCredential(providerId: string, value: unknown): OA
     refresh: input.refresh === "" ? "" : text(input.refresh, 65_536),
     expires: input.expires,
   };
-  if (providerId === "openai") {
+  if (providerId === "anthropic") {
+    if (!isClaudeSubscriptionToken(credential.access)) {
+      throw new AuthInputError("Anthropic requires a Claude subscription OAuth grant; API keys are not accepted");
+    }
+  } else if (providerId === "openai") {
     credential.clientId = text(input.clientId, 1_024);
     if (!Array.isArray(input.scopes) || input.scopes.length > 64 || !input.scopes.includes("chatgpt.tokens.use.direct")) {
       throw new AuthInputError("OpenAI requires a Sign in with ChatGPT grant; Codex credentials cannot be relabeled");

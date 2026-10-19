@@ -37,18 +37,50 @@ test("installed real catalogs provide the selected subscription model on both tr
   const credentials = new InMemoryCredentialStore();
   const models = createAssistantModels(credentials);
   const selected = selectAssistantModel(models);
-  assert.equal(DEFAULT_PROVIDER, "openai");
-  assert.equal(DEFAULT_MODEL, "gpt-5.6-sol");
+  assert.equal(DEFAULT_PROVIDER, "anthropic");
+  assert.equal(DEFAULT_MODEL, "claude-opus-5-5");
   assert.equal(selected.provider, DEFAULT_PROVIDER);
   assert.equal(selected.id, DEFAULT_MODEL);
-  assert.equal(selected.api, "openai-responses");
-  assert.equal(selectAssistantModel(models, "openai-codex").api, "openai-codex-responses");
-  assert.deepEqual(models.getProviders().map(provider => provider.id).sort(), ["openai", "openai-codex"]);
+  assert.equal(selected.api, "anthropic-messages");
+  assert.equal(selectAssistantModel(models, "openai", "gpt-5.6-sol").api, "openai-responses");
+  assert.equal(selectAssistantModel(models, "openai-codex", "gpt-5.6-sol").api, "openai-codex-responses");
+  assert.deepEqual(models.getProviders().map(provider => provider.id).sort(), ["anthropic", "openai", "openai-codex"]);
   assert.equal(await models.getAuth("openai"), undefined);
   await credentials.modify("openai", async () => ({ type: "api_key", key: "synthetic-paid-key" }));
   assert.equal(await models.getAuth("openai"), undefined);
   assert.throws(() => selectAssistantModel(models, "openai", "unlisted-model"), AuthInputError);
   assert.throws(() => selectAssistantModel(models, "unregistered-provider"), AuthInputError);
+});
+
+function claude(overrides: Partial<OAuthCredential> = {}): OAuthCredential {
+  return { type: "oauth", access: "sk-ant-oat01-synthetic-access", refresh: "sk-ant-ort01-synthetic-refresh", expires: Date.now() + 3_600_000, ...overrides };
+}
+
+test("Claude uses subscription OAuth only and never an ambient or stored API key", async t => {
+  const names = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_OAUTH_TOKEN"] as const;
+  const originals = names.map(name => process.env[name]);
+  for (const name of names) process.env[name] = "sk-ant-api03-synthetic-paid-key-must-never-be-used";
+  t.after(() => names.forEach((name, index) => {
+    if (originals[index] === undefined) delete process.env[name];
+    else process.env[name] = originals[index];
+  }));
+  const credentials = new InMemoryCredentialStore();
+  const models = createAssistantModels(credentials);
+  assert.equal(await models.getAuth("anthropic"), undefined);
+  await credentials.modify("anthropic", async () => ({ type: "api_key", key: "sk-ant-api03-synthetic-paid-key" }));
+  assert.equal(await models.getAuth("anthropic"), undefined);
+  await credentials.modify("anthropic", async () => claude());
+  assert.equal((await models.getAuth("anthropic"))?.auth.apiKey, "sk-ant-oat01-synthetic-access");
+  await credentials.modify("anthropic", async () => claude({ access: "sk-ant-api03-synthetic-paid-key" }));
+  await assert.rejects(models.getAuth("anthropic"));
+});
+
+test("Claude credentials must be subscription OAuth tokens and drop caller-supplied fields", () => {
+  const expected = claude();
+  assert.deepEqual(parseAssistantCredential("anthropic", { ...expected, headers: { "x-api-key": "synthetic" }, baseUrl: "https://untrusted.invalid" }), expected);
+  assert.throws(() => parseAssistantCredential("anthropic", claude({ access: "sk-ant-api03-synthetic-paid-key" })), AuthInputError);
+  assert.throws(() => parseAssistantCredential("anthropic", { type: "api_key", key: "sk-ant-api03-synthetic" }), AuthInputError);
+  assert.throws(() => parseAssistantCredential("anthropic", codex()), AuthInputError);
 });
 
 test("access-only credentials retain real expiry and resolve through the real OAuth provider", async () => {

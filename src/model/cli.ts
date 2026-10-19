@@ -9,15 +9,16 @@ import { createAssistantModels, DEFAULT_MODEL, DEFAULT_PROVIDER } from "./provid
 import { syncCredential } from "./sync.js";
 
 const USAGE = `Usage:
-  npm run auth -- login [openai|openai-codex]
+  npm run auth -- login [anthropic|openai|openai-codex]
   npm run auth -- status
-  npm run auth -- sync <https-origin-or-loopback> [openai|openai-codex]
+  npm run auth -- sync <https-origin-or-loopback> [anthropic|openai|openai-codex]
 
 State is private to Umpi under ~/.config/umpi/auth and is not imported from another application.
 Login stores credentials locally only. Sync explicitly transfers the selected
 credential to /api/auth using UMPI_CONTROL_TOKEN from the environment.
-OpenAI is Sign in with ChatGPT; openai-codex is the legacy subscription route.
-Neither uses a paid API key. No token arguments are accepted.
+Anthropic is Claude Pro/Max sign-in; OpenAI is Sign in with ChatGPT;
+openai-codex is the legacy subscription route used for voice transcription.
+None uses a paid API key. No token arguments are accepted.
 `;
 
 function terminalInteraction(signal: AbortSignal) {
@@ -145,5 +146,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       : "Authentication operation failed or was cancelled. Retry login if needed; for OpenAI browser login, local port 1455 must be free. Provider details were not logged";
     process.stderr.write(`${message}\n`);
     process.exitCode = 1;
+  }).finally(() => {
+    // A browser can keep an idle socket open to Pi's closed loopback callback server, which keeps
+    // Node alive. Login requires a TTY, so its output is already written and the credential synced.
+    if (process.argv[2] === "login") process.exit();
   });
 }

@@ -1,7 +1,7 @@
 ---
 title: Assistant core verification
 aliases: [real model smoke, coordinator restart verification, subscription transport evidence]
-updated: 2026-10-14
+updated: 2026-10-19
 ---
 
 # Assistant core verification
@@ -176,6 +176,16 @@ Before publication:
 
 The root MIT license covers project-authored work only. MPL-2.0 Public Suffix List files and the separately distributed `UNLICENSED` Obsidian Headless dependency are identified in [third-party notices](../../THIRD_PARTY_NOTICES.md).
 
+### Model provider verification
+
+On 2026-10-19, the primary model changed to `anthropic/claude-opus-5-5` through Claude subscription OAuth.
+
+- A local Pi turn used Umpi's real assistant and response-style instructions, high effort, and one tool. It made a tool call and then answered from the tool result. Both requests used bearer OAuth, not `x-api-key`.
+- Both responses carried `anthropic-ratelimit-unified-5h-*` and `-7d-*` plan quota headers, with `overage-status: rejected` and extra usage disabled. This shows plan-limit accounting on that account. It is not a billing statement.
+- The hosted deployment reported the new provider as configured only after the Durable Object code cutover. That took about 4.5 minutes for the code and 5 minutes for the variables, while Mac pollers were active. Credential sync returned HTTP 400 until the code cutover.
+- A real hosted control-channel message completed in about 6 seconds, with time and reminder tool calls. The `openai-codex` voice credential remained present.
+- Pi issue #10063 reports `Invalid effort level` for accounts with a capped effort. This account accepted high effort, so no workaround was added.
+
 ### Automated checks and limits
 
 The publication check passed `npm run typecheck`, 600 Node tests (597 passed, 3 environment-gated skips), and the complete `npm run build` Wrangler dry run with both container images. Root and vault-runtime `npm audit --audit-level=high` reported zero vulnerabilities. All 18 maintained documentation pages were reachable from `README.md` with no missing local target or heading fragment. Candidate-source privacy scanning and the public `/`, `/privacy`, and `/terms` smoke also passed.
@@ -195,3 +205,4 @@ Not established by the current evidence:
 - 2026-10-11: Established durable coordinator, Telegram, Mac execution, reviewed memory, proactive scheduling, daily-planning, and native-companion evidence.
 - 2026-10-13: Added bounded native/cloud coding, browser, subagent, and voice-note verification.
 - 2026-10-14: Verified the configured primary model and direct response-style behavior, then replaced private deployment/account/device timelines with bounded public evidence for the first open-source commit.
+- 2026-10-19: Verified the Claude subscription route locally and on the hosted coordinator.

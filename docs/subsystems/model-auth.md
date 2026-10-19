@@ -1,7 +1,7 @@
 ---
 title: Subscription-backed model authentication
-aliases: [ChatGPT OAuth, model credentials, OpenAI sign-in]
-updated: 2026-10-14
+aliases: [Claude subscription OAuth, ChatGPT OAuth, model credentials, OpenAI sign-in]
+updated: 2026-10-19
 ---
 
 # Subscription-backed model authentication
@@ -10,17 +10,19 @@ updated: 2026-10-14
 
 ### Supported providers
 
-`src/model/` uses the pinned Pi AI provider implementations. The default is `openai` with `gpt-5.6-sol`. It uses the current **Sign in with ChatGPT** flow and the direct OpenAI API route. The supported legacy alternative is `openai-codex`.
+`src/model/` uses the pinned Pi AI provider implementations. The default is `anthropic` with `claude-opus-5-5`. It uses Pi's built-in **Claude Pro/Max** OAuth flow and its direct Anthropic Messages transport. Pi sends Claude Code identity headers and system identity on this route. No Claude Code process, Agent SDK, or container is involved, so the coordinator keeps running inside the Worker. `openai` with `gpt-5.6-sol` (**Sign in with ChatGPT**) and the legacy `openai-codex` route remain supported alternatives.
 
-These credentials are not interchangeable. Direct OpenAI OAuth requires the issued client ID and `chatgpt.tokens.use.direct` scope. A token from another provider or harness must not be relabelled as a direct OpenAI credential. Canonical parsing strips caller-supplied request headers and endpoint overrides.
+These credentials are not interchangeable. An Anthropic credential must be an OAuth access token with the `sk-ant-oat` prefix. Pi treats any other Anthropic token as an API key, which bills Console API credits instead of plan limits. Umpi therefore rejects other tokens at sync time, at request authorization time, and after every refresh. Direct OpenAI OAuth requires the issued client ID and `chatgpt.tokens.use.direct` scope. A token from another provider or harness must not be relabelled as a different provider's credential. Canonical parsing strips caller-supplied request headers and endpoint overrides.
 
-API-key authentication is disabled on both registered providers. Ambient API-key variables and paid-key fallback are not used by the coordinator. Model and transcription usage limits still apply, and verification did not inspect a billing statement. Commands launched on the Mac use their own application settings; this coordinator policy does not rewrite those settings.
+API-key authentication is disabled on every registered provider. Ambient `ANTHROPIC_*` and `OPENAI_*` variables and paid-key fallback are not used by the coordinator. When the Claude plan limit is reached, requests fail visibly; they never move to API credits. Keep Claude extra usage disabled unless paid overage is deliberately wanted. Commands launched on the Mac use their own application settings; this coordinator policy does not rewrite those settings.
 
-The direct flow completed real model and tool turns both in the local Worker and on the hosted Cloudflare coordinator. The same valid legacy token worked through Pi on Node but received HTTP 403 through local workerd. The exact legacy transport-level cause was not established. See [verification evidence](../learning/assistant-core-verification.md); direct-route success is not proof that every subscription transport works from every Cloudflare egress path.
+The main conversation, proactive reviews, and inherited subagents use high effort. Coding and browser runs set medium effort themselves.
+
+The Claude route completed real model and tool turns locally and on the hosted Cloudflare coordinator. Its responses carried Claude plan quota headers rather than API billing; see [verification evidence](../learning/assistant-core-verification.md#model-provider-verification). The direct OpenAI flow was verified earlier in the same way. The same valid legacy Codex token worked through Pi on Node but received HTTP 403 through local workerd; the transport-level cause was not established. Success on one route is not proof that every subscription transport works from every Cloudflare egress path.
 
 ### Voice-note transcription
 
-Telegram transcription uses a separate Umpi `openai-codex` subscription OAuth grant at `https://api.openai.com/v1/audio/transcriptions`, with `gpt-4o-mini-transcribe`. The real hosted audio smoke accepted that grant; the separate direct reasoning grant was rejected at this route. This is observed OAuth compatibility, not a guarantee for every account, future token scope, or billing policy. The primary reasoning provider stays `openai`.
+Telegram transcription uses a separate Umpi `openai-codex` subscription OAuth grant at `https://api.openai.com/v1/audio/transcriptions`, with `gpt-4o-mini-transcribe`. The real hosted audio smoke accepted that grant; the separate direct reasoning grant was rejected at this route. This is observed OAuth compatibility, not a guarantee for every account, future token scope, or billing policy. The primary reasoning provider is configured separately, so the Claude switch keeps this grant for transcription.
 
 The coordinator resolves fresh OAuth under its credential lock and remains the sole refresh owner. No external refresh credential, API key, runner, Workers AI binding, or additional subscription is used. Input/recovery limits belong to the [Telegram contract](assistant-runtime.md#telegram); [operation](../runbooks/local-development.md#operate-telegram-voice-notes) owns independent login and handoff; [voice verification](../learning/assistant-core-verification.md#telegram-voice-note-verification) records the distinct backend-route findings.
 
@@ -52,3 +54,4 @@ The [development and operation runbook](../runbooks/local-development.md) owns l
 - 2026-10-11: Added explicit refresh-ownership handoff for hosted Durable Object operation.
 - 2026-10-13: Verified hosted subscription transcription with a separate Codex OAuth grant while preserving direct reasoning and the no-API-key policy.
 - 2026-10-14: Changed Umpi's primary model selection to `openai/gpt-5.6-sol`; voice transcription remains a separate `openai-codex` grant and model.
+- 2026-10-19: Changed Umpi's primary model selection to `anthropic/claude-opus-5-5` through Claude subscription OAuth, with `sk-ant-oat` enforcement and high main-conversation effort. Voice transcription keeps its `openai-codex` grant.

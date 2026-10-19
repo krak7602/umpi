@@ -1,7 +1,7 @@
 ---
 title: Development and operation
 aliases: [setup, startup, local assistant, executor recovery, hosted deployment, Gmail follow-through]
-updated: 2026-10-15
+updated: 2026-10-19
 ---
 
 # Development and operation
@@ -33,12 +33,12 @@ Repeat `--workspace PATH` to advertise exact individual repository directories. 
 
 ```sh
 npm run auth -- status
-npm run auth -- login openai
+npm run auth -- login anthropic
 ```
 
-Login requires a terminal and browser approval. It stores an independent umpi credential locally; it does not upload it to the coordinator. Use the emitted URL and complete the loopback callback. If a manual callback is necessary, the CLI input is hidden. Never paste a callback or credential into chat. Local port 1455 must be available for the browser flow.
+Login requires a terminal and browser approval. It stores an independent umpi credential locally; it does not upload it to the coordinator. Choose browser login, open the emitted URL, and approve with the Claude account. The loopback callback completes the login. If a manual callback is necessary, the CLI input is hidden. Never paste a callback or credential into chat. For an alternative OpenAI login, local port 1455 must be available for the browser flow.
 
-A valid coordinator-owned login does not need repeated login or sync on every startup. Read the [refresh ownership rules](../subsystems/model-auth.md#independent-storage-and-explicit-handoff) before moving or replacing an installation. `openai-codex` is a distinct legacy login, not a substitute label for `openai`.
+A valid coordinator-owned login does not need repeated login or sync on every startup. Read the [refresh ownership rules](../subsystems/model-auth.md#independent-storage-and-explicit-handoff) before moving or replacing an installation. `openai` and `openai-codex` remain alternative logins; `openai-codex` is also the separate voice-transcription grant. None is a substitute label for another provider. To select a provider other than the default, set `UMPI_MODEL_PROVIDER` and `UMPI_MODEL_ID` in private configuration before the handoff.
 
 ### Start and provision the local Worker
 
@@ -53,7 +53,7 @@ The launcher binds to loopback and stores Worker state and logs under `~/.config
 For a new coordinator, run this once in a second terminal:
 
 ```sh
-npm run auth -- sync http://127.0.0.1:8787 openai
+npm run auth -- sync http://127.0.0.1:8787 anthropic
 ```
 
 The auth script loads the control token from `.dev.vars`; token values are not command arguments. Sync replaces the selected coordinator credential. Do not resync an old local copy after the active coordinator has refreshed it.
@@ -697,15 +697,24 @@ Register the webhook at `/telegram/webhook` on the private installation's origin
 After a completed handoff, the hosted Durable Object is the sole OAuth refresh owner and retired local copies must stay retired. An empty local auth status is then expected. For a genuinely needed replacement login:
 
 ```sh
-npm run auth -- login openai
-npm run auth -- sync "$COORDINATOR_ORIGIN" openai
+npm run auth -- login anthropic
+npm run auth -- sync "$COORDINATOR_ORIGIN" anthropic
 ```
 
 Confirm the hosted upload and a real model turn before retiring the newly created local copy:
 
 ```sh
-node --import tsx --input-type=module -e 'import { FileCredentialStore } from "./src/model/file-store.ts"; await new FileCredentialStore().delete("openai");'
+node --import tsx --input-type=module -e 'import { FileCredentialStore } from "./src/model/file-store.ts"; await new FileCredentialStore().delete("anthropic");'
 ```
+
+To switch an active installation to another provider, keep the bot usable during the change:
+
+1. Deploy the code that accepts the new provider while private configuration still selects the old one.
+2. Complete the new independent login and sync it. If sync returns HTTP 400, the Durable Object can still be running earlier code; a rejected sync stores nothing, so retry after the cutover.
+3. Change `UMPI_MODEL_PROVIDER` and `UMPI_MODEL_ID` in `wrangler.local.jsonc` (and `.dev.vars` for local use), then deploy again.
+4. Wait until protected status reports the new provider, send a real control or Telegram message, and then retire the local copy.
+
+Existing main conversations take the configured model and effort when the coordinator starts.
 
 Never resync a stale copy over a coordinator that may have refreshed it. Do not reactivate a stopped local Worker with cloned credentials. [Model authentication](../subsystems/model-auth.md#independent-storage-and-explicit-handoff) owns the handoff and trust rules.
 
@@ -733,3 +742,4 @@ Publish reviewed Git content, not an archive of the working directory: ignored l
 - 2026-10-14: Replaced private installation chronology and resource names with reusable setup, verification, and placeholder guidance.
 - 2026-10-15: Added separate read-only Gmail authorization, lossless bounded continuation, aggregate digest behavior, operational controls, revocation, and verification guidance.
 - 2026-10-15: Added live verification guidance for channel-specific conversational Markdown rendering through Telegram-native entities.
+- 2026-10-19: Made Claude subscription login the default and recorded the zero-downtime provider switch.

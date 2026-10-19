@@ -4,8 +4,8 @@ UMPI_CONTROL_TOKEN=""
 UMPI_EXECUTOR_TOKEN=""
 
 UMPI_TIMEZONE="UTC"
-UMPI_MODEL_PROVIDER="openai"
-UMPI_MODEL_ID="gpt-5.6-sol"
+UMPI_MODEL_PROVIDER="anthropic"
+UMPI_MODEL_ID="claude-opus-5-5"
 
 # Dedicated Telegram bot; leave unset until you provision it.
 TELEGRAM_BOT_TOKEN=""

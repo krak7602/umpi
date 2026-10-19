@@ -38,7 +38,7 @@ The Worker exposes public informational pages at `/`, `/privacy`, and `/terms`. 
 ## Requirements
 
 - Node.js 24 or later.
-- A ChatGPT account that can complete the configured OAuth flow.
+- A Claude Pro or Max subscription for the default model login. A ChatGPT account is needed for Telegram voice-note transcription, or as an alternative model provider.
 - Docker for container builds and the full build dry run.
 - macOS for the native executor and Aside integration.
 - A Cloudflare Workers Paid account for a hosted installation that uses Durable Objects, Containers, R2, or Browser Run.
@@ -59,14 +59,14 @@ npm run setup -- local --workspace "$PWD"
 Complete the independent model login:
 
 ```sh
-npm run auth -- login openai
+npm run auth -- login anthropic
 ```
 
 Start the local coordinator, hand off the credential once, and then start the Mac executor:
 
 ```sh
 npm run dev
-npm run auth -- sync http://127.0.0.1:8787 openai
+npm run auth -- sync http://127.0.0.1:8787 anthropic
 npm run mac -- run
 ```
 
