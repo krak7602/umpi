@@ -227,7 +227,8 @@ export async function authorize(request: Request, env: TelegramConfig & { UMPI_C
   const mail = (request.method === "GET" && (path === "/api/mail" || path === "/api/mail/items"))
     || (request.method === "PUT" && path === "/api/mail/settings")
     || (request.method === "POST" && (path === "/api/mail/check" || /^\/api\/mail\/items\/mail-[a-f0-9]{32}\/(?:handled|snooze)$/.test(path)));
-  const brief = (request.method === "GET" && (path === "/api/brief" || path === "/api/situation"))
+  const brief = (request.method === "GET" && (path === "/api/brief" || path === "/api/situation" || path === "/api/alerts"))
+    || (request.method === "PUT" && path === "/api/alerts/settings")
     || (request.method === "PUT" && path === "/api/brief/settings")
     || (request.method === "POST" && path === "/api/brief/run");
   const coding = (request.method === "GET" && (/^\/api\/coding(?:\/(?:sources|tasks))?$/.test(path) || /^\/api\/coding\/tasks\/[A-Za-z0-9_.:-]+(?:\/(?:patch|checkpoint))?$/.test(path)))

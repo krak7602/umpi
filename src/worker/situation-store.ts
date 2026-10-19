@@ -246,6 +246,12 @@ export class SituationStore {
     return { now: iso(now), timezone: this.timezone, facts, omitted: candidates.length - facts.length, ...(kinds.includes("spend") || !options.kinds?.length ? { spending: this.spending(now) } : {}) };
   }
 
+  /** Raw active facts for code-owned checks such as due-soon nudges. */
+  active(kinds: readonly SituationKind[], now = Date.now()): SituationFact[] {
+    if (!kinds.length) return [];
+    return this.rows(`SELECT data FROM umpi_situation_facts WHERE relevant_until >= ? AND kind IN (${kinds.map(() => "?").join(",")}) ORDER BY observed DESC LIMIT 500`, now, ...kinds);
+  }
+
   /** Facts updated since an instant, for "what changed" summaries. */
   changedIds(since: string, limit = 200): string[] {
     return this.rows("SELECT data FROM umpi_situation_facts WHERE json_extract(data,'$.updatedAt') >= ? ORDER BY observed DESC LIMIT ?", since, limit).map(fact => fact.id);

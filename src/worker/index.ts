@@ -41,6 +41,7 @@ import { situationTools, SITUATION_INSTRUCTIONS } from "./situation-tools.js";
 import { BriefStore } from "./brief-store.js";
 import { briefTools, guardBriefReviewTools, BRIEF_INSTRUCTIONS } from "./brief-tools.js";
 import { briefRequest, enqueueBriefControls, formatBriefStatus, handleBriefCallback } from "./brief-telegram.js";
+import { AlertRuntime, AlertStore, alertRequest } from "./alerts.js";
 import { VaultSync } from "./vault-sync.js";
 import { publicPage } from "./public-pages.js";
 import { CodingStore } from "./coding-store.js";
@@ -121,6 +122,7 @@ class Coordinator extends LifecycleCapability {
       await this.assistant.mailRuntime.drive();
       this.assistant.situation.purge();
       this.assistant.brief.drive();
+      await this.assistant.alerts.drive();
       await this.assistant.driveProactive();
       this.assistant.planning.reconcile();
       await this.assistant.subagents.drive();
@@ -190,7 +192,7 @@ class Coordinator extends LifecycleCapability {
       // Missing credentials do not justify a two-second polling loop; auth updates wake the queue.
       const pending = store.pendingOperations().some(op => op.status === "submitted");
       const outbox = store.readyDeliveries().length > 0;
-      const wakeAt = Math.min(due ?? Infinity, proactive.nextDue(Date.now(), store.hasForegroundInput()) ?? Infinity, this.assistant.planning.nextDue() ?? Infinity, this.assistant.brief.nextDue() ?? Infinity, this.assistant.mailRuntime.nextDue() ?? Infinity, this.assistant.codingRuntime.nextDue() ?? Infinity, this.assistant.browserRuntime.nextDue() ?? Infinity, await this.assistant.subagents.nextDue() ?? Infinity, this.assistant.telegramInbox.nextDue() ?? Infinity, pending ? Date.now() + 2_000 : Infinity, outbox || this.assistant.companion.nextPush() ? Date.now() + 100 : Infinity);
+      const wakeAt = Math.min(due ?? Infinity, proactive.nextDue(Date.now(), store.hasForegroundInput()) ?? Infinity, this.assistant.planning.nextDue() ?? Infinity, this.assistant.brief.nextDue() ?? Infinity, this.assistant.alerts.nextDue() ?? Infinity, this.assistant.mailRuntime.nextDue() ?? Infinity, this.assistant.codingRuntime.nextDue() ?? Infinity, this.assistant.browserRuntime.nextDue() ?? Infinity, await this.assistant.subagents.nextDue() ?? Infinity, this.assistant.telegramInbox.nextDue() ?? Infinity, pending ? Date.now() + 2_000 : Infinity, outbox || this.assistant.companion.nextPush() ? Date.now() + 100 : Infinity);
       if (Number.isFinite(wakeAt)) return { rescheduleAt: wakeAt };
     } catch {
       this.assistant.modelIssue = "Coordinator reconciliation failed; work is retained and retry is scheduled. Check configuration and protected status.";
@@ -210,6 +212,7 @@ export class Assistant extends Agent<Env> {
   readonly mailRuntime: MailRuntime;
   readonly situation: SituationStore;
   readonly brief: BriefStore;
+  readonly alerts: AlertRuntime;
   readonly coding: CodingStore;
   readonly codingRuntime: CodingRuntime;
   readonly browser: BrowserStore;
@@ -245,6 +248,8 @@ export class Assistant extends Agent<Env> {
     this.situation = new SituationStore(this.store.db, this.timezone);
     this.mail = new MailStore(this.proactive, this.situation);
     this.brief = new BriefStore(this.proactive);
+    this.alerts = new AlertRuntime(new AlertStore(this.store.db), this.situation, this.proactive, () => this.config.UMPI_CALENDAR_CREDENTIALS,
+      id => this.mail.ownsCommitment(id) || this.brief.ownsCommitment(id) || this.planning.ownsCommitment(id));
     this.coding = new CodingStore(this.store);
     this.browser = new BrowserStore(this.store);
     const models = createAssistantModels(this.credentials);
@@ -496,6 +501,7 @@ export class Assistant extends Agent<Env> {
       mail: this.mailRuntime.status(),
       situation: this.situation.status(),
       brief: this.brief.status(),
+      alerts: this.alerts.status(),
       coding: this.codingRuntime.status(),
       browser: this.browserRuntime.status(),
       subagents: await this.subagents.status(),
@@ -553,6 +559,8 @@ export class Assistant extends Agent<Env> {
       if (mail) { mail.headers.set("cache-control", "no-store"); return mail; }
       const brief = await briefRequest(request, this.brief, this.situation, () => this.store.session("telegram"), () => this.coordinator.wake());
       if (brief) { brief.headers.set("cache-control", "no-store"); return brief; }
+      const alerts = await alertRequest(request, this.alerts, () => this.coordinator.wake());
+      if (alerts) { alerts.headers.set("cache-control", "no-store"); return alerts; }
       const schedule = await scheduleRequest(request, this.proactive, () => this.coordinator.wake(), () => this.session("control"), id => this.planning.ownsCommitment(id) || this.mail.ownsCommitment(id) || this.brief.ownsCommitment(id));
       if (schedule) return schedule;
       if (path === "/api/status" && request.method === "GET") return Response.json(await this.status());
