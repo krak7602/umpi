@@ -129,9 +129,9 @@ async function client(credentials: GmailCredentials, fetcher: typeof fetch, sign
   if (!tokenResponse.ok) throw new Error("Gmail authorization could not be refreshed");
   const token = object(await boundedJson(tokenResponse, 65_536));
   if (!secret(token.access_token)) throw new Error("Gmail authorization could not be refreshed");
-  // Gmail's strictest read in this flow costs 10 quota units. Start at most 20
-  // provider reads per second so concurrent hydration remains below 15,000 units/minute.
-  const requestInterval = fetcher === globalThis.fetch ? 50 : 0;
+  // Gmail allows 250 quota units per user per second as a moving average, and a thread read costs 10.
+  // Ten reads per second leaves headroom for consecutive pages.
+  const requestInterval = fetcher === globalThis.fetch ? 100 : 0;
   let nextRequestAt = 0, gate = Promise.resolve();
   async function waitForQuota(): Promise<void> {
     if (!requestInterval) return;
@@ -286,7 +286,7 @@ async function candidateMessageIds(api: GmailClient, request: GmailSyncRequest):
     let startHistoryId = saved?.startHistoryId;
     if (!startHistoryId) {
       const profile = await api.get("/profile", undefined, 65_536);
-      if (!profile.response.ok) throw new Error("Gmail profile is unavailable");
+      if (!profile.response.ok) throw new Error(`Gmail profile is unavailable (HTTP ${profile.response.status})`);
       startHistoryId = historyId(object(profile.value).historyId);
     }
     // Gmail's date query uses a provider timezone. Query one earlier date, then enforce the exact ISO boundary locally.
@@ -294,7 +294,7 @@ async function candidateMessageIds(api: GmailClient, request: GmailSyncRequest):
       q: `after:${new Date(cutoff - 86_400_000).toISOString().slice(0, 10).replace(/-/g, "/")}` });
     if (saved?.pageToken) query.set("pageToken", saved.pageToken);
     const response = await api.get("/messages", query, 262_144);
-    if (!response.response.ok) throw new Error("Gmail bootstrap is unavailable");
+    if (!response.response.ok) throw new Error(`Gmail bootstrap is unavailable (HTTP ${response.response.status})`);
     const data = object(response.value);
     if (data.messages !== undefined && !Array.isArray(data.messages)) throw new Error("Invalid Gmail message list");
     const ids = (data.messages as unknown[] | undefined ?? []).map(value => providerId(object(value).id));
@@ -306,7 +306,7 @@ async function candidateMessageIds(api: GmailClient, request: GmailSyncRequest):
   if (saved?.pageToken) query.set("pageToken", saved.pageToken);
   const response = await api.get("/history", query, 524_288);
   if (response.response.status === 404) return { ids: [], historyId: null, continuation: null, expired: true };
-  if (!response.response.ok) throw new Error("Gmail history is unavailable");
+  if (!response.response.ok) throw new Error(`Gmail history is unavailable (HTTP ${response.response.status})`);
   const data = object(response.value);
   if (data.history !== undefined && !Array.isArray(data.history)) throw new Error("Invalid Gmail history");
   const ids: string[] = [];

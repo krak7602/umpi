@@ -219,11 +219,11 @@ test("resumable scan waits for completion and multi-batch triage emits one aggre
     continuation, threads: threads.slice(0, MAIL_SYNC_MESSAGE_BATCH_LIMIT), discovered: MAIL_SYNC_MESSAGE_BATCH_LIMIT,
     issues: ["Gmail scan has more bounded batches; durable progress will continue."] }, NOW);
   assert.equal(f.mail.account("primary")?.continuation?.pageToken, "next-page"); assert.equal(f.mail.account("primary")?.historyId, null);
-  assert.equal(f.mail.account("primary")?.nextSyncAt, NOW + 5_000);
+  assert.equal(f.mail.account("primary")?.nextSyncAt, NOW + 20_000);
   f.mail.applySync("primary", settingsVersion, { status: "unavailable", checkedAt: new Date(NOW + 500).toISOString(), historyId: null,
     continuation: null, threads: [], discovered: 0, issues: ["Gmail is temporarily unavailable."] }, NOW + 500);
   assert.equal(f.mail.account("primary")?.continuation?.pageToken, "next-page");
-  assert.equal(f.mail.account("primary")?.nextSyncAt, NOW + 500 + 5 * 60_000);
+  assert.equal(f.mail.account("primary")?.nextSyncAt, NOW + 500 + 60_000);
   f.proactive.drive(NOW, false, { telegram: "mail-review" });
   assert.equal(f.proactive.runForSession("mail-review"), undefined, "partial provider coverage must not start triage");
 

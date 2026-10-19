@@ -17,9 +17,10 @@ export const MAIL_REVIEW_BUDGET_BYTES = 36_000;
 const MAIL_REVIEW_MAX_ITEMS = 40;
 const MAIL_FACTS_PER_REVIEW = 150;
 const MAIL_FACTS_PER_THREAD = 10;
-const MAIL_CONTINUATION_RETRY_MS = 5 * 60_000;
-// About 1,000 Gmail quota units per page; a few seconds apart stays far below the 15,000 units/minute per-user limit.
-const MAIL_CONTINUATION_PAGE_DELAY_MS = 5_000;
+/** A saved scan usually stops on a short provider rate limit, so resume soon. */
+const MAIL_CONTINUATION_RETRY_MS = 60_000;
+// About 1,000 Gmail quota units per page. Spacing pages keeps the per-user moving average far below 250 units/second.
+const MAIL_CONTINUATION_PAGE_DELAY_MS = 20_000;
 
 export interface MailSettings { version: number; enabled: boolean; lookbackDays: number; pollMinutes: number }
 export interface MailThread {
