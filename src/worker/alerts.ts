@@ -99,6 +99,7 @@ export class AlertRuntime {
     private readonly proactive: ProactiveStore,
     private readonly calendarCredentials: () => string | undefined,
     private readonly ownedCommitment: (id: string) => boolean,
+    private readonly onCalendar?: (events: { id?: string; title: string; start: string; end: string; tentative?: boolean }[], now: number) => void,
   ) {}
   private get timezone(): string { return this.proactive.timezone; }
   private clock(instant: number): string {
@@ -154,12 +155,13 @@ export class AlertRuntime {
       const meta = this.store.meta();
       if (meta.lastCalendarPoll === null || now - meta.lastCalendarPoll >= CALENDAR_POLL_MS) {
         const range = await readCalendarRange(this.calendarCredentials(), planningDay(now, this.timezone), 2, this.timezone) as
-          { days: { coverage: string; issues?: string[]; events: { title: string; start: string; end: string; allDay?: boolean; tentative?: boolean }[] }[] };
+          { days: { coverage: string; issues?: string[]; events: { id?: string; title: string; start: string; end: string; allDay?: boolean; tentative?: boolean }[] }[] };
         const events = range.days.flatMap(day => day.events.filter(event => !event.allDay)
           .map(event => ({ key: `${event.start}|${event.title}`.slice(0, 300), title: event.title, start: event.start, end: event.end, tentative: event.tentative === true })));
         const issue = range.days.flatMap(day => day.issues ?? [])[0] ?? null;
         // A failed read keeps the previous cache instead of looking like an empty calendar.
         if (!issue || events.length) this.store.replaceEvents(events, now);
+        if (!issue) this.onCalendar?.(range.days.flatMap(day => day.events.filter(event => !event.allDay)), now);
         this.store.writeMeta({ lastCalendarPoll: now, calendarIssue: issue });
       }
       for (const event of this.store.events(now)) {

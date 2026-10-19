@@ -405,6 +405,12 @@ PUT /api/alerts/settings
 
 Heads-ups and nudges are plain Telegram messages; correct a wrong fact in chat (for example "that bill is paid") to stop its nudge.
 
+### Operate journal writes
+
+Close-out, intra-day additions, and check-ins run when follow-through is enabled and the private note workspace is connected. Inspect `GET /api/journal` for queued, written, and failed lines and the last issue. Change them with the current `expectedVersion`, for example `{"expectedVersion": 1, "checkIns": ["13:00", "18:00"], "closeOut": true, "intraDay": true}` to `PUT /api/journal/settings`.
+
+The workspace depends on an active Obsidian Sync subscription. A lapsed subscription makes every preparation and journal write report "private note workspace is unavailable"; restore billing and then request preparation again.
+
 ### Operate daily-note preparation
 
 The [runtime contract](../subsystems/assistant-runtime.md#daily-note-preparation) owns behavior and concurrency limits. New installations start paused and require explicit resource, credential-transfer, deployment, and activation authorization. Use bounded manual and automatic checks for fresh vault/calendar input, acknowledged upload, exact read-back, container inactivity, stale-edit rejection, and interruption recovery before enabling a real schedule.
@@ -769,3 +775,4 @@ Publish reviewed Git content, not an archive of the working directory: ignored l
 - 2026-10-19: Made Claude subscription login the default and recorded the zero-downtime provider switch.
 - 2026-10-19: Added multi-mailbox login and secret upload, the 30-day situation backfill, and morning brief operation.
 - 2026-10-19: Added default-check operation.
+- 2026-10-19: Added journal-write operation and the Obsidian Sync billing failure mode.
