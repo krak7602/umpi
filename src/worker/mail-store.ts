@@ -16,6 +16,8 @@ export const MAIL_FACT_SCAN_VERSION = 1;
 export const MAIL_REVIEW_BUDGET_BYTES = 36_000;
 const MAIL_REVIEW_MAX_ITEMS = 40;
 const MAIL_FACTS_PER_REVIEW = 150;
+/** Every thread that needs the owner is recorded; the digest lists the newest of them and points to /mail for the rest. */
+const MAIL_DIGEST_LISTED = 15;
 const MAIL_FACTS_PER_THREAD = 10;
 /** A saved scan usually stops on a short provider rate limit, so resume soon. */
 const MAIL_CONTINUATION_RETRY_MS = 60_000;
@@ -451,7 +453,6 @@ export class MailStore {
           reason: notify ? text(body.reason, 500, "mail reason") : optional(body.reason, "mail reason"),
           suggestedAction: notify ? text(body.suggestedAction, 500, "suggested mail action") : optional(body.suggestedAction, "suggested mail action") });
       }
-      if ([...byId.values()].filter(value => value.outcome === "notify").length > 10) throw new InputError("One mail review can notify about at most 10 threads");
       const threads = new Map<string, MailThread>();
       for (const item of review.items) {
         const decision = byId.get(item.id)!; expected(item.version, decision.expectedVersion);
@@ -504,15 +505,15 @@ export class MailStore {
   }
   private pendingNotification(): { count: number; threads: MailThread[] } {
     const count = this.db.all<{ count: number }>("SELECT count(*) AS count FROM umpi_mail_threads WHERE status='attention' AND json_extract(data,'$.notificationPending')=1")[0]?.count ?? 0;
-    const threads = this.rows<MailThread>("SELECT data FROM umpi_mail_threads WHERE status='attention' AND json_extract(data,'$.notificationPending')=1 ORDER BY received DESC LIMIT 10");
+    const threads = this.rows<MailThread>("SELECT data FROM umpi_mail_threads WHERE status='attention' AND json_extract(data,'$.notificationPending')=1 ORDER BY received DESC LIMIT ?", MAIL_DIGEST_LISTED);
     return { count, threads };
   }
   private digest(threads: MailThread[], total = threads.length): string {
     const clock = new Intl.DateTimeFormat("en-US", { timeZone: this.proactive.timezone, month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
     const lines = threads.map((thread, index) => `${index + 1}. ${thread.subject}\n${senderName(thread.sender)} • ${clock.format(new Date(thread.receivedAt))}${thread.account && thread.account !== MAIL_PRIMARY_ACCOUNT ? ` • ${thread.account} inbox` : ""}\n${thread.suggestedAction}`);
     const count = `${total} email${total === 1 ? "" : "s"} may need you`;
-    const shown = total > threads.length ? `\nShowing the newest ${threads.length}.` : "";
-    return `${count}${shown}\n\n${lines.join("\n\n")}\n\nOpen /mail for details and actions.`.slice(0, 4_000);
+    const more = total > threads.length ? `\n\n${total - threads.length} more in /mail.` : "";
+    return `${count}\n\n${lines.join("\n\n")}${more}\n\nOpen /mail for details and actions.`.slice(0, 4_000);
   }
   finishInput(sessionId: string, original: unknown, now = Date.now()): Record<string, unknown> {
     const { run } = this.forSession(sessionId, now), review = this.rows<MailReview>("SELECT data FROM umpi_mail_reviews WHERE run_id=?", run.id)[0];

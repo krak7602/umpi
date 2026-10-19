@@ -54,7 +54,7 @@ export async function briefInputs(sources: BriefSources, sessionId: string, now 
     plan: plan.plan ? { status: plan.plan.status, entries: plan.plan.entries.slice(0, 40).map(entry => `${entry.section}: ${entry.line}`) } : null,
     ownerIntentForToday: plan.brief?.text.slice(0, 1_500) ?? null,
     reminders,
-    mailNeedingOwner: sources.mail.attention(10).map(({ subject, sender, receivedAt, suggestedAction, status }) => ({ subject, sender, receivedAt, suggestedAction, status })),
+    mailNeedingOwner: sources.mail.attention(20).map(({ subject, sender, receivedAt, suggestedAction, status }) => ({ subject, sender, receivedAt, suggestedAction, status })),
     changedSinceLastBrief: sources.situation.changedIds(since, 100),
     situation: sources.situation.read({ budgetBytes: 20_000 }, now),
   };
