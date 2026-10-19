@@ -252,6 +252,19 @@ export class SituationStore {
     return this.rows(`SELECT data FROM umpi_situation_facts WHERE relevant_until >= ? AND kind IN (${kinds.map(() => "?").join(",")}) ORDER BY observed DESC LIMIT 500`, now, ...kinds);
   }
 
+  /** Facts with a state transition inside [start, end), for the daily close-out. */
+  changedBetween(start: number, end: number): { fact: SituationFact; state: string; at: string }[] {
+    const result: { fact: SituationFact; state: string; at: string }[] = [];
+    for (const fact of this.rows("SELECT data FROM umpi_situation_facts WHERE observed >= ? ORDER BY observed LIMIT 1000", start - 60 * DAY)) {
+      if (fact.owner?.dismissed) continue;
+      for (const entry of fact.history) {
+        const at = Date.parse(entry.at);
+        if (at >= start && at < end) result.push({ fact, state: entry.state, at: entry.at });
+      }
+    }
+    return result.sort((a, b) => a.at.localeCompare(b.at));
+  }
+
   /** Facts updated since an instant, for "what changed" summaries. */
   changedIds(since: string, limit = 200): string[] {
     return this.rows("SELECT data FROM umpi_situation_facts WHERE json_extract(data,'$.updatedAt') >= ? ORDER BY observed DESC LIMIT ?", since, limit).map(fact => fact.id);

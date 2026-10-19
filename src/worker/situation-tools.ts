@@ -30,7 +30,7 @@ export async function readCalendarRange(credentials: string | undefined, start: 
   for (let offset = 0; offset < days; offset++) {
     const day = shiftPlanningDay(start, offset), snapshot = await readCalendarDay(credentials, day, timezone);
     result.push({ day, coverage: snapshot.coverage, ...(snapshot.issues.length ? { issues: snapshot.issues } : {}),
-      events: snapshot.events.map(({ title, start: from, end, allDay, status }) => ({ title, start: from, end, ...(allDay ? { allDay } : {}), ...(status === "tentative" ? { tentative: true } : {}) })) });
+      events: snapshot.events.map(({ id, title, start: from, end, allDay, status }) => ({ id, title, start: from, end, ...(allDay ? { allDay } : {}), ...(status === "tentative" ? { tentative: true } : {}) })) });
     if (snapshot.coverage === "unavailable" && offset === 0 && snapshot.issues.some(issue => /authorization/i.test(issue))) break;
   }
   return { timezone, days: result };

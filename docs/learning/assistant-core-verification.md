@@ -202,6 +202,10 @@ An offline comparison on 40 recent non-promotional emails measured characters se
 
 Unit tests cover fact merging and expiry, owner corrections, rejected facts, facts-only backfill without notification, bulk-tab skipping, multiple mailboxes, timezone-correct spending windows, the brief schedule, and route authorization. Hosted extraction quality and brief delivery were not yet verified at the time of this entry.
 
+### Daily-note workspace failure
+
+On 2026-10-19 the 02:30 preparation and a manual retry both reported the private note workspace as unavailable. The situation record held an Obsidian Sync renewal failure from 2026-10-18. After the owner restored billing, a manual preparation synced the same evening. The failure mode is an external subscription, not a code defect.
+
 ### Automated checks and limits
 
 The publication check passed `npm run typecheck`, 600 Node tests (597 passed, 3 environment-gated skips), and the complete `npm run build` Wrangler dry run with both container images. Root and vault-runtime `npm audit --audit-level=high` reported zero vulnerabilities. All 18 maintained documentation pages were reachable from `README.md` with no missing local target or heading fragment. Candidate-source privacy scanning and the public `/`, `/privacy`, and `/terms` smoke also passed.
@@ -223,3 +227,4 @@ Not established by the current evidence:
 - 2026-10-14: Verified the configured primary model and direct response-style behavior, then replaced private deployment/account/device timelines with bounded public evidence for the first open-source commit.
 - 2026-10-19: Verified the Claude subscription route locally and on the hosted coordinator.
 - 2026-10-19: Diagnosed the stalled mail reviews, measured email cleaning, and added situation and brief test coverage.
+- 2026-10-19: Traced daily-note failures to a lapsed Obsidian Sync subscription.

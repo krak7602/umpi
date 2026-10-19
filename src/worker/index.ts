@@ -42,6 +42,7 @@ import { BriefStore } from "./brief-store.js";
 import { briefTools, guardBriefReviewTools, BRIEF_INSTRUCTIONS } from "./brief-tools.js";
 import { briefRequest, enqueueBriefControls, formatBriefStatus, handleBriefCallback } from "./brief-telegram.js";
 import { AlertRuntime, AlertStore, alertRequest } from "./alerts.js";
+import { JournalRuntime, JournalStore, journalRequest, journalTools, JOURNAL_INSTRUCTIONS } from "./journal.js";
 import { VaultSync } from "./vault-sync.js";
 import { publicPage } from "./public-pages.js";
 import { CodingStore } from "./coding-store.js";
@@ -123,6 +124,7 @@ class Coordinator extends LifecycleCapability {
       this.assistant.situation.purge();
       this.assistant.brief.drive();
       await this.assistant.alerts.drive();
+      this.assistant.journal.drive();
       await this.assistant.driveProactive();
       this.assistant.planning.reconcile();
       await this.assistant.subagents.drive();
@@ -192,7 +194,7 @@ class Coordinator extends LifecycleCapability {
       // Missing credentials do not justify a two-second polling loop; auth updates wake the queue.
       const pending = store.pendingOperations().some(op => op.status === "submitted");
       const outbox = store.readyDeliveries().length > 0;
-      const wakeAt = Math.min(due ?? Infinity, proactive.nextDue(Date.now(), store.hasForegroundInput()) ?? Infinity, this.assistant.planning.nextDue() ?? Infinity, this.assistant.brief.nextDue() ?? Infinity, this.assistant.alerts.nextDue() ?? Infinity, this.assistant.mailRuntime.nextDue() ?? Infinity, this.assistant.codingRuntime.nextDue() ?? Infinity, this.assistant.browserRuntime.nextDue() ?? Infinity, await this.assistant.subagents.nextDue() ?? Infinity, this.assistant.telegramInbox.nextDue() ?? Infinity, pending ? Date.now() + 2_000 : Infinity, outbox || this.assistant.companion.nextPush() ? Date.now() + 100 : Infinity);
+      const wakeAt = Math.min(due ?? Infinity, proactive.nextDue(Date.now(), store.hasForegroundInput()) ?? Infinity, this.assistant.planning.nextDue() ?? Infinity, this.assistant.brief.nextDue() ?? Infinity, this.assistant.alerts.nextDue() ?? Infinity, this.assistant.journal.nextDue() ?? Infinity, this.assistant.mailRuntime.nextDue() ?? Infinity, this.assistant.codingRuntime.nextDue() ?? Infinity, this.assistant.browserRuntime.nextDue() ?? Infinity, await this.assistant.subagents.nextDue() ?? Infinity, this.assistant.telegramInbox.nextDue() ?? Infinity, pending ? Date.now() + 2_000 : Infinity, outbox || this.assistant.companion.nextPush() ? Date.now() + 100 : Infinity);
       if (Number.isFinite(wakeAt)) return { rescheduleAt: wakeAt };
     } catch {
       this.assistant.modelIssue = "Coordinator reconciliation failed; work is retained and retry is scheduled. Check configuration and protected status.";
@@ -213,6 +215,7 @@ export class Assistant extends Agent<Env> {
   readonly situation: SituationStore;
   readonly brief: BriefStore;
   readonly alerts: AlertRuntime;
+  readonly journal: JournalRuntime;
   readonly coding: CodingStore;
   readonly codingRuntime: CodingRuntime;
   readonly browser: BrowserStore;
@@ -248,8 +251,14 @@ export class Assistant extends Agent<Env> {
     this.situation = new SituationStore(this.store.db, this.timezone);
     this.mail = new MailStore(this.proactive, this.situation);
     this.brief = new BriefStore(this.proactive);
+    const systemOwned = (id: string) => this.mail.ownsCommitment(id) || this.brief.ownsCommitment(id) || this.planning.ownsCommitment(id);
+    this.journal = new JournalRuntime(new JournalStore(this.store.db), this.proactive, {
+      vault: () => this.vaultClient(), planning: this.planning, situation: this.situation, mail: this.mail,
+      calendarCredentials: () => this.config.UMPI_CALENDAR_CREDENTIALS, ownedCommitment: systemOwned,
+      track: work => this.lifecycle.trackAlarmWork(work), wake: () => this.coordinator.wake(),
+    });
     this.alerts = new AlertRuntime(new AlertStore(this.store.db), this.situation, this.proactive, () => this.config.UMPI_CALENDAR_CREDENTIALS,
-      id => this.mail.ownsCommitment(id) || this.brief.ownsCommitment(id) || this.planning.ownsCommitment(id));
+      systemOwned, (events, now) => this.journal.calendarEvents(events, now));
     this.coding = new CodingStore(this.store);
     this.browser = new BrowserStore(this.store);
     const models = createAssistantModels(this.credentials);
@@ -304,11 +313,11 @@ export class Assistant extends Agent<Env> {
       track: work => this.lifecycle.trackAlarmWork(work),
     });
     const browserProfile = browserExtension(this.browserRuntime);
-    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...delegation.tools ?? []];
+    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...journalTools(this.journal, id => this.store.isBackgroundSession(id)), ...delegation.tools ?? []];
     const guardedProactiveTools = guardBriefReviewTools(guardMailReviewTools(guardPlanningReviewTools(proactiveTools(this.proactive, () => this.coordinator.wake()), this.planningRuntime), this.mailRuntime), this.brief);
     const briefSources = { brief: this.brief, situation: this.situation, mail: this.mail, planning: this.planningRuntime, calendarCredentials: () => this.config.UMPI_CALENDAR_CREDENTIALS };
     const umpiExtension: Extension = { name: "umpi", tools: [...guardBackgroundTools(foregroundTools, this.proactive), ...guardedProactiveTools, ...planningTools(this.planningRuntime), ...mailTools(this.mailRuntime), ...briefTools(briefSources)],
-      sections: [{ key: "umpi", tag: false, render: () => `${ASSISTANT_INSTRUCTIONS}\n${COMPANION_INSTRUCTIONS}\n${PROACTIVE_INSTRUCTIONS}\n${PLANNING_INSTRUCTIONS}\n${MAIL_INSTRUCTIONS}\n${SITUATION_INSTRUCTIONS}\n${BRIEF_INSTRUCTIONS}\n${CODING_OWNER_INSTRUCTIONS}\n${BROWSER_OWNER_INSTRUCTIONS}\n${SUBAGENT_INSTRUCTIONS}\nOwner timezone: ${this.timezone}.` }, coreContextSection, { key: "response-style", tag: false, render: () => RESPONSE_STYLE_INSTRUCTIONS }] };
+      sections: [{ key: "umpi", tag: false, render: () => `${ASSISTANT_INSTRUCTIONS}\n${COMPANION_INSTRUCTIONS}\n${PROACTIVE_INSTRUCTIONS}\n${PLANNING_INSTRUCTIONS}\n${MAIL_INSTRUCTIONS}\n${SITUATION_INSTRUCTIONS}\n${JOURNAL_INSTRUCTIONS}\n${BRIEF_INSTRUCTIONS}\n${CODING_OWNER_INSTRUCTIONS}\n${BROWSER_OWNER_INSTRUCTIONS}\n${SUBAGENT_INSTRUCTIONS}\nOwner timezone: ${this.timezone}.` }, coreContextSection, { key: "response-style", tag: false, render: () => RESPONSE_STYLE_INSTRUCTIONS }] };
     registry.install(umpiExtension); registry.install(codingProfile); registry.install(browserProfile);
     registry.install(delegation); registry.install(assistantChild); registry.install(codingChild);
     this.harness = new PiHarness({
@@ -502,6 +511,7 @@ export class Assistant extends Agent<Env> {
       situation: this.situation.status(),
       brief: this.brief.status(),
       alerts: this.alerts.status(),
+      journal: this.journal.status(),
       coding: this.codingRuntime.status(),
       browser: this.browserRuntime.status(),
       subagents: await this.subagents.status(),
@@ -561,6 +571,8 @@ export class Assistant extends Agent<Env> {
       if (brief) { brief.headers.set("cache-control", "no-store"); return brief; }
       const alerts = await alertRequest(request, this.alerts, () => this.coordinator.wake());
       if (alerts) { alerts.headers.set("cache-control", "no-store"); return alerts; }
+      const journal = await journalRequest(request, this.journal, () => this.coordinator.wake());
+      if (journal) { journal.headers.set("cache-control", "no-store"); return journal; }
       const schedule = await scheduleRequest(request, this.proactive, () => this.coordinator.wake(), () => this.session("control"), id => this.planning.ownsCommitment(id) || this.mail.ownsCommitment(id) || this.brief.ownsCommitment(id));
       if (schedule) return schedule;
       if (path === "/api/status" && request.method === "GET") return Response.json(await this.status());

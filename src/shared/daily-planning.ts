@@ -1,7 +1,9 @@
 import { Temporal } from "@js-temporal/polyfill";
 import { scanMarkdown, type MarkdownHeading, type MarkdownLine } from "./markdown.ts";
 
-export type PlanSection = "schedule" | "tasks" | "links";
+export type PlanSection = "schedule" | "tasks" | "links" | "done" | "notes";
+/** Sections the planner model may target. "done" and "notes" are owner sections that only code-owned journal writes use. */
+export const PLANNER_SECTIONS = ["schedule", "tasks", "links"] as const;
 /** IDs are opaque source identities, not wording or personal data. Text is one Markdown inline line. */
 export interface PlanEntry { id: string; section: PlanSection; text: string; certainty?: "confirmed" | "target" | "tentative" }
 /** Persist the entire returned array, including unchanged baselines for owner-edited/removed entries. */
@@ -92,10 +94,17 @@ function renderTemplate(template: string, day: string): string {
 }
 
 const coverageId = "umpi-coverage";
-const sectionLabels: Record<PlanSection, string> = { schedule: "Schedule", tasks: "Tasks", links: "Links" };
+const sectionLabels: Record<PlanSection, string> = { schedule: "Schedule", tasks: "Tasks", links: "Links", done: "Done / changed", notes: "Notes" };
+const OWNER_SECTION = /^(?:notes|done(?:\s*\/\s*changed)?)$/i;
+const OWNER_LABELS: Record<string, RegExp> = { "Done / changed": /^done(?:\s*\/\s*changed)?$/i, Notes: /^notes$/i };
 
 function validateId(id: string): void {
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(id) || id.includes("--")) throw new Error("Invalid daily plan identity");
+}
+
+/** True when text can be written as one planner line. Journal writers drop lines that fail instead of failing the write. */
+export function isPlanInline(text: string): boolean {
+  try { validateInline(text); return true; } catch { return false; }
 }
 
 function validateInline(text: string): void {
@@ -112,6 +121,14 @@ function sectionBounds(headings: MarkdownHeading[], heading: MarkdownHeading, le
 }
 
 function findHeading(headings: MarkdownHeading[], label: string, length: number): SectionBounds | undefined {
+  const owner = OWNER_LABELS[label];
+  if (owner) {
+    // An owner section is addressed directly; the first top-most match wins so a nested "Notes" under Done is not used.
+    const matches = headings.filter(heading => owner.test(heading.label));
+    const top = matches.length ? Math.min(...matches.map(heading => heading.level)) : 0;
+    const first = matches.find(heading => heading.level === top);
+    return first ? sectionBounds(headings, first, length) : undefined;
+  }
   const protectedSections = headings.filter(heading => /^(?:notes|done(?:\s*\/\s*changed)?)$/i.test(heading.label))
     .map(heading => sectionBounds(headings, heading, length));
   const matches = headings.filter(heading => heading.label.toLowerCase() === label.toLowerCase()
@@ -173,6 +190,7 @@ export function mergeDailyPlan(input: {
   }
   const locations = new Map<string, SectionBounds | undefined>();
   for (const label of ["Plan", ...Object.values(sectionLabels)]) locations.set(label, findHeading(parsed.headings, label, text.length));
+  const ownerSection = (section: PlanSection) => section === "done" || section === "notes";
   for (const entry of proposals) {
     const coverage = entry.id === coverageId;
     const label = coverage ? "Plan" : sectionLabels[entry.section];
@@ -186,7 +204,7 @@ export function mergeDailyPlan(input: {
     if (previous) {
       if (!existing.length) { skipped.push({ id: entry.id, reason: "owner_removed" }); continue; }
       const owned = existing[0]!;
-      const protectedHeading = parsed.headings.some(heading => /^(?:notes|done(?:\s*\/\s*changed)?)$/i.test(heading.label)
+      const protectedHeading = !ownerSection(entry.section) && parsed.headings.some(heading => OWNER_SECTION.test(heading.label)
         && owned.start >= heading.start && owned.start < sectionBounds(parsed.headings, heading, text.length).end);
       if (existing.length !== 1 || owned.text !== previous.line || /^\s*[-+*]\s+\[[^ ]\]/.test(owned.text)
         || !section || owned.start < section.heading.bodyStart || owned.start >= section.end || protectedHeading) {
@@ -217,6 +235,14 @@ export function mergeDailyPlan(input: {
   for (const [label, lines] of additions) {
     let headings = scanMarkdown(text).headings;
     let section = findHeading(headings, label, text.length);
+    if (!section && OWNER_LABELS[label]) {
+      // A missing owner section is appended at the end, at the level of the note's other top sections.
+      const level = headings.find(heading => /^(?:plan|notes|done(?:\s*\/\s*changed)?|links)$/i.test(heading.label))?.level ?? (headings.some(heading => heading.level === 1) ? 2 : 1);
+      const prefix = text && !text.endsWith(newline) ? newline + newline : text && !text.endsWith(newline + newline) ? newline : "";
+      text = `${text}${prefix}${"#".repeat(level)} ${label}${newline}${newline}`;
+      headings = scanMarkdown(text).headings;
+      section = findHeading(headings, label, text.length)!;
+    }
     if (!section) {
       let plan = findHeading(headings, "Plan", text.length);
       if (!plan) {
@@ -239,8 +265,18 @@ export function mergeDailyPlan(input: {
       }
     }
     // Append before descendants so entries never become part of an owner's Notes or Done section.
-    const position = label === "Plan" ? section.heading.bodyStart
-      : headings.find(heading => heading.start >= section.heading.bodyStart && heading.start < section.end)?.start ?? section.end;
+    const bodyEnd = headings.find(heading => heading.start >= section.heading.bodyStart && heading.start < section.end)?.start ?? section.end;
+    if (OWNER_LABELS[label]) {
+      // Owner sections read as one list: follow the owner's last line directly instead of after a blank line.
+      const body = text.slice(section.heading.bodyStart, bodyEnd), trimmed = body.replace(/\s+$/, "");
+      const position = section.heading.bodyStart + trimmed.length;
+      // After the owner's last line, or a blank line after an empty section's heading.
+      const lead = position ? newline : "";
+      const rest = text.slice(position).replace(/^[ \t]*(?:\r?\n)?/, "");
+      text = text.slice(0, position) + lead + lines.join(newline) + newline + (rest ? newline : "") + rest.replace(/^(?:[ \t]*\r?\n)+/, "");
+      continue;
+    }
+    const position = label === "Plan" ? section.heading.bodyStart : bodyEnd;
     const prefix = position && !text.slice(0, position).endsWith(newline) ? newline : "";
     text = text.slice(0, position) + prefix + lines.join(newline) + newline + (position < text.length ? newline : "") + text.slice(position);
   }

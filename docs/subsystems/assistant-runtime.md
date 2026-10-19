@@ -160,6 +160,18 @@ Checkpoint upload consumes an exact-length compressed archive into one bounded b
 
 Scope defaults to `journals/` and `templates/date-template.md`. Notes are bounded to 256 KiB and workspace archives to 32 MiB compressed and decoded file bytes. Attachment/config sync is disabled; existing unrelated top-level folders are excluded. Exclusions are **not permissions**: root note formats and new folders can still synchronize into the private workspace. Model access remains separately limited to the approved dated-note/template projection. Vault credentials must never be shared with a future coding container.
 
+#### Journal writes after preparation
+
+`journal.ts` keeps the daily note current after the morning plan, without model turns. It owns three kinds of lines, each with an `umpi-plan` marker so a retry never duplicates and owner lines are never edited:
+
+- **Close-out.** Once a day, after the preparation time, yesterday's `Done / changed` receives factual lines from recorded state: timed meetings from the calendar, completed owner commitments, [situation](#situation-record) state changes (deliveries, applications, renewals, payments, bookings, account alerts), one spending total with the largest payments, and mail that needed the owner. A bill that only became due is not recorded as something that happened.
+- **Intra-day additions.** New timed calendar events for the rest of today, from the [default checks](#default-checks) calendar cache, are queued as schedule lines using the same event identities the planner uses, so they never duplicate a planned line. The foreground `add_to_daily_note` tool queues an owner-requested line for tasks, schedule, done, notes, or links within seven days of today.
+- **Check-ins.** At each configured local time (default 13:00 and 18:00, within a two-hour window), the current note's Tasks section is read and one Telegram message reports done versus open tasks. A note without tasks sends nothing.
+
+Owner sections are written only by these code paths; the planner model still cannot target `Done / changed` or `Notes`. New lines follow the owner's last line in that section, and a missing section is appended. Routine additions are written at most hourly per note, and owner requests or the close-out on the next coordinator pass. Today's note is never written while morning preparation holds its inputs. A conflict or unconfirmed upload retries from the current note after ten minutes, up to five attempts. Vault work runs as tracked background work so the coordinator does not wait on the container. The protected `GET /api/journal` and `PUT /api/journal/settings` read and change `closeOut`, `intraDay`, and `checkIns`.
+
+For questions about today, the assistant reads today's note first and uses the calendar for events added after preparation.
+
 Foreground tools are `read_daily_plan`, `set_daily_brief`, and `prepare_daily_plan`. A saved plan is historical preparation evidence; `read_daily_plan` with `refresh: true` reads the current note for today or the previous seven days, without claiming a fresh calendar. Only the owned review can call `read_daily_planning_inputs`, `commit_daily_plan`, and `resume_daily_plan`. Generic scheduling tools and HTTP mutations cannot repurpose its commitment or wake. Daily preparation grants no alarms, calls, reminders, calendar writes, memory edits, or general file access.
 
 `/plan` provides native prepare-today and Enable/Pause controls bound to the exact confirmed message, date, settings, brief, and plan versions. Normal successful preparation is quiet. Owner control routes expose status, briefs, retained before/after writes, cancellation, and explicit release after review. Cancellation cannot retract dispatched I/O; release is not rollback, and a late actual receipt remains recorded. [Operation and activation](../runbooks/local-development.md#operate-daily-note-preparation) owns the setup procedure and remaining provider verification.
@@ -338,3 +350,4 @@ The [development and operation runbook](../runbooks/local-development.md) owns l
 - 2026-10-15: Added channel-specific rendering of conversational Markdown as Telegram-native entities while preserving Markdown on other channels.
 - 2026-10-19: Added multiple mailboxes, byte-bounded review batches, code-level bulk-tab skipping, cleaned bodies, the situation record with backfill extraction, the morning brief, and medium background effort.
 - 2026-10-19: Added calendar heads-ups, due-soon nudges, stalled-commitment reviews, and source-side exclusion of bulk tabs during bootstrap.
+- 2026-10-19: Added daily-note close-out, intra-day additions, owner note requests, and task check-ins as code-owned journal writes.
