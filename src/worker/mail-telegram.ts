@@ -9,15 +9,17 @@ type MailButton = { groupId: string; settingsVersion: number } & (
 export interface MailCallbackResult { text: string; replyMarkup: TelegramMarkup; prompt?: string; wake?: boolean }
 
 export function formatMailStatus(runtime: MailRuntime): string {
-  const meta = runtime.store.meta(), settings = meta.settings, item = runtime.store.attention(1)[0];
-  const counts = runtime.store.status() as { counts: Record<string, number> };
-  let text = `Mail follow-through: ${settings.enabled ? "on" : "paused"} · every ${settings.pollMinutes} minutes.\n`
-    + `Gmail: ${runtime.available() ? "read-only authorization configured" : "authorization not configured"}.\n`
-    + `Initial boundary: ${meta.bootstrapAfter ?? "not selected"}. It never expands automatically.\n`
-    + `Last check: ${meta.lastSyncAt ?? "not run"}${meta.lastStatus ? ` · ${meta.lastStatus}` : ""}.\n`
-    + `Awaiting triage: ${counts.counts.pending ?? 0} · needs you: ${counts.counts.attention ?? 0} · snoozed: ${counts.counts.snoozed ?? 0}.`;
-  if (meta.continuation) text += "\nThe bounded scan is continuing from saved provider progress; its cursor has not advanced.";
-  if (meta.issue) text += `\nIssue: ${meta.issue}`;
+  const settings = runtime.store.settings(), item = runtime.store.attention(1)[0];
+  const status = runtime.store.status() as { counts: Record<string, number>; factsPending: number };
+  const accounts = runtime.store.accounts().filter(account => runtime.accounts.some(configured => configured.id === account.id));
+  let text = `Mail follow-through: ${settings.enabled ? "on" : "paused"} · every ${settings.pollMinutes} minutes · first scan ${settings.lookbackDays} days.\n`
+    + `Gmail: ${runtime.available() ? `read-only access to ${runtime.accounts.length} inbox${runtime.accounts.length === 1 ? "" : "es"}` : "authorization not configured"}.`;
+  for (const account of accounts) {
+    text += `\n• ${account.id}: from ${account.bootstrapAfter ?? "not started"} · last check ${account.lastSyncAt ?? "not run"}${account.lastStatus ? ` (${account.lastStatus})` : ""}`;
+    if (account.continuation) text += " · scan continuing";
+    if (account.issue) text += ` · ${account.issue}`;
+  }
+  text += `\nAwaiting review: ${status.counts.pending ?? 0} new · ${status.factsPending} for facts · needs you: ${status.counts.attention ?? 0} · snoozed: ${status.counts.snoozed ?? 0}.`;
   if (settings.enabled && !runtime.store.proactive.settings().enabled) text += "\nFollow-through is paused in /schedule, so mailbox checks are also paused.";
   if (item) text += `\n\nNext item\n${item.subject}\nFrom: ${item.sender}\nReceived: ${item.receivedAt}\nWhy: ${item.reason}\nSuggested: ${item.suggestedAction}\nOpen: ${item.webUrl}`;
   else text += "\n\nNo selected mail item is waiting for owner action.";
@@ -50,7 +52,7 @@ export function enqueueMailControls(runtime: MailRuntime, requestId: string): vo
       addButton(runtime, check, { groupId, settingsVersion: settings.version, action: "check", rebootstrap: false });
       addButton(runtime, pause, { groupId, settingsVersion: settings.version, action: "configure", enabled: false, lookbackDays: settings.lookbackDays, pollMinutes: settings.pollMinutes });
       keyboard.push([{ text: "Check now", callback_data: check }, { text: "Pause", callback_data: pause }]);
-      if (runtime.store.meta().lastStatus === "cursor_expired") {
+      if (runtime.store.accounts().some(account => account.lastStatus === "cursor_expired")) {
         const token = `mail:${crypto.randomUUID()}`;
         addButton(runtime, token, { groupId, settingsVersion: settings.version, action: "check", rebootstrap: true });
         keyboard.push([{ text: `Rescan last ${settings.lookbackDays} days`, callback_data: token }]);

@@ -147,7 +147,7 @@ function snapshot(changes: Partial<GmailThreadSnapshot> = {}): GmailThreadSnapsh
   return {
     id: "provider-thread", versionKey: "incoming-1:none", subject: "Fixture action", sender: "Sender <sender@example.test>",
     receivedAt: "2027-04-10T09:00:00.000Z", lastIncomingAt: "2027-04-10T09:00:00.000Z", lastOutgoingAt: null,
-    unread: true, important: true, awaitingReply: true, webUrl: "https://mail.google.com/mail/u/0/#all/provider-thread",
+    unread: true, important: true, starred: false, category: "primary", awaitingReply: true, webUrl: "https://mail.google.com/mail/u/0/#all/provider-thread",
     messages: [{ id: "incoming-1", sentAt: "2027-04-10T09:00:00.000Z", direction: "incoming", from: "Sender <sender@example.test>", subject: "Fixture action", excerpt: "Please confirm." }],
     ...changes,
   };
@@ -166,11 +166,11 @@ function openReview(f: Fixture) {
 test("durable mail state fixes the bootstrap boundary, deduplicates evidence, and reopens only for new incoming mail", t => {
   const f = fixture(t), settingsVersion = f.mail.settings().version;
   const tooOld = snapshot({ id: "old-provider", versionKey: "old:none", receivedAt: "2027-03-20T09:00:00.000Z", lastIncomingAt: "2027-03-20T09:00:00.000Z" });
-  assert.deepEqual(f.mail.applySync(settingsVersion, syncResult(tooOld), NOW), { changed: 0, pending: 0 });
-  assert.equal(f.mail.meta().bootstrapAfter, "2027-04-01T12:00:00.000Z");
+  assert.deepEqual(f.mail.applySync("primary", settingsVersion, syncResult(tooOld), NOW), { changed: 0, pending: 0 });
+  assert.equal(f.mail.account("primary")?.bootstrapAfter, "2027-04-01T12:00:00.000Z");
 
-  assert.deepEqual(f.mail.applySync(settingsVersion, syncResult(snapshot()), NOW), { changed: 1, pending: 1 });
-  assert.deepEqual(f.mail.applySync(settingsVersion, syncResult(snapshot()), NOW), { changed: 0, pending: 1 });
+  assert.deepEqual(f.mail.applySync("primary", settingsVersion, syncResult(snapshot()), NOW), { changed: 1, pending: 1 });
+  assert.deepEqual(f.mail.applySync("primary", settingsVersion, syncResult(snapshot()), NOW), { changed: 0, pending: 1 });
   const { run, input } = openReview(f), item = input.threads[0]!;
   f.mail.commitReview("mail-review", [{ id: item.id, expectedVersion: item.version, outcome: "notify", summary: "A reply is requested.", reason: "The sender asked for confirmation.", suggestedAction: "Review and answer." }]);
   const finish = f.mail.finishInput("mail-review", { outcome: "completed", note: "model text is not authoritative" });
@@ -182,13 +182,14 @@ test("durable mail state fixes the bootstrap boundary, deduplicates evidence, an
   assert.equal(f.owner.deliveries().filter(delivery => delivery.groupId.startsWith("proactive:")).length, 1, "one digest, not one alert per message");
 
   const attention = f.mail.attention()[0]!; f.mail.markHandled(attention.id, attention.version);
-  assert.deepEqual(f.mail.applySync(settingsVersion, syncResult(snapshot()), NOW), { changed: 0, pending: 0 });
+  assert.deepEqual(f.mail.applySync("primary", settingsVersion, syncResult(snapshot()), NOW), { changed: 0, pending: 0 });
   const later = snapshot({ versionKey: "incoming-2:none", receivedAt: "2027-04-15T13:00:00.000Z", lastIncomingAt: "2027-04-15T13:00:00.000Z",
     messages: [{ ...snapshot().messages[0]!, id: "incoming-2", sentAt: "2027-04-15T13:00:00.000Z", excerpt: "Following up." }] });
-  assert.deepEqual(f.mail.applySync(settingsVersion, syncResult(later, "201"), NOW), { changed: 1, pending: 1 });
+  assert.deepEqual(f.mail.applySync("primary", settingsVersion, syncResult(later, "201"), NOW), { changed: 1, pending: 1 });
   const resolved = { ...later, versionKey: "incoming-2:sent-2", lastOutgoingAt: "2027-04-15T13:05:00.000Z", awaitingReply: false,
     messages: [...later.messages, { id: "sent-2", sentAt: "2027-04-15T13:05:00.000Z", direction: "outgoing" as const, from: "Owner", subject: "Re: Fixture action", excerpt: "Confirmed." }] };
-  assert.deepEqual(f.mail.applySync(settingsVersion, syncResult(resolved, "202"), NOW), { changed: 1, pending: 0 });
+  assert.deepEqual(f.mail.applySync("primary", settingsVersion, syncResult(resolved, "202"), NOW), { changed: 1, pending: 1 }, "a replied thread is only read for facts");
+  assert.equal(f.mail.thread(attention.id)?.status, "resolved"); assert.equal(f.mail.thread(attention.id)?.factsPending, true);
 });
 test("legacy capped state reuses its fixed boundary and restarts as a resumable scan", t => {
   const f = fixture(t, false, db => {
@@ -199,10 +200,10 @@ test("legacy capped state reuses its fixed boundary and restarts as a resumable 
       lastStatus: "partial", issue: "legacy capped scan", truncated: true,
     }));
   });
-  const meta = f.mail.meta();
-  assert.equal(meta.scanVersion, 2); assert.equal(meta.bootstrapAfter, AFTER);
-  assert.equal(meta.historyId, null); assert.equal(meta.continuation, null); assert.equal(meta.bootstrapped, false);
-  assert.equal(meta.nextSyncAt, NOW); assert.equal(meta.issue, null);
+  const meta = f.mail.meta(), primary = f.mail.account("primary")!;
+  assert.equal(meta.scanVersion, 3); assert.equal(meta.settings.version, 2); assert.equal(primary.bootstrapAfter, AFTER);
+  assert.equal(primary.historyId, null); assert.equal(primary.continuation, null); assert.equal(primary.bootstrapped, false);
+  assert.equal(primary.nextSyncAt, NOW); assert.equal(primary.issue, null);
 });
 
 test("resumable scan waits for completion and multi-batch triage emits one aggregate digest", t => {
@@ -214,43 +215,43 @@ test("resumable scan waits for completion and multi-batch triage emits one aggre
   const continuation: GmailSyncContinuation = {
     mode: "bootstrap", startHistoryId: "200", resultHistoryId: "200", pageToken: "next-page", pendingMessageIds: [],
   };
-  f.mail.applySync(settingsVersion, { status: "partial", checkedAt: new Date(NOW).toISOString(), historyId: null,
+  f.mail.applySync("primary", settingsVersion, { status: "partial", checkedAt: new Date(NOW).toISOString(), historyId: null,
     continuation, threads: threads.slice(0, MAIL_SYNC_MESSAGE_BATCH_LIMIT), discovered: MAIL_SYNC_MESSAGE_BATCH_LIMIT,
     issues: ["Gmail scan has more bounded batches; durable progress will continue."] }, NOW);
-  assert.equal(f.mail.meta().continuation?.pageToken, "next-page"); assert.equal(f.mail.meta().historyId, null);
-  assert.equal(f.mail.meta().nextSyncAt, NOW + 60_000);
-  f.mail.applySync(settingsVersion, { status: "unavailable", checkedAt: new Date(NOW + 500).toISOString(), historyId: null,
+  assert.equal(f.mail.account("primary")?.continuation?.pageToken, "next-page"); assert.equal(f.mail.account("primary")?.historyId, null);
+  assert.equal(f.mail.account("primary")?.nextSyncAt, NOW + 5_000);
+  f.mail.applySync("primary", settingsVersion, { status: "unavailable", checkedAt: new Date(NOW + 500).toISOString(), historyId: null,
     continuation: null, threads: [], discovered: 0, issues: ["Gmail is temporarily unavailable."] }, NOW + 500);
-  assert.equal(f.mail.meta().continuation?.pageToken, "next-page");
-  assert.equal(f.mail.meta().nextSyncAt, NOW + 500 + 5 * 60_000);
+  assert.equal(f.mail.account("primary")?.continuation?.pageToken, "next-page");
+  assert.equal(f.mail.account("primary")?.nextSyncAt, NOW + 500 + 5 * 60_000);
   f.proactive.drive(NOW, false, { telegram: "mail-review" });
   assert.equal(f.proactive.runForSession("mail-review"), undefined, "partial provider coverage must not start triage");
 
-  f.mail.applySync(settingsVersion, { status: "complete", checkedAt: new Date(NOW + 1_000).toISOString(), historyId: "200",
+  f.mail.applySync("primary", settingsVersion, { status: "complete", checkedAt: new Date(NOW + 1_000).toISOString(), historyId: "200",
     continuation: null, threads: threads.slice(MAIL_SYNC_MESSAGE_BATCH_LIMIT), discovered: 1, issues: [] }, NOW + 1_000);
   f.time(NOW + 1_000);
-  const first = openReview(f);
-  const firstSubject = first.input.threads[0]!.subject;
-  const firstDecisions = first.input.threads.map((item, index) => ({ id: item.id, expectedVersion: item.version,
-    outcome: index === 0 ? "notify" as const : "ignore" as const, summary: `Summary ${index}`, reason: `Reason ${index}`, suggestedAction: `Action ${index}` }));
-  const firstCommit = f.mail.commitReview("mail-review", firstDecisions) as { morePending: boolean };
-  assert.equal(firstCommit.morePending, true);
-  const firstFinish = f.mail.finishInput("mail-review", { outcome: "advanced", note: "Triaged batch." });
-  assert.equal(firstFinish.notification, undefined);
-  f.proactive.report("mail-review", firstFinish); f.owner.settle(first.run.operationId, "");
-  assert.equal(f.owner.deliveries().filter(delivery => delivery.groupId.startsWith("proactive:")).length, 0);
-
-  const second = openReview(f), last = second.input.threads[0]!;
-  f.mail.commitReview("mail-review", [{ id: last.id, expectedVersion: last.version, outcome: "notify", summary: "Last summary", reason: "Last reason", suggestedAction: "Last action" }]);
-  const finalFinish = f.mail.finishInput("mail-review", { outcome: "advanced", note: "Triaged final batch." });
-  assert.match(String(finalFinish.notification), new RegExp(firstSubject)); assert.match(String(finalFinish.notification), new RegExp(last.subject));
-  f.proactive.report("mail-review", finalFinish); f.owner.settle(second.run.operationId, "");
+  let firstSubject = "", lastSubject = "", batches = 0;
+  for (;;) {
+    const review = openReview(f); batches++;
+    assert.ok(Buffer.byteLength(JSON.stringify(review.input)) < 50 * 1024, "a batch must fit Pi's 50 KB tool-result limit");
+    const decisions = review.input.threads.map((item, index) => ({ id: item.id, expectedVersion: item.version,
+      outcome: batches === 1 && index === 0 ? "notify" as const : "ignore" as const, summary: `Summary ${index}`, reason: `Reason ${index}`, suggestedAction: `Action ${index}` }));
+    if (batches === 1) firstSubject = review.input.threads[0]!.subject;
+    const commit = f.mail.commitReview("mail-review", decisions) as { morePending: boolean };
+    const finish = f.mail.finishInput("mail-review", { outcome: "advanced", note: "Triaged batch." });
+    f.proactive.report("mail-review", finish); f.owner.settle(review.run.operationId, "");
+    if (!commit.morePending) { lastSubject = String(finish.notification); break; }
+    assert.equal(finish.notification, undefined);
+    assert.equal(f.owner.deliveries().filter(delivery => delivery.groupId.startsWith("proactive:")).length, 0);
+  }
+  assert.ok(batches >= 2, "51 threads need more than one bounded batch");
+  assert.match(lastSubject, new RegExp(firstSubject));
   assert.equal(f.owner.deliveries().filter(delivery => delivery.groupId.startsWith("proactive:")).length, 1);
 });
 
 test("triage is exact and version-bound; owner snooze and handled actions are reversible operational state", t => {
   const f = fixture(t), settingsVersion = f.mail.settings().version;
-  f.mail.applySync(settingsVersion, syncResult(snapshot()), NOW);
+  f.mail.applySync("primary", settingsVersion, syncResult(snapshot()), NOW);
   const { run, input } = openReview(f), item = input.threads[0]!;
   assert.throws(() => f.mail.commitReview("mail-review", []), /every thread/);
   assert.throws(() => f.mail.commitReview("mail-review", [{ id: item.id, expectedVersion: item.version + 1, outcome: "notify", summary: "Summary", reason: "Reason", suggestedAction: "Action" }]), StateError);
@@ -275,7 +276,7 @@ test("Telegram mail controls bind the confirmed message and exact settings versi
   f.owner.beginDelivery(delivery.id); f.owner.finishDelivery(delivery.id, "sent", undefined, 42);
   const result = await handleMailCallback(f.runtime, start.callback_data, 42);
   assert.match(result?.text ?? "", /fixed 14-day boundary/); assert.deepEqual(result?.replyMarkup, { inline_keyboard: [] });
-  assert.equal(f.mail.settings().enabled, true); assert.equal(f.mail.meta().bootstrapAfter, "2027-04-01T12:00:00.000Z");
+  assert.equal(f.mail.settings().enabled, true); assert.equal(f.mail.account("primary")?.bootstrapAfter, "2027-04-01T12:00:00.000Z");
   assert.ok(f.wakes > 0);
 });
 
@@ -294,7 +295,7 @@ test("mail control routes are owner-only and exact-method", async () => {
 test("mail review waits until quiet hours end instead of creating an expiring digest", t => {
   const f = fixture(t), settings = f.proactive.settings();
   f.proactive.configure({ expectedVersion: settings.version, enabled: true, quietHours: { start: "00:00", end: "13:00" } }, NOW);
-  f.mail.applySync(f.mail.settings().version, syncResult(snapshot()), NOW);
+  f.mail.applySync("primary", f.mail.settings().version, syncResult(snapshot()), NOW);
   f.proactive.drive(NOW, false, { telegram: "mail-review" });
   assert.equal(f.proactive.runForSession("mail-review"), undefined);
   f.time(Date.parse("2027-04-15T13:00:00Z"));

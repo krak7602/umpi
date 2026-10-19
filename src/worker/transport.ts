@@ -227,6 +227,9 @@ export async function authorize(request: Request, env: TelegramConfig & { UMPI_C
   const mail = (request.method === "GET" && (path === "/api/mail" || path === "/api/mail/items"))
     || (request.method === "PUT" && path === "/api/mail/settings")
     || (request.method === "POST" && (path === "/api/mail/check" || /^\/api\/mail\/items\/mail-[a-f0-9]{32}\/(?:handled|snooze)$/.test(path)));
+  const brief = (request.method === "GET" && (path === "/api/brief" || path === "/api/situation"))
+    || (request.method === "PUT" && path === "/api/brief/settings")
+    || (request.method === "POST" && path === "/api/brief/run");
   const coding = (request.method === "GET" && (/^\/api\/coding(?:\/(?:sources|tasks))?$/.test(path) || /^\/api\/coding\/tasks\/[A-Za-z0-9_.:-]+(?:\/(?:patch|checkpoint))?$/.test(path)))
     || (request.method === "POST" && (path === "/api/coding/tasks" || /^\/api\/coding\/sources\/[A-Za-z0-9_.:-]+$/.test(path) || /^\/api\/coding\/tasks\/[A-Za-z0-9_.:-]+\/(?:approve|cancel|correct|cloud|reconcile)$/.test(path)))
     || (request.method === "GET" && /^\/api\/coding\/tasks\/[A-Za-z0-9_.:-]+\/runs(?:\/[A-Za-z0-9_.:-]+\/(?:patch|checkpoint))?$/.test(path));
@@ -243,7 +246,7 @@ export async function authorize(request: Request, env: TelegramConfig & { UMPI_C
     if (!await secretEqual(request.headers.get("authorization") ?? "", `Bearer ${token}`)) throw new StateError(401, "Unauthorized browser synchronizer");
     return;
   }
-  const control = subagents || browser || coding || mail || planning || schedule || memory || companion === "control" || path === "/api/status" || path === "/api/messages" || path === "/api/jobs" || path === "/api/reminders" || path === "/api/auth" || path === "/api/core-context" || /^\/api\/messages\/[A-Za-z0-9_.:-]+$/.test(path) || /^\/api\/jobs\/[A-Za-z0-9_.:-]+\/(approve|cancel)$/.test(path);
+  const control = subagents || browser || coding || mail || brief || planning || schedule || memory || companion === "control" || path === "/api/status" || path === "/api/messages" || path === "/api/jobs" || path === "/api/reminders" || path === "/api/auth" || path === "/api/core-context" || /^\/api\/messages\/[A-Za-z0-9_.:-]+$/.test(path) || /^\/api\/jobs\/[A-Za-z0-9_.:-]+\/(approve|cancel)$/.test(path);
   if (!executor && !control) throw new StateError(404, "Not found");
   if (!env.UMPI_CONTROL_TOKEN || !env.UMPI_EXECUTOR_TOKEN || env.UMPI_CONTROL_TOKEN.length < 32 || env.UMPI_EXECUTOR_TOKEN.length < 32 || env.UMPI_CONTROL_TOKEN === env.UMPI_EXECUTOR_TOKEN) {
     throw new StateError(503, "Configure distinct UMPI_CONTROL_TOKEN and UMPI_EXECUTOR_TOKEN secrets with at least 32 characters each");
