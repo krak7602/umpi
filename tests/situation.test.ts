@@ -199,3 +199,17 @@ test("situation and brief control routes are owner-only and exact-method", async
     await assert.rejects(authorize(new Request(`https://example.test${path}`, { method, headers: { authorization: `Bearer ${env.UMPI_CONTROL_TOKEN}` } }), env), { status: 404 });
   }
 });
+
+test("every important thread can notify; the digest lists the newest 15 and counts the rest", t => {
+  const f = fixture(t);
+  sync(f, Array.from({ length: 18 }, (_, index) => snapshot(`urgent-${index}`, { receivedAt: `2027-04-14T${String(index).padStart(2, "0")}:00:00.000Z`, lastIncomingAt: `2027-04-14T${String(index).padStart(2, "0")}:00:00.000Z` })));
+  const { run, input } = open(f);
+  assert.equal(input.threads.length, 18);
+  f.mail.commitReview("review", input.threads.map(thread => ({ id: thread.id, expectedVersion: thread.version, outcome: "notify" as const, summary: "Needs you", reason: "Deadline", suggestedAction: "Reply today" })));
+  const done = f.mail.finishInput("review", { outcome: "advanced", note: "x" });
+  const text = String(done.notification);
+  assert.match(text, /^18 emails may need you/); assert.match(text, /3 more in \/mail\./);
+  assert.equal((text.match(/Reply today/g) ?? []).length, 15);
+  f.proactive.report("review", done); f.owner.settle(run.operationId, "");
+  assert.equal(f.mail.attention(50).length, 18);
+});
