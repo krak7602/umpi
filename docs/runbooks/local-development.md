@@ -394,6 +394,17 @@ For an expired cursor or unexplained silence, inspect `lastStatus`, `issue`, `sc
 
 Open `/brief` and choose **Enable at 03:30**. The existing `/schedule` follow-through setting must also be enabled. Enabling after that day's time starts the next morning; **Brief now** writes one immediately. Change the time through `PUT /api/brief/settings` with the current `expectedVersion`. A morning with nothing worth saying stays silent. Check `GET /api/brief` and the schedule run history when a brief is missing; the brief is a normal proactive notification, so quiet hours and pause also apply.
 
+### Operate default checks
+
+Calendar heads-ups, due-soon nudges, and stalled-commitment reviews are on by default once follow-through is enabled in `/schedule`. Inspect `GET /api/alerts` for the last calendar read, any calendar issue, and the next check. Change them with the current `expectedVersion`:
+
+```sh
+# Body example: {"expectedVersion": 1, "calendarLeadMinutes": 10, "dueSoon": true, "stalled": true}
+PUT /api/alerts/settings
+```
+
+Heads-ups and nudges are plain Telegram messages; correct a wrong fact in chat (for example "that bill is paid") to stop its nudge.
+
 ### Operate daily-note preparation
 
 The [runtime contract](../subsystems/assistant-runtime.md#daily-note-preparation) owns behavior and concurrency limits. New installations start paused and require explicit resource, credential-transfer, deployment, and activation authorization. Use bounded manual and automatic checks for fresh vault/calendar input, acknowledged upload, exact read-back, container inactivity, stale-edit rejection, and interruption recovery before enabling a real schedule.
@@ -757,3 +768,4 @@ Publish reviewed Git content, not an archive of the working directory: ignored l
 - 2026-10-15: Added live verification guidance for channel-specific conversational Markdown rendering through Telegram-native entities.
 - 2026-10-19: Made Claude subscription login the default and recorded the zero-downtime provider switch.
 - 2026-10-19: Added multi-mailbox login and secret upload, the 30-day situation backfill, and morning brief operation.
+- 2026-10-19: Added default-check operation.
