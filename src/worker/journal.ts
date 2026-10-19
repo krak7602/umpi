@@ -212,7 +212,7 @@ export class JournalRuntime {
     if (spends.length) {
       const totals = [...byCurrency].map(([currency, value]) => currency === "INR" ? `₹${Math.round(value).toLocaleString("en-IN")}` : `${value.toFixed(2)} ${currency}`).join(" + ");
       const largest = [...spends].sort((a, b) => b.amount!.value - a.amount!.value).slice(0, 3).map(fact => `${fact.counterparty ?? fact.title}${money(fact)}`).join(", ");
-      push("spending", line(`Spent ${totals} in ${spends.length} payment${spends.length === 1 ? "" : "s"} (largest: ${largest})`));
+      push("spending", line(spends.length === 1 ? `Spent ${totals} (${spends[0]!.counterparty ?? spends[0]!.title})` : `Spent ${totals} in ${spends.length} payments (largest: ${largest})`));
     }
     const mail = this.sources.mail.attention(50).filter(thread => Date.parse(thread.receivedAt) >= start && Date.parse(thread.receivedAt) < end);
     if (mail.length) push("mail", line(`Mail that needed you: ${mail.slice(0, 3).map(thread => thread.subject).join("; ")}${mail.length > 3 ? `; +${mail.length - 3} more` : ""}`));
