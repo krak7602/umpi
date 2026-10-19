@@ -196,7 +196,7 @@ An offline comparison on 40 recent non-promotional emails measured characters se
 | --- | --- | --- |
 | Previous extractor (plain part preferred, regex HTML stripping) | 198,459 | 1,436 |
 | `markdown-for-agents` | 155,364 | 990 |
-| `html-to-text` + `email-reply-parser` + footer cut | 111,278 | 829 |
+| `html-to-text` + quoted-reply trimming + footer cut | 111,278 | 829 |
 
 `markdown-for-agents` rendered email layout tables as single Markdown table rows, which lost the line structure. In the chosen pipeline, currency amounts visible in the first 2,000 characters rose from 16 to 25. Every apparent loss of an order, reference, or date was a tracking parameter, bounce header, or link target, not message content. The benchmark used a private temporary copy that was deleted afterward.
 
