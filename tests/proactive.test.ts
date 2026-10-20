@@ -404,3 +404,71 @@ test("one missing background session does not starve available channel work or d
   f.proactive.report(sessions.telegram, { outcome: "no_action", note: "The requested export state is unchanged." }); f.owner.settle(run.operationId, "");
   f.drive(); assert.equal(f.proactive.runForSession(sessions.control)?.commitmentId, "control-work");
 });
+
+test("a retry policy re-runs a failed event review at its interval, at most maxAttempts times", t => {
+  const f = fixture(t); f.enable();
+  f.proactive.createCommitment({ ...responsibility(), retry: { everyMinutes: 60, maxAttempts: 2 } }, "control", "foreground-control");
+  f.proactive.triggerEvent("commitment-1", BASE); f.drive();
+  const fail = (): string => { const run = f.proactive.runForSession(sessions.control)!; f.owner.settle(run.operationId, "Provider failure", true); f.drive(); return run.id; };
+  const first = fail();
+  assert.equal(f.proactive.run(first)?.status, "failed"); assert.match(f.proactive.run(first)!.note!, /retry 1 of 2/);
+  assert.equal(f.proactive.commitment("commitment-1")?.failedAttempts, 1); assert.equal(f.proactive.commitment("commitment-1")?.version, 1);
+  f.time(BASE + 59 * 60_000); f.drive(); assert.equal(f.proactive.runForSession(sessions.control), undefined);
+  f.time(BASE + 60 * 60_000); f.drive(); assert.ok(f.proactive.runForSession(sessions.control));
+  fail(); assert.equal(f.proactive.commitment("commitment-1")?.failedAttempts, 2);
+  f.time(BASE + 120 * 60_000); f.drive(); const last = fail();
+  assert.equal(f.proactive.run(last)?.note, "Turn ended without a structured proactive review");
+  assert.equal(f.proactive.commitment("commitment-1")?.failedAttempts, 0);
+  f.time(BASE + 10 * 60 * 60_000); f.drive(); assert.equal(f.proactive.runForSession(sessions.control), undefined);
+  assert.equal(f.proactive.status().runs.length, 3);
+});
+
+test("a successful review resets retry attempts, and an owner edit supersedes a pending retry budget", t => {
+  const f = fixture(t); f.enable();
+  f.proactive.createCommitment({ ...responsibility(), retry: { everyMinutes: 15, maxAttempts: 3 } }, "control", "foreground-control");
+  f.proactive.triggerEvent("commitment-1", BASE); f.drive();
+  let run = f.proactive.runForSession(sessions.control)!; f.owner.settle(run.operationId, "Provider failure", true); f.drive();
+  f.time(BASE + 15 * 60_000); f.drive(); run = f.proactive.runForSession(sessions.control)!;
+  f.proactive.report(sessions.control, { outcome: "no_action", note: "The export has not changed." }); f.owner.settle(run.operationId, "");
+  assert.equal(f.proactive.commitment("commitment-1")?.failedAttempts, 0);
+  const edited = f.proactive.updateCommitment("commitment-1", edit(f.proactive.commitment("commitment-1")!));
+  assert.deepEqual(edited.retry, { everyMinutes: 15, maxAttempts: 3 });
+  assert.equal(f.proactive.updateCommitment("commitment-1", { ...edit(edited), retry: null }).retry, null);
+});
+
+test("a one-time wake retries inside its useful window; a recurring wake keeps its rhythm", t => {
+  const f = fixture(t); f.enable();
+  f.proactive.createCommitment({ ...responsibility(), retry: { everyMinutes: 60, maxAttempts: 3 } }, "control", "foreground-control");
+  f.proactive.scheduleWakeup(wake("once", "commitment-1", BASE + 60_000, BASE + 100 * 60_000));
+  f.time(BASE + 60_000); f.drive(); let run = f.proactive.runForSession(sessions.control)!;
+  f.owner.settle(run.operationId, "Provider failure", true); f.drive();
+  assert.equal(f.proactive.wakeup("once")?.status, "scheduled"); assert.equal(f.proactive.wakeup("once")?.dueAt, at(BASE + 61 * 60_000));
+  f.time(BASE + 61 * 60_000); f.drive(); run = f.proactive.runForSession(sessions.control)!; assert.equal(run.wakeupId, "once");
+  f.owner.settle(run.operationId, "Provider failure", true); f.drive();
+  // The next retry would land after the wake expires.
+  assert.equal(f.proactive.wakeup("once")?.status, "cancelled"); assert.equal(f.proactive.commitment("commitment-1")?.failedAttempts, 0);
+
+  f.proactive.createCommitment({ ...responsibility("commitment-2"), retry: { everyMinutes: 30, maxAttempts: 3 } }, "control", "foreground-control");
+  f.proactive.scheduleWakeup(wake("hourly", "commitment-2", Date.now() + 60_000, Date.now() + 120_000, 120));
+  const start = Date.now() + 60_000; f.time(start); f.drive(); run = f.proactive.runForSession(sessions.control)!;
+  f.owner.settle(run.operationId, "Provider failure", true); f.drive();
+  assert.equal(f.proactive.wakeup("hourly")?.dueAt, at(start + 120 * 60_000));
+  f.time(start + 30 * 60_000); f.drive(); assert.equal(f.proactive.runForSession(sessions.control)?.trigger, "event");
+});
+
+test("retry policies are bounded", t => {
+  const f = fixture(t);
+  for (const retry of [{ everyMinutes: 5, maxAttempts: 1 }, { everyMinutes: 60, maxAttempts: 0 }, { everyMinutes: 60, maxAttempts: 11 }, { everyMinutes: 60 }, { everyMinutes: 60, maxAttempts: 2, extra: 1 }]) {
+    assert.throws(() => f.proactive.createCommitment({ ...responsibility(), retry }, "control", "foreground-control"), InputError);
+  }
+});
+
+test("with a retry policy, a recurring wake shorter than the interval continues at its next occurrence", t => {
+  const f = fixture(t); f.enable();
+  f.proactive.createCommitment({ ...responsibility(), retry: { everyMinutes: 60, maxAttempts: 1 } }, "control", "foreground-control");
+  f.proactive.scheduleWakeup(wake("repeat", "commitment-1", BASE + 60_000, BASE + 120_000, 15));
+  f.time(BASE + 60_000); f.drive(); const run = f.proactive.runForSession(sessions.control)!;
+  f.owner.settle(run.operationId, "Provider failure", true); f.drive();
+  assert.equal(f.proactive.wakeup("repeat")?.status, "scheduled"); assert.equal(f.proactive.wakeup("repeat")?.dueAt, at(BASE + 16 * 60_000));
+  assert.match(f.proactive.run(run.id)!.note!, new RegExp(`retry 1 of 1 at ${at(BASE + 16 * 60_000)}`));
+});

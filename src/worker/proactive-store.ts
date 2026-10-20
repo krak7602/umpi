@@ -11,10 +11,14 @@ const BACKOFF_MS = 60_000;
 const LIVE = "('active','blocked')";
 const LIVE_WAKES = "('scheduled','running')";
 type CommitmentStatus = "active" | "blocked" | "completed" | "cancelled";
+/** Bounded re-runs after a failed or expired turn, such as a provider outage or an exhausted usage window. */
+export interface RetryPolicy { everyMinutes: number; maxAttempts: number }
 export interface Commitment {
   id: string; version: number; purpose: string; source: string; nextAction: string; blocker: string | null;
   status: CommitmentStatus; nextReviewAt: string | null; jobId: string | null; channel: Channel;
   originSessionId: string; allowNotify: boolean; createdAt: string; updatedAt: string;
+  /** Absent or null: a failed turn is not repeated. Retry bookkeeping never changes the commitment version. */
+  retry?: RetryPolicy | null; failedAttempts?: number;
 }
 export interface Wakeup {
   id: string; version: number; commitmentId: string; commitmentVersion: number; purpose: string;
@@ -63,6 +67,14 @@ function future(value: unknown, now: number, label: string): string {
   return result;
 }
 function optionalReview(value: unknown, now: number): string | null { return value === null ? null : future(value, now, "nextReviewAt"); }
+export function retryPolicy(value: unknown): RetryPolicy | null {
+  if (value === null) return null;
+  const body = record(value); keys(body, ["everyMinutes", "maxAttempts"]);
+  const { everyMinutes, maxAttempts } = body;
+  if (!Number.isSafeInteger(everyMinutes) || (everyMinutes as number) < 15 || (everyMinutes as number) > 1440) throw new InputError("retry.everyMinutes must be an integer from 15 to 1440");
+  if (!Number.isSafeInteger(maxAttempts) || (maxAttempts as number) < 1 || (maxAttempts as number) > 10) throw new InputError("retry.maxAttempts must be an integer from 1 to 10");
+  return { everyMinutes: everyMinutes as number, maxAttempts: maxAttempts as number };
+}
 function commitmentFields(body: Record<string, unknown>, now: number) {
   if (!["active", "blocked", "completed", "cancelled"].includes(body.status as string)) throw new InputError("Invalid commitment status");
   const status = body.status as CommitmentStatus;
@@ -72,6 +84,8 @@ function commitmentFields(body: Record<string, unknown>, now: number) {
     purpose: text(body.purpose, 2000, "purpose"), source: text(body.source, 2000, "source"),
     nextAction: text(body.nextAction, 2000, "nextAction"), blocker: body.blocker === null ? null : text(body.blocker, 4000, "blocker"),
     status, nextReviewAt, jobId: body.jobId === null ? null : identifier(body.jobId, "job ID"),
+    // Omitted on update keeps the current policy.
+    ...(body.retry === undefined ? {} : { retry: retryPolicy(body.retry) }),
   };
 }
 function wakeFields(body: Record<string, unknown>, now: number) {
@@ -80,7 +94,7 @@ function wakeFields(body: Record<string, unknown>, now: number) {
   if (repeat !== null && (!Number.isSafeInteger(repeat) || (repeat as number) < 15 || (repeat as number) > 525_600)) throw new InputError("repeatEveryMinutes must be null or an integer from 15 to 525600");
   return { purpose: text(body.purpose, 2000, "purpose"), dueAt, expiresAt, repeatEveryMinutes: repeat as number | null };
 }
-const COMMITMENT_FIELDS = ["purpose", "source", "nextAction", "blocker", "status", "nextReviewAt", "jobId"];
+const COMMITMENT_FIELDS = ["purpose", "source", "nextAction", "blocker", "status", "nextReviewAt", "jobId", "retry"];
 const WAKE_FIELDS = ["purpose", "dueAt", "expiresAt", "repeatEveryMinutes"];
 
 /** Operational state only: all claims, reports, and outbox writes share the owner's SQLite transaction. */
@@ -184,7 +198,7 @@ export class ProactiveStore {
     instant(now); const body = record(value); keys(body, ["expectedVersion", ...COMMITMENT_FIELDS]); const fields = commitmentFields(body, now);
     return this.db.transaction(() => {
       const old = this.requireCommitment(id); cas(old.version, body.expectedVersion);
-      const commitment = { ...old, ...fields, version: old.version + 1, updatedAt: iso(now) };
+      const commitment = { ...old, ...fields, version: old.version + 1, updatedAt: iso(now), failedAttempts: 0 };
       this.checkCommitmentCapacity(commitment); this.validateJob(commitment);
       this.invalidateCommitment(id, "Commitment changed");
       this.writeCommitment(commitment); this.db.all("UPDATE umpi_commitments SET heartbeat_due=NULL,event_due=NULL WHERE id=?", id);
@@ -343,16 +357,64 @@ export class ProactiveStore {
     }
     return true;
   }
+  /** A retry keeps the same commitment version, so a later owner edit still supersedes it. */
+  private retry(run: ProactiveRun, status: "failed" | "expired", reason: string, now: number): boolean {
+    const commitment = this.commitment(run.commitmentId);
+    if (!commitment || !live(commitment) || commitment.version !== run.commitmentVersion || !this.settings().enabled) return false;
+    const policy = commitment.retry, attempts = commitment.failedAttempts ?? 0;
+    const wanted = policy && attempts < policy.maxAttempts ? now + policy.everyMinutes * 60_000 : undefined;
+    const due = wanted === undefined ? undefined : this.scheduleRetry(run, commitment, wanted, now);
+    if (due === undefined) {
+      // An exhausted budget starts fresh at the next scheduled occurrence.
+      if (attempts) this.writeCommitment({ ...commitment, failedAttempts: 0 });
+      return false;
+    }
+    this.writeCommitment({ ...commitment, failedAttempts: attempts + 1 });
+    this.invalidateRun(run, status, `${reason}; retry ${attempts + 1} of ${policy!.maxAttempts} at ${iso(due)}`);
+    return true;
+  }
+  /** Returns when the retry runs, or undefined when none fits. */
+  private scheduleRetry(run: ProactiveRun, commitment: Commitment, due: number, now: number): number | undefined {
+    if (!run.wakeupId) {
+      this.db.all("UPDATE umpi_commitments SET event_due=? WHERE id=?", due, commitment.id);
+      return due;
+    }
+    const wake = this.wakeup(run.wakeupId);
+    if (wake?.status !== "running" || wake.version !== run.wakeupVersion) return;
+    if (wake.repeatEveryMinutes === null) {
+      // A one-time wake retries only inside its own useful window.
+      if (Date.parse(wake.expiresAt) <= due) return;
+      this.writeWakeup({ ...wake, version: wake.version + 1, dueAt: iso(due), status: "scheduled" });
+      return due;
+    }
+    // A recurring wake keeps its rhythm; its next occurrence is the retry when that comes first.
+    const next = this.rearm(wake, now);
+    if (next.status !== "scheduled") return;
+    this.writeWakeup(next);
+    if (Date.parse(next.dueAt) <= due) return Date.parse(next.dueAt);
+    this.db.all("UPDATE umpi_commitments SET event_due=? WHERE id=?", due, commitment.id);
+    return due;
+  }
+  /** System owners set their own policy without editing, and so invalidating, the commitment. */
+  setRetryPolicy(id: string, value: RetryPolicy | null): void {
+    const policy = retryPolicy(value);
+    this.db.transaction(() => {
+      const commitment = this.requireCommitment(id);
+      if (JSON.stringify(commitment.retry ?? null) !== JSON.stringify(policy)) this.writeCommitment({ ...commitment, retry: policy });
+    });
+  }
   private reconcile(now: number): void {
     for (const run of this.activeRuns()) {
       const op = this.owner.operation(run.operationId);
       if (op?.status === "done" || op?.status === "failed" || !op) {
         if (this.recoverInterrupted(run, now)) continue;
+        if (this.retry(run, "failed", "Turn ended without a structured proactive review", now)) continue;
         this.invalidateRun(run, "failed", "Turn ended without a structured proactive review");
         const wake = run.wakeupId ? this.wakeup(run.wakeupId) : undefined;
         if (wake?.status === "running") this.writeWakeup({ ...wake, version: wake.version + 1, status: "cancelled" });
       } else if (!this.current(run, now)) {
         if (this.recoverInterrupted(run, now)) continue;
+        if (Date.parse(run.expiresAt) <= now && this.retry(run, "expired", "Review is no longer current", now)) continue;
         this.invalidateRun(run, Date.parse(run.expiresAt) <= now ? "expired" : "superseded", "Review is no longer current");
         const wake = run.wakeupId ? this.wakeup(run.wakeupId) : undefined;
         if (wake?.status === "running") this.writeWakeup({ ...wake, version: wake.version + 1, status: "expired" });
@@ -438,7 +500,7 @@ export class ProactiveStore {
     const notification = body.notification === undefined ? undefined : text(body.notification, 4000, "notification");
     return this.db.transaction(() => {
       const old = this.assertRunCurrent(sessionId, now), commitment = this.requireCommitment(old.commitmentId);
-      const next: Commitment = { ...commitment, version: commitment.version + 1, updatedAt: iso(now), nextReviewAt,
+      const next: Commitment = { ...commitment, version: commitment.version + 1, updatedAt: iso(now), nextReviewAt, failedAttempts: 0,
         status: outcome === "completed" ? "completed" : outcome === "blocked" ? "blocked" : outcome === "advanced" ? "active" : commitment.status,
         ...(nextAction === undefined ? {} : { nextAction }), ...(blocker === undefined ? {} : { blocker }) };
       this.writeCommitment(next);

@@ -208,13 +208,24 @@ test("a deferred review without a same-day next review stops preparation", t => 
   assert.equal(f.planning.plan("2027-02-10")?.status, "blocked");
 });
 
-test("an ordinary one-shot turn without a structured report stops planning", t => {
-  const f = fixture(t), run = activate(f);
-  f.owner.settle(run.operationId, "");
-  f.proactive.drive(Date.now(), false, { control: BACKGROUND });
-  f.planning.reconcile();
-  assert.equal(f.planning.plan("2027-02-10")?.status, "blocked");
+test("a failed or unstructured preparation retries hourly at most three times, then stops planning", t => {
+  const f = fixture(t), first = activate(f);
+  f.owner.settle(first.operationId, "Provider failure", true);
+  f.proactive.drive(Date.now(), false, { control: BACKGROUND }); f.planning.reconcile();
+  assert.equal(f.planning.plan("2027-02-10")?.status, "requested");
   assert.throws(() => f.planning.forSession(BACKGROUND), StateError);
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    f.time(Date.now() + 59 * 60_000); f.proactive.drive(Date.now(), false, { control: BACKGROUND });
+    assert.equal(f.proactive.runForSession(BACKGROUND), undefined);
+    f.time(Date.now() + 60_000); f.proactive.drive(Date.now(), false, { control: BACKGROUND });
+    const run = f.proactive.runForSession(BACKGROUND)!;
+    assert.equal(run.commitmentId, first.commitmentId); assert.equal(f.planning.forSession(BACKGROUND).day, "2027-02-10");
+    f.owner.submitted(run.operationId); f.owner.settle(run.operationId, "");
+    f.proactive.drive(Date.now(), false, { control: BACKGROUND }); f.planning.reconcile();
+  }
+  assert.equal(f.planning.plan("2027-02-10")?.status, "blocked");
+  f.time(Date.now() + 2 * 60 * 60_000); f.proactive.drive(Date.now(), false, { control: BACKGROUND });
+  assert.equal(f.proactive.runForSession(BACKGROUND), undefined);
 });
 
 for (const outcome of ["blocked", "synced", "completed"] as const) test(`day expiry retires ${outcome} planning responsibility without changing note evidence`, t => {
