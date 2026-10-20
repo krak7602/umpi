@@ -3,7 +3,7 @@ import { mergeDailyPlan, nextPlanningTime, planningDay, planningDayBounds, shift
 import { InputError, boundedText, record } from "../shared/protocol.js";
 import { vaultNoteRevision, type VaultPlanningApply, type VaultPlanningSnapshot, type VaultPlanningResult } from "../shared/vault-planning.js";
 import type { CalendarSnapshot } from "./calendar.js";
-import { ProactiveStore, ProactiveCapacityError, type Commitment, type ProactiveRun } from "./proactive-store.js";
+import { ProactiveStore, ProactiveCapacityError, type Commitment, type ProactiveRun, type RetryPolicy } from "./proactive-store.js";
 import { StateError, type Channel, type Database } from "./store.js";
 
 class PlanningDayEnded extends StateError {
@@ -28,6 +28,8 @@ export interface DailyWriteIntent extends VaultPlanningApply {
   createdAt: string; result?: VaultPlanningResult;
 }
 const iso = (now: number): string => new Date(now).toISOString();
+/** A daily note missed during a provider outage or an exhausted usage window is retried, not left blocked until the owner notices. */
+export const PLANNING_RETRY: RetryPolicy = { everyMinutes: 60, maxAttempts: 3 };
 function keys(body: Record<string, unknown>, allowed: string[]): void {
   if (Object.keys(body).some(key => !allowed.includes(key))) throw new InputError("Unknown daily-planning field");
 }
@@ -123,7 +125,7 @@ export class PlanningStore {
       }
       const commitmentId = `daily-${randomUUID()}`;
       const purpose = `Prepare the current-day daily note for ${target}`;
-      this.proactive.createCommitment({ id: commitmentId, purpose, source: automatic ? "Owner-enabled daily-note preparation" : "Owner requested preparation of today's daily note", nextAction: "Use read_daily_planning_inputs, then commit_daily_plan or resume_daily_plan. Confirm actual sync before reporting completion; keep normal success quiet.", blocker: null, status: "active", nextReviewAt: null, jobId: null, allowNotify: false }, channel, sessionId, now);
+      this.proactive.createCommitment({ id: commitmentId, purpose, source: automatic ? "Owner-enabled daily-note preparation" : "Owner requested preparation of today's daily note", nextAction: "Use read_daily_planning_inputs, then commit_daily_plan or resume_daily_plan. Confirm actual sync before reporting completion; keep normal success quiet.", blocker: null, status: "active", nextReviewAt: null, jobId: null, allowNotify: false, retry: PLANNING_RETRY }, channel, sessionId, now);
       const expiresAt = planningDayBounds(target, this.timezone).end;
       if (Date.parse(expiresAt) <= now + 1_000) throw new PlanningDayEnded();
       const wakeId = `daily-wake-${randomUUID()}`;

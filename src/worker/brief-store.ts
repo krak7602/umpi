@@ -1,11 +1,13 @@
 import { nextPlanningTime, planningDay, planningDayBounds } from "../shared/daily-planning.js";
 import { InputError, boundedText, record } from "../shared/protocol.js";
-import { ProactiveStore, type Commitment, type ProactiveRun } from "./proactive-store.js";
+import { ProactiveStore, type Commitment, type ProactiveRun, type RetryPolicy } from "./proactive-store.js";
 import { StateError, type Database } from "./store.js";
 
 export const BRIEF_COMMITMENT_ID = "morning-brief";
 export const BRIEF_DEFAULT_TIME = "03:30";
 const BRIEF_MAX_CHARS = 3_500;
+/** A brief missed during a provider outage or an exhausted usage window still helps a few hours later. */
+export const BRIEF_RETRY: RetryPolicy = { everyMinutes: 60, maxAttempts: 3 };
 
 export interface BriefSettings { version: number; enabled: boolean; time: string }
 export interface BriefRecord {
@@ -58,7 +60,7 @@ export class BriefStore {
     if (!previous) {
       this.proactive.createCommitment({ id: BRIEF_COMMITMENT_ID, purpose: "Write the owner's daily morning brief from their current situation, calendar, and plan",
         source: "Owner-enabled morning brief", nextAction: "Use read_brief_inputs, then commit_brief. Stay quiet when nothing matters.", blocker: null,
-        status: "active", nextReviewAt: null, jobId: null, allowNotify: true }, "telegram", sessionId, now);
+        status: "active", nextReviewAt: null, jobId: null, allowNotify: true, retry: BRIEF_RETRY }, "telegram", sessionId, now);
       return;
     }
     if (previous.status !== "active") this.proactive.updateCommitment(previous.id, { ...commitmentEdit(previous), status: "active", nextReviewAt: null, blocker: null }, now);
@@ -101,6 +103,8 @@ export class BriefStore {
     const day = planningDay(now, this.timezone), previous = this.brief(day);
     if (!this.commitment()) throw new StateError(409, "Enable the morning brief in /brief first");
     const brief = this.save({ day, version: (previous?.version ?? 0) + 1, status: "requested", manual, runId: null, text: null, requestedAt: iso(now), committedAt: null });
+    // Commitments created before retry policies existed adopt the current one here.
+    this.proactive.setRetryPolicy(BRIEF_COMMITMENT_ID, BRIEF_RETRY);
     this.proactive.triggerEvent(BRIEF_COMMITMENT_ID, now);
     return brief;
   }

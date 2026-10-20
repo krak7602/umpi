@@ -189,6 +189,32 @@ test("the morning brief is scheduled once per local day, quiet when empty, and d
   assert.equal(quiet.commitmentId, "morning-brief");
 });
 
+test("a morning brief whose turn fails is retried hourly, at most three times, and a legacy commitment adopts the policy", t => {
+  const f = fixture(t), brief = new BriefStore(f.proactive);
+  brief.configure({ expectedVersion: 1, enabled: true, time: "03:30" }, "owner", NOW);
+  f.proactive.setRetryPolicy("morning-brief", null);
+  const due = Date.parse("2027-04-15T22:00:00Z");
+  f.time(due); brief.drive(Date.now());
+  assert.deepEqual(f.proactive.commitment("morning-brief")?.retry, { everyMinutes: 60, maxAttempts: 3 });
+  const fail = () => {
+    f.proactive.drive(Date.now(), false, { telegram: "review" });
+    const run = f.proactive.runForSession("review")!; assert.equal(run.commitmentId, "morning-brief");
+    f.owner.submitted(run.operationId); f.owner.settle(run.operationId, "Provider failure", true);
+    f.proactive.drive(Date.now(), false, { telegram: "review" });
+  };
+  fail();
+  f.time(due + 60 * 60_000); f.proactive.drive(Date.now(), false, { telegram: "review" });
+  const run = f.proactive.runForSession("review")!; f.owner.submitted(run.operationId);
+  brief.commit("review", "Two bills due this week.");
+  f.proactive.report("review", brief.finishInput("review", { outcome: "advanced", note: "x" })); f.owner.settle(run.operationId, "");
+  assert.equal(brief.brief("2027-04-16")?.text, "Two bills due this week.");
+  assert.equal(f.proactive.commitment("morning-brief")?.failedAttempts, 0);
+  f.time(due + 86_400_000); brief.drive(Date.now());
+  for (let attempt = 0; attempt < 4; attempt++) { fail(); f.time(Date.now() + 60 * 60_000); }
+  f.proactive.drive(Date.now(), false, { telegram: "review" });
+  assert.equal(f.proactive.runForSession("review"), undefined); assert.equal(brief.brief("2027-04-17")?.status, "requested");
+});
+
 test("situation and brief control routes are owner-only and exact-method", async () => {
   const env = { UMPI_CONTROL_TOKEN: "c".repeat(32), UMPI_EXECUTOR_TOKEN: "e".repeat(32) };
   for (const [method, path] of [["GET", "/api/situation"], ["GET", "/api/brief"], ["PUT", "/api/brief/settings"], ["POST", "/api/brief/run"]]) {

@@ -100,6 +100,7 @@ test("background tools cannot create obligations, target other commitments, or c
     ["update_commitment", update("commitment-two")],
     ["update_commitment", { ...update(), purpose: "A different duty" }],
     ["update_commitment", { ...update(), source: "A different source" }],
+    ["update_commitment", { ...update(), retry: { everyMinutes: 15, maxAttempts: 10 } }],
     ["update_commitment", { ...update(), allowNotify: true }],
     ["update_commitment", { ...update(), channel: "telegram" }],
     ["schedule_wakeup", f.wakeup("foreign-wake", "commitment-two")],
