@@ -43,7 +43,8 @@
   "r2_buckets": [
     { "binding": "VAULT_ARCHIVE", "bucket_name": "replace-with-umpi-vault-state" },
     { "binding": "CODING_ARCHIVE", "bucket_name": "replace-with-umpi-coding-state" },
-    { "binding": "BROWSER_ARCHIVE", "bucket_name": "replace-with-umpi-browser-state" }
+    { "binding": "BROWSER_ARCHIVE", "bucket_name": "replace-with-umpi-browser-state" },
+    { "binding": "OBSY_LIBRARY", "bucket_name": "replace-with-obsy-vault" }
   ],
   "browser": { "binding": "BROWSER" }
 }

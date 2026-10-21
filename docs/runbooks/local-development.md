@@ -409,7 +409,13 @@ Heads-ups and nudges are plain Telegram messages; correct a wrong fact in chat (
 
 Close-out, intra-day additions, and check-ins run when follow-through is enabled and the private note workspace is connected. Inspect `GET /api/journal` for queued, written, and failed lines and the last issue. Change them with the current `expectedVersion`, for example `{"expectedVersion": 1, "checkIns": ["13:00", "18:00"], "closeOut": true, "intraDay": true}` to `PUT /api/journal/settings`.
 
-The workspace depends on an active Obsidian Sync subscription. A lapsed subscription makes every preparation and journal write report "private note workspace is unavailable"; restore billing and then request preparation again.
+With the obsy vault configured, notes need only the R2 binding. With the VaultSync fallback, the workspace depends on an active Obsidian Sync subscription: a lapsed subscription makes every preparation and journal write report "private note workspace is unavailable"; restore billing and then request preparation again.
+
+### Use the obsy vault for notes
+
+The [runtime contract](../subsystems/assistant-runtime.md#note-storage) owns behavior. In private `wrangler.local.jsonc`, bind the vault bucket as `OBSY_LIBRARY` and set `UMPI_OBSY_PREFIX` to the vault's key prefix (empty, or ending in `/`). The binding needs no access key; never give umpi the key that the owner's devices use. `GET /api/status` shows `planning.backend` as `obsy`, `vault-sync`, or `null` with `backendIssue`.
+
+To switch: pause daily preparation and journal writes, copy the last journal changes from the old vault into the obsy vault, deploy, request one manual preparation, and check it. From the obsy repository, with the owner's env file, `obsy history journals/<day>.md` shows `agent umpi`. Then resume the schedule. To update the vendored packages, see [vendor/obsy](../../vendor/obsy/README.md).
 
 ### Operate daily-note preparation
 
@@ -776,3 +782,4 @@ Publish reviewed Git content, not an archive of the working directory: ignored l
 - 2026-10-19: Added multi-mailbox login and secret upload, the 30-day situation backfill, and morning brief operation.
 - 2026-10-19: Added default-check operation.
 - 2026-10-19: Added journal-write operation and the Obsidian Sync billing failure mode.
+- 2026-10-21: Added the obsy vault configuration and switch procedure.

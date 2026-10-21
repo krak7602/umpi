@@ -25,7 +25,7 @@ import { guardBackgroundTools } from "./proactive-runtime.js";
 import { scheduleRequest } from "./proactive-http.js";
 import { enqueueScheduleControls, handleScheduleCallback, formatScheduleStatus } from "./proactive-telegram.js";
 import { Buffer } from "node:buffer";
-import { MAX_WORKSPACE_BYTES, parseVaultScope } from "../shared/vault-planning.js";
+import { DEFAULT_VAULT_SCOPE, MAX_WORKSPACE_BYTES, parseVaultScope } from "../shared/vault-planning.js";
 import { PlanningStore } from "./planning-store.js";
 import { PlanningRuntime, type VaultPlanningClient } from "./planning-runtime.js";
 import { planningTools, guardPlanningReviewTools, PLANNING_INSTRUCTIONS } from "./planning-tools.js";
@@ -44,6 +44,7 @@ import { briefRequest, enqueueBriefControls, formatBriefStatus, handleBriefCallb
 import { AlertRuntime, AlertStore, alertRequest } from "./alerts.js";
 import { JournalRuntime, JournalStore, journalRequest, journalTools, JOURNAL_INSTRUCTIONS } from "./journal.js";
 import { VaultSync } from "./vault-sync.js";
+import { ObsyVaultClient } from "./obsy-vault.js";
 import { publicPage } from "./public-pages.js";
 import { CodingStore } from "./coding-store.js";
 import { CodingRuntime, type CodingCloudClient } from "./coding-runtime.js";
@@ -80,6 +81,9 @@ export interface Env extends TelegramConfig, CompanionPushConfig {
   ASSISTANT: DurableObjectNamespace<Assistant>;
   VAULT_SYNC?: DurableObjectNamespace<VaultSync>;
   VAULT_ARCHIVE?: R2Bucket;
+  /** The obsy vault bucket. With UMPI_OBSY_PREFIX set, daily notes use it instead of the VaultSync container. */
+  OBSY_LIBRARY?: R2Bucket;
+  UMPI_OBSY_PREFIX?: string;
   CODING_WORKER?: { getByName(name: string): CodingCloudClient };
   CODING_ARCHIVE?: R2Bucket;
   BROWSER_WORKER?: { getByName(name: string): BrowserCloudClient };
@@ -231,6 +235,8 @@ export class Assistant extends Agent<Env> {
   private readonly model?: PiModel;
   private readonly timezone: string;
   private readonly configurationIssue?: string;
+  private readonly obsyVault?: ObsyVaultClient;
+  private readonly obsyIssue?: string;
   modelIssue?: string;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -246,6 +252,10 @@ export class Assistant extends Agent<Env> {
     this.providerId = env.UMPI_MODEL_PROVIDER || DEFAULT_PROVIDER;
     this.modelId = env.UMPI_MODEL_ID || DEFAULT_MODEL;
     this.timezone = env.UMPI_TIMEZONE || "UTC";
+    if (env.OBSY_LIBRARY && env.UMPI_OBSY_PREFIX !== undefined) {
+      try { this.obsyVault = new ObsyVaultClient(env.OBSY_LIBRARY, env.UMPI_OBSY_PREFIX, DEFAULT_VAULT_SCOPE); }
+      catch { this.obsyIssue = "Invalid UMPI_OBSY_PREFIX; use an empty prefix or one that ends in /"; }
+    }
     this.proactive = new ProactiveStore(this.store, this.timezone);
     this.planning = new PlanningStore(this.proactive, this.timezone);
     this.situation = new SituationStore(this.store.db, this.timezone);
@@ -387,6 +397,8 @@ export class Assistant extends Agent<Env> {
   }
 
   private vaultClient(): VaultPlanningClient | undefined {
+    // A configured obsy vault replaces the container; an invalid one disables notes rather than fall back.
+    if (this.obsyVault || this.obsyIssue) return this.obsyVault;
     const revision = this.planning.vaultRevision(), binding = this.config.VAULT_SYNC;
     if (!binding || !this.config.VAULT_ARCHIVE || !revision) return;
     const vault = binding.getByName("primary");
@@ -506,7 +518,7 @@ export class Assistant extends Agent<Env> {
       credentials: await this.credentials.list(), timezone: this.timezone,
       coreContext: { revision: core.revision, blocks: core.blocks.length, pendingSource: core.blocks.filter(block => block.pendingSource).length },
       schedule: this.proactive.status(),
-      planning: this.planningRuntime.status(),
+      planning: { ...this.planningRuntime.status(), backend: this.obsyVault ? "obsy" : this.obsyIssue ? null : "vault-sync", ...(this.obsyIssue ? { backendIssue: this.obsyIssue } : {}) },
       mail: this.mailRuntime.status(),
       situation: this.situation.status(),
       brief: this.brief.status(),

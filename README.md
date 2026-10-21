@@ -27,7 +27,7 @@ flowchart LR
     Control[Protected control API] --> Worker
     Worker --> Assistant[Assistant Durable Object and SQLite]
     Assistant --> Mac[Approved Mac executor]
-    Assistant --> Vault[VaultSync container]
+    Assistant --> Vault[obsy vault in R2]
     Assistant --> Coding[CodingWorker container]
     Assistant --> Browser[Browser Run]
     Assistant --> R2[Encrypted R2 artifacts]
@@ -43,7 +43,7 @@ The Worker exposes public informational pages at `/`, `/privacy`, and `/terms`. 
 - macOS for the native executor and Aside integration.
 - A Cloudflare Workers Paid account for a hosted installation that uses Durable Objects, Containers, R2, or Browser Run.
 - A Telegram bot for the primary hosted chat interface.
-- Optional: a Google Cloud OAuth registration for separate read-only Calendar or Gmail grants, Obsidian Sync for daily-note integration, and Xcode/XcodeGen for the iPhone companion.
+- Optional: a Google Cloud OAuth registration for separate read-only Calendar or Gmail grants, an [obsy](vendor/obsy/README.md) vault in R2 (or Obsidian Sync through the older container) for daily-note integration, and Xcode/XcodeGen for the iPhone companion.
 
 Provider subscriptions, Cloudflare resources, Telegram, Obsidian, Apple, and other integrations retain their own limits and costs.
 

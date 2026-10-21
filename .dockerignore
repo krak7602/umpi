@@ -2,6 +2,9 @@
 **
 !package.json
 !package-lock.json
+!vendor/
+!vendor/obsy/
+!vendor/obsy/*.tgz
 !src/
 !src/shared/
 !src/shared/*.ts
