@@ -16,7 +16,6 @@ export interface VaultPlanningResult {
   revision: string; checkedAt: string; issue?: string;
 }
 export const MAX_NOTE_BYTES = 262_144;
-export const MAX_WORKSPACE_BYTES = 32 * 1024 * 1024;
 export const DEFAULT_VAULT_SCOPE: VaultPlanningScope = { journalDirectory: "journals", templatePath: "templates/date-template.md" };
 
 /** A content revision distinguishes an absent note from every possible note body. */

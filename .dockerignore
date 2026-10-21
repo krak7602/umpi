@@ -8,13 +8,7 @@
 !src/
 !src/shared/
 !src/shared/*.ts
-!src/vault/
-!src/vault/*.ts
 !containers/
-!containers/vault-sync/
-!containers/vault-sync/Dockerfile
-!containers/vault-sync/package.json
-!containers/vault-sync/package-lock.json
 !src/coding/
 !src/coding/rpc.ts
 !src/coding/shell.ts

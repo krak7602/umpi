@@ -11,7 +11,7 @@ export function formatPlanningStatus(runtime: PlanningRuntime): string {
   const { store } = runtime, settings = store.settings(), plan = store.plan(runtime.today());
   const pending = store.pending();
   return `Daily preparation: ${settings.enabled ? "on" : "paused"} · ${settings.time} ${store.timezone}.\n`
-    + `Private workspace: ${runtime.available() ? "configured; live sync is checked during preparation" : "not connected"}.\n`
+    + `Note vault: ${runtime.available() ? "configured" : "not configured"}.\n`
     + `Today: ${plan ? plan.status === "synced" ? "upload confirmed" : plan.status : "not requested"}.\n`
     + (pending ? "A retained upload needs review; no replacement plan will bypass it.\n" : "")
     + (store.proactive.settings().enabled ? "Prepare today queues a quiet background review; it is not a completed note." : "Follow-through is paused. Open /schedule to enable background reviews before preparing today.");

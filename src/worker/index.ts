@@ -25,7 +25,7 @@ import { guardBackgroundTools } from "./proactive-runtime.js";
 import { scheduleRequest } from "./proactive-http.js";
 import { enqueueScheduleControls, handleScheduleCallback, formatScheduleStatus } from "./proactive-telegram.js";
 import { Buffer } from "node:buffer";
-import { DEFAULT_VAULT_SCOPE, MAX_WORKSPACE_BYTES, parseVaultScope } from "../shared/vault-planning.js";
+import { DEFAULT_VAULT_SCOPE } from "../shared/vault-planning.js";
 import { PlanningStore } from "./planning-store.js";
 import { PlanningRuntime, type VaultPlanningClient } from "./planning-runtime.js";
 import { planningTools, guardPlanningReviewTools, PLANNING_INSTRUCTIONS } from "./planning-tools.js";
@@ -43,7 +43,6 @@ import { briefTools, guardBriefReviewTools, BRIEF_INSTRUCTIONS } from "./brief-t
 import { briefRequest, enqueueBriefControls, formatBriefStatus, handleBriefCallback } from "./brief-telegram.js";
 import { AlertRuntime, AlertStore, alertRequest } from "./alerts.js";
 import { JournalRuntime, JournalStore, journalRequest, journalTools, JOURNAL_INSTRUCTIONS } from "./journal.js";
-import { VaultSync } from "./vault-sync.js";
 import { ObsyVaultClient } from "./obsy-vault.js";
 import { publicPage } from "./public-pages.js";
 import { CodingStore } from "./coding-store.js";
@@ -69,7 +68,7 @@ import { downloadTelegramVoice } from "./telegram-voice.js";
 import { SUBSCRIPTION_TRANSCRIPTION_MODEL, transcribeSubscriptionAudio } from "./subscription-transcription.js";
 import { MAX_VOICE_NOTE_BYTES, MAX_VOICE_NOTE_SECONDS, VoiceNoteError, type TelegramInboxDelivery } from "../shared/voice-note.js";
 
-export { VaultSync, CodingWorker, BrowserWorker };
+export { CodingWorker, BrowserWorker };
 
 registerBunOAuthFlows();
 /** Owner-facing conversations; subagents inherit it, coding and browser runs set their own. */
@@ -79,9 +78,7 @@ const BACKGROUND_THINKING_LEVEL = "medium";
 
 export interface Env extends TelegramConfig, CompanionPushConfig {
   ASSISTANT: DurableObjectNamespace<Assistant>;
-  VAULT_SYNC?: DurableObjectNamespace<VaultSync>;
-  VAULT_ARCHIVE?: R2Bucket;
-  /** The obsy vault bucket. With UMPI_OBSY_PREFIX set, daily notes use it instead of the VaultSync container. */
+  /** The obsy vault bucket. With UMPI_OBSY_PREFIX set, daily notes are read and written there. */
   OBSY_LIBRARY?: R2Bucket;
   UMPI_OBSY_PREFIX?: string;
   CODING_WORKER?: { getByName(name: string): CodingCloudClient };
@@ -397,12 +394,7 @@ export class Assistant extends Agent<Env> {
   }
 
   private vaultClient(): VaultPlanningClient | undefined {
-    // A configured obsy vault replaces the container; an invalid one disables notes rather than fall back.
-    if (this.obsyVault || this.obsyIssue) return this.obsyVault;
-    const revision = this.planning.vaultRevision(), binding = this.config.VAULT_SYNC;
-    if (!binding || !this.config.VAULT_ARCHIVE || !revision) return;
-    const vault = binding.getByName("primary");
-    return { getSnapshot: day => vault.getSnapshot(day, revision), applyNote: intent => vault.applyNote(intent, revision) };
+    return this.obsyVault;
   }
 
   async syncMainSessionModels(): Promise<void> {
@@ -518,7 +510,7 @@ export class Assistant extends Agent<Env> {
       credentials: await this.credentials.list(), timezone: this.timezone,
       coreContext: { revision: core.revision, blocks: core.blocks.length, pendingSource: core.blocks.filter(block => block.pendingSource).length },
       schedule: this.proactive.status(),
-      planning: { ...this.planningRuntime.status(), backend: this.obsyVault ? "obsy" : this.obsyIssue ? null : "vault-sync", ...(this.obsyIssue ? { backendIssue: this.obsyIssue } : {}) },
+      planning: { ...this.planningRuntime.status(), backend: this.obsyVault ? "obsy" : null, ...(this.obsyIssue ? { backendIssue: this.obsyIssue } : {}) },
       mail: this.mailRuntime.status(),
       situation: this.situation.status(),
       brief: this.brief.status(),
@@ -554,27 +546,6 @@ export class Assistant extends Agent<Env> {
       if (browser) { browser.headers.set("cache-control", "no-store"); return browser; }
       const subagent = await subagentRequest(request, this.subagents);
       if (subagent) { subagent.headers.set("cache-control", "no-store"); return subagent; }
-      if (path === "/api/planning/workspace" && ["GET", "PUT"].includes(request.method)) {
-        if (!this.config.VAULT_SYNC || !this.config.VAULT_ARCHIVE) throw new StateError(503, "Configure the private vault container and archive bindings first");
-        const vault = this.config.VAULT_SYNC.getByName("primary");
-        if (request.method === "GET") return Response.json(await vault.configuration());
-        const length = Number(request.headers.get("content-length"));
-        if (!request.body || request.headers.get("content-type") !== "application/gzip" || !Number.isSafeInteger(length) || length < 1 || length > MAX_WORKSPACE_BYTES) throw new InputError("Provide a bounded private workspace gzip archive with its exact Content-Length");
-        const expected = request.headers.get("x-umpi-expected-revision") ?? "";
-        if (!/^\d+$/.test(expected) || !Number.isSafeInteger(Number(expected))) throw new InputError("A current vault provisioning revision is required");
-        let scope;
-        try { scope = parseVaultScope(JSON.parse(Buffer.from(request.headers.get("x-umpi-vault-scope") ?? "", "base64url").toString("utf8"))); }
-        catch { throw new InputError("A valid explicit vault scope is required"); }
-        const currentWorkspace = await vault.configuration();
-        if (currentWorkspace.revision !== Number(expected)) throw new StateError(409, "Vault provisioning changed; inspect its current revision");
-        await this.coordinator.wake();
-        if (this.planning.pending()) throw new StateError(409, "Review the retained note write before replacing its workspace");
-        const settings = this.planning.settings();
-        this.planning.configure({ expectedVersion: settings.version, enabled: false, time: settings.time });
-        const configured = await vault.provision(request.body, scope, Number(expected), length);
-        this.planning.authorizeVault(configured.revision);
-        return Response.json({ ...configured, scheduling: "paused", syncVerified: false });
-      }
       const planning = await planningRequest(request, this.planningRuntime, () => this.coordinator.wake(), () => this.session("control"));
       if (planning) return planning;
       const mail = await mailRequest(request, this.mailRuntime, () => this.store.session("telegram"));
@@ -837,7 +808,7 @@ export default {
       await authorize(request, env, "forward-device");
       // Do not expose Agent RPC, WebSockets, arbitrary object names, or SDK control headers.
       const headers = new Headers();
-      for (const key of ["authorization", "content-type", "content-length", "x-telegram-bot-api-secret-token", "x-umpi-expected-revision", "x-umpi-vault-scope", "x-umpi-coding-cwd", "content-encoding"]) {
+      for (const key of ["authorization", "content-type", "content-length", "x-telegram-bot-api-secret-token", "x-umpi-coding-cwd", "content-encoding"]) {
         const value = request.headers.get(key); if (value !== null) headers.set(key, value);
       }
       const forwarded = new Request(request.url, { method: request.method, headers, body: request.body });

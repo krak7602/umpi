@@ -43,7 +43,7 @@ The Worker exposes public informational pages at `/`, `/privacy`, and `/terms`. 
 - macOS for the native executor and Aside integration.
 - A Cloudflare Workers Paid account for a hosted installation that uses Durable Objects, Containers, R2, or Browser Run.
 - A Telegram bot for the primary hosted chat interface.
-- Optional: a Google Cloud OAuth registration for separate read-only Calendar or Gmail grants, an [obsy](vendor/obsy/README.md) vault in R2 (or Obsidian Sync through the older container) for daily-note integration, and Xcode/XcodeGen for the iPhone companion.
+- Optional: a Google Cloud OAuth registration for separate read-only Calendar or Gmail grants, an [obsy](vendor/obsy/README.md) vault in R2 for daily-note integration, and Xcode/XcodeGen for the iPhone companion.
 
 Provider subscriptions, Cloudflare resources, Telegram, Obsidian, Apple, and other integrations retain their own limits and costs.
 
@@ -109,4 +109,4 @@ npm run build
 
 ## License
 
-Project-authored source and documentation are available under the [MIT License](LICENSE). Third-party data and dependencies retain separate terms. In particular, the Public Suffix List files remain MPL-2.0, and the optional `obsidian-headless` package declares itself `UNLICENSED`. See [third-party notices](THIRD_PARTY_NOTICES.md).
+Project-authored source and documentation are available under the [MIT License](LICENSE). Third-party data and dependencies retain separate terms. In particular, the Public Suffix List files remain MPL-2.0. See [third-party notices](THIRD_PARTY_NOTICES.md).

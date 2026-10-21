@@ -51,7 +51,8 @@ export class PlanningStore {
     this.db = proactive.db;
     for (const sql of [
       "CREATE TABLE IF NOT EXISTS umpi_planning_settings (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL)",
-      "CREATE TABLE IF NOT EXISTS umpi_vault_authorization (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL)",
+      // The container workspace's provisioning receipt; notes now live in the obsy vault.
+      "DROP TABLE IF EXISTS umpi_vault_authorization",
       "CREATE TABLE IF NOT EXISTS umpi_daily_briefs (day TEXT PRIMARY KEY, data TEXT NOT NULL)",
       "CREATE TABLE IF NOT EXISTS umpi_daily_plans (day TEXT PRIMARY KEY, status TEXT NOT NULL, commitment_id TEXT UNIQUE, data TEXT NOT NULL)",
       "CREATE TABLE IF NOT EXISTS umpi_daily_writes (id TEXT PRIMARY KEY, day TEXT NOT NULL, status TEXT NOT NULL, data TEXT NOT NULL)",
@@ -63,11 +64,6 @@ export class PlanningStore {
     return this.db.all<{ data: string }>(sql, ...bindings).map(row => JSON.parse(row.data) as T);
   }
   settings(): PlanningSettings { return this.rows<PlanningSettings>("SELECT data FROM umpi_planning_settings WHERE id=1")[0]!; }
-  vaultRevision(): number { return this.db.all<{ revision: number }>("SELECT revision FROM umpi_vault_authorization WHERE id=1")[0]?.revision ?? 0; }
-  authorizeVault(revision: number): void {
-    if (!Number.isSafeInteger(revision) || revision < 1) throw new InputError("Invalid private vault provisioning receipt");
-    this.db.all("INSERT INTO umpi_vault_authorization VALUES (1,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision", revision);
-  }
   plan(value: string): DailyPlanRecord | undefined { return this.rows<DailyPlanRecord>("SELECT data FROM umpi_daily_plans WHERE day=?", day(value))[0]; }
   brief(value: string): DailyBrief | null { return this.rows<DailyBrief>("SELECT data FROM umpi_daily_briefs WHERE day=?", day(value))[0] ?? null; }
   intent(id: string): DailyWriteIntent | undefined { return this.rows<DailyWriteIntent>("SELECT data FROM umpi_daily_writes WHERE id=?", id)[0]; }
@@ -162,7 +158,7 @@ export class PlanningStore {
       }
       if (!ready || this.pending()) {
         const previous = this.plan(today);
-        this.save({ ...previous, day: today, version: (previous?.version ?? 0) + 1, attempt: previous?.attempt ?? 0, automatic: true, scheduled: true, settingsVersion: this.settings().version, status: "blocked", commitmentId: previous?.commitmentId ?? null, applied: previous?.applied ?? [], issue: !ready ? "Connect the private Obsidian workspace before enabling daily preparation" : "An earlier upload remains unconfirmed; inspect the retained write", updatedAt: iso(now) });
+        this.save({ ...previous, day: today, version: (previous?.version ?? 0) + 1, attempt: previous?.attempt ?? 0, automatic: true, scheduled: true, settingsVersion: this.settings().version, status: "blocked", commitmentId: previous?.commitmentId ?? null, applied: previous?.applied ?? [], issue: !ready ? "Configure the obsy vault binding before enabling daily preparation" : "An earlier upload remains unconfirmed; inspect the retained write", updatedAt: iso(now) });
         return;
       }
       try {
