@@ -408,6 +408,7 @@ test("one missing background session does not starve available channel work or d
 test("a retry policy re-runs a failed event review at its interval, at most maxAttempts times", t => {
   const f = fixture(t); f.enable();
   f.proactive.createCommitment({ ...responsibility(), retry: { everyMinutes: 60, maxAttempts: 2 } }, "control", "foreground-control");
+  const exhausted: string[] = []; f.proactive.onRetryExhausted = (commitment, reason) => exhausted.push(`${commitment.id}: ${reason}`);
   f.proactive.triggerEvent("commitment-1", BASE); f.drive();
   const fail = (): string => { const run = f.proactive.runForSession(sessions.control)!; f.owner.settle(run.operationId, "Provider failure", true); f.drive(); return run.id; };
   const first = fail();
@@ -417,7 +418,8 @@ test("a retry policy re-runs a failed event review at its interval, at most maxA
   f.time(BASE + 60 * 60_000); f.drive(); assert.ok(f.proactive.runForSession(sessions.control));
   fail(); assert.equal(f.proactive.commitment("commitment-1")?.failedAttempts, 2);
   f.time(BASE + 120 * 60_000); f.drive(); const last = fail();
-  assert.equal(f.proactive.run(last)?.note, "Turn ended without a structured proactive review");
+  assert.equal(f.proactive.run(last)?.note, "Model turn failed: Provider failure");
+  assert.deepEqual(exhausted, ["commitment-1: Model turn failed: Provider failure"]);
   assert.equal(f.proactive.commitment("commitment-1")?.failedAttempts, 0);
   f.time(BASE + 10 * 60 * 60_000); f.drive(); assert.equal(f.proactive.runForSession(sessions.control), undefined);
   assert.equal(f.proactive.status().runs.length, 3);

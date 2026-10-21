@@ -333,3 +333,26 @@ test("sync rejects failure responses without disclosing bodies or retrying", asy
     assert.equal(requests, 1);
   }
 });
+
+test("the API-key fallback is used only while the subscription is limited, and a subscription 429 marks the limit", async t => {
+  const credentials = new InMemoryCredentialStore();
+  await credentials.modify("anthropic", async () => claude());
+  let active = false, limited = 0, used = 0, key: string | undefined = "sk-ant-api03-synthetic-fallback-key-0000";
+  const models = createAssistantModels(credentials, { key: () => key, active: () => active, limited: () => { limited++; active = true; }, used: () => { used++; } });
+  assert.equal((await models.getAuth("anthropic"))?.auth.apiKey, "sk-ant-oat01-synthetic-access");
+  active = true;
+  assert.equal((await models.getAuth("anthropic"))?.auth.apiKey, "sk-ant-api03-synthetic-fallback-key-0000"); assert.equal(used, 1);
+  key = "not-an-anthropic-key";
+  assert.equal((await models.getAuth("anthropic"))?.auth.apiKey, "sk-ant-oat01-synthetic-access");
+  active = false; key = "sk-ant-api03-synthetic-fallback-key-0000";
+
+  const realFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = realFetch; });
+  globalThis.fetch = async () => new Response(JSON.stringify({ type: "error", error: { type: "rate_limit_error", message: "This request would exceed your rate limit." } }),
+    { status: 429, headers: { "content-type": "application/json", "retry-after": "0" } });
+  const model = selectAssistantModel(models, DEFAULT_PROVIDER, DEFAULT_MODEL);
+  const message = await models.stream(model, { messages: [{ role: "user", content: "hello", timestamp: Date.now() }] }, { maxRetries: 0 } as never).result();
+  assert.equal(message.stopReason, "error");
+  await delay(10);
+  assert.equal(limited, 1);
+});

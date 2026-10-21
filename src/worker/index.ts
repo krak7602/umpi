@@ -67,6 +67,8 @@ import { TelegramInbox } from "./telegram-inbox.js";
 import { downloadTelegramVoice } from "./telegram-voice.js";
 import { SUBSCRIPTION_TRANSCRIPTION_MODEL, transcribeSubscriptionAudio } from "./subscription-transcription.js";
 import { MAX_VOICE_NOTE_BYTES, MAX_VOICE_NOTE_SECONDS, VoiceNoteError, type TelegramInboxDelivery } from "../shared/voice-note.js";
+import { classifyModelError, describeModelFailure, type ModelFailure } from "../model/failure.js";
+import { ModelFallback } from "./model-fallback.js";
 
 export { CodingWorker, BrowserWorker };
 
@@ -94,6 +96,8 @@ export interface Env extends TelegramConfig, CompanionPushConfig {
   UMPI_MODEL_PROVIDER?: string;
   UMPI_MODEL_ID?: string;
   UMPI_TIMEZONE?: string;
+  /** Optional Anthropic API key, used only while the Claude subscription is at its limit. */
+  UMPI_ANTHROPIC_FALLBACK_KEY?: string;
 }
 
 class Coordinator extends LifecycleCapability {
@@ -160,7 +164,8 @@ class Coordinator extends LifecycleCapability {
             this.assistant.modelIssue = undefined;
             store.settle(op.id, (answer.text ?? "").slice(0, 65_536));
           } else {
-            this.assistant.modelIssue = "The last model request failed. Check subscription/model compatibility and provider network access; no API-key fallback is enabled.";
+            const failure = classifyModelError(await this.assistant.lastModelError(op.sessionId) ?? answer.reason);
+            this.assistant.recordModelFailure(failure);
             store.settle(op.id, `${this.assistant.modelIssue} Any already-created jobs or reminders remain available in their status lists.`, true);
           }
           await this.wake();
@@ -235,6 +240,8 @@ export class Assistant extends Agent<Env> {
   private readonly obsyVault?: ObsyVaultClient;
   private readonly obsyIssue?: string;
   modelIssue?: string;
+  lastModelFailure?: ModelFailure & { at: string };
+  readonly modelFallback: ModelFallback;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -268,7 +275,18 @@ export class Assistant extends Agent<Env> {
       systemOwned, (events, now) => this.journal.calendarEvents(events, now));
     this.coding = new CodingStore(this.store);
     this.browser = new BrowserStore(this.store);
-    const models = createAssistantModels(this.credentials);
+    let fallbackZone = this.timezone;
+    try { new Intl.DateTimeFormat("en-US", { timeZone: fallbackZone }).format(); } catch { fallbackZone = "UTC"; }
+    this.modelFallback = new ModelFallback(this.store.db, () => env.UMPI_ANTHROPIC_FALLBACK_KEY, fallbackZone, (groupId, text) => this.store.enqueue(groupId, "telegram", text));
+    this.proactive.onRetryExhausted = (commitment, reason, now) => {
+      const day = new Intl.DateTimeFormat("en-CA", { timeZone: fallbackZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+      const label = commitment.id === "morning-brief" ? "Today's morning brief" : commitment.id.startsWith("daily-") ? "Today's daily-note preparation" : `"${commitment.purpose.slice(0, 80)}"`;
+      const cause = reason.replace(/^Model turn failed: (The last model request failed\. )?/, "").split(": ")[0];
+      const hint = commitment.id === "morning-brief" ? " Use /brief to try again." : commitment.id.startsWith("daily-") ? " Use /plan to try again." : "";
+      // At most one notice per job per local day, so an outage cannot flood the chat.
+      this.store.enqueue(`notice:retry-exhausted:${commitment.id}:${day}`, "telegram", `${label} did not go through after its retries. Cause: ${cause}.${hint}`);
+    };
+    const models = createAssistantModels(this.credentials, this.modelFallback);
     let model: PiModel | undefined;
     try {
       model = selectAssistantModel(models, this.providerId, this.modelId);
@@ -414,6 +432,23 @@ export class Assistant extends Agent<Env> {
     }
   }
 
+  /** The provider's own error text for the session's last failed model response, if Pi recorded one. */
+  async lastModelError(session: string): Promise<string | undefined> {
+    try {
+      const entries = await this.harness.messages({ session });
+      for (let index = entries.length - 1; index >= Math.max(0, entries.length - 8); index--) {
+        for (const message of [...(entries[index]!.model ?? [])].reverse()) {
+          if (message.role === "assistant" && message.stopReason === "error") return message.errorMessage;
+          if (message.role === "assistant") return undefined;
+        }
+      }
+    } catch { /* The generic reason still applies. */ }
+    return undefined;
+  }
+  recordModelFailure(failure: ModelFailure): void {
+    this.lastModelFailure = { ...failure, at: new Date().toISOString() };
+    this.modelIssue = `The last model request failed. ${describeModelFailure(failure)}`;
+  }
   async modelReady(): Promise<boolean> {
     if (this.configurationIssue) { this.modelIssue = this.configurationIssue; return false; }
     const credential = await this.credentials.read(this.providerId);
@@ -506,7 +541,7 @@ export class Assistant extends Agent<Env> {
     const configured = await this.modelReady();
     const core = await readCoreContext(await this.harness.pi(), BACKGROUND_CONTEXT);
     return {
-      model: { providerId: this.providerId, modelId: this.modelId, configured, issue: this.modelIssue ?? null },
+      model: { providerId: this.providerId, modelId: this.modelId, configured, issue: this.modelIssue ?? null, lastFailure: this.lastModelFailure ?? null, fallback: this.modelFallback.status() },
       credentials: await this.credentials.list(), timezone: this.timezone,
       coreContext: { revision: core.revision, blocks: core.blocks.length, pendingSource: core.blocks.filter(block => block.pendingSource).length },
       schedule: this.proactive.status(),

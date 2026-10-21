@@ -40,6 +40,16 @@ Login requires a terminal and browser approval. It stores an independent umpi cr
 
 A valid coordinator-owned login does not need repeated login or sync on every startup. Read the [refresh ownership rules](../subsystems/model-auth.md#independent-storage-and-explicit-handoff) before moving or replacing an installation. `openai` and `openai-codex` remain alternative logins; `openai-codex` is also the separate voice-transcription grant. None is a substitute label for another provider. To select a provider other than the default, set `UMPI_MODEL_PROVIDER` and `UMPI_MODEL_ID` in private configuration before the handoff.
 
+#### Add the optional API-key fallback
+
+The [fallback contract](../subsystems/model-auth.md#limit-only-api-key-fallback) uses the key only while the Claude subscription is at its limit. Create a key in the Anthropic Console, set a spend limit on its workspace, and install it through Wrangler's hidden prompt, never as an argument:
+
+```sh
+npx wrangler secret put UMPI_ANTHROPIC_FALLBACK_KEY --config wrangler.local.jsonc
+```
+
+Check `model.fallback.configured` in `GET /api/status`. Remove the secret to turn the fallback off. When a request fails, `model.lastFailure.kind` says why; `limit` means the plan's rate or usage limit.
+
 ### Start and provision the local Worker
 
 In one terminal:
@@ -745,3 +755,4 @@ Publish reviewed Git content, not an archive of the working directory: ignored l
 - 2026-10-19: Added default-check operation.
 - 2026-10-19: Added journal-write operation and the Obsidian Sync billing failure mode.
 - 2026-10-21: Added the obsy vault configuration and switch procedure, then removed the Obsidian Headless client and container provisioning steps.
+- 2026-10-22: Added the optional API-key fallback secret and failure causes in status.

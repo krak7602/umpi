@@ -100,6 +100,8 @@ const WAKE_FIELDS = ["purpose", "dueAt", "expiresAt", "repeatEveryMinutes"];
 /** Operational state only: all claims, reports, and outbox writes share the owner's SQLite transaction. */
 export class ProactiveStore {
   readonly db: Database;
+  /** Called when a commitment with a retry policy stops retrying a failed review. */
+  onRetryExhausted?: (commitment: Commitment, reason: string, now: number) => void;
   private readonly clock: Intl.DateTimeFormat;
   constructor(readonly owner: Store, readonly timezone: string) {
     this.db = owner.db;
@@ -367,6 +369,7 @@ export class ProactiveStore {
     if (due === undefined) {
       // An exhausted budget starts fresh at the next scheduled occurrence.
       if (attempts) this.writeCommitment({ ...commitment, failedAttempts: 0 });
+      if (policy) this.onRetryExhausted?.(commitment, reason, now);
       return false;
     }
     this.writeCommitment({ ...commitment, failedAttempts: attempts + 1 });
@@ -408,8 +411,10 @@ export class ProactiveStore {
       const op = this.owner.operation(run.operationId);
       if (op?.status === "done" || op?.status === "failed" || !op) {
         if (this.recoverInterrupted(run, now)) continue;
-        if (this.retry(run, "failed", "Turn ended without a structured proactive review", now)) continue;
-        this.invalidateRun(run, "failed", "Turn ended without a structured proactive review");
+        // A failed model turn records its cause; a completed turn simply did not report.
+        const reason = op?.status === "failed" && op.error ? `Model turn failed: ${op.error.replace(/ Any already-created.*$/s, "").slice(0, 300)}` : "Turn ended without a structured proactive review";
+        if (this.retry(run, "failed", reason, now)) continue;
+        this.invalidateRun(run, "failed", reason);
         const wake = run.wakeupId ? this.wakeup(run.wakeupId) : undefined;
         if (wake?.status === "running") this.writeWakeup({ ...wake, version: wake.version + 1, status: "cancelled" });
       } else if (!this.current(run, now)) {
