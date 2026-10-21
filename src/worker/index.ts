@@ -38,6 +38,8 @@ import { mailRequest } from "./mail-http.js";
 import { enqueueMailControls, handleMailCallback, formatMailStatus } from "./mail-telegram.js";
 import { SituationStore } from "./situation-store.js";
 import { situationTools, SITUATION_INSTRUCTIONS } from "./situation-tools.js";
+import { ActivityStore } from "./activity-store.js";
+import { activityTools, ACTIVITY_INSTRUCTIONS } from "./activity-tools.js";
 import { BriefStore } from "./brief-store.js";
 import { briefTools, guardBriefReviewTools, BRIEF_INSTRUCTIONS } from "./brief-tools.js";
 import { briefRequest, enqueueBriefControls, formatBriefStatus, handleBriefCallback } from "./brief-telegram.js";
@@ -219,6 +221,7 @@ export class Assistant extends Agent<Env> {
   readonly mail: MailStore;
   readonly mailRuntime: MailRuntime;
   readonly situation: SituationStore;
+  readonly activity: ActivityStore;
   readonly brief: BriefStore;
   readonly alerts: AlertRuntime;
   readonly journal: JournalRuntime;
@@ -263,6 +266,7 @@ export class Assistant extends Agent<Env> {
     this.proactive = new ProactiveStore(this.store, this.timezone);
     this.planning = new PlanningStore(this.proactive, this.timezone);
     this.situation = new SituationStore(this.store.db, this.timezone);
+    this.activity = new ActivityStore(this.store.db);
     this.mail = new MailStore(this.proactive, this.situation);
     this.brief = new BriefStore(this.proactive);
     const systemOwned = (id: string) => this.mail.ownsCommitment(id) || this.brief.ownsCommitment(id) || this.planning.ownsCommitment(id);
@@ -338,11 +342,11 @@ export class Assistant extends Agent<Env> {
       track: work => this.lifecycle.trackAlarmWork(work),
     });
     const browserProfile = browserExtension(this.browserRuntime);
-    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...journalTools(this.journal, id => this.store.isBackgroundSession(id)), ...delegation.tools ?? []];
+    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...activityTools(this.store, this.activity, this.timezone), ...journalTools(this.journal, id => this.store.isBackgroundSession(id)), ...delegation.tools ?? []];
     const guardedProactiveTools = guardBriefReviewTools(guardMailReviewTools(guardPlanningReviewTools(proactiveTools(this.proactive, () => this.coordinator.wake()), this.planningRuntime), this.mailRuntime), this.brief);
-    const briefSources = { brief: this.brief, situation: this.situation, mail: this.mail, planning: this.planningRuntime, calendarCredentials: () => this.config.UMPI_CALENDAR_CREDENTIALS };
+    const briefSources = { brief: this.brief, situation: this.situation, mail: this.mail, planning: this.planningRuntime, calendarCredentials: () => this.config.UMPI_CALENDAR_CREDENTIALS, activity: this.activity };
     const umpiExtension: Extension = { name: "umpi", tools: [...guardBackgroundTools(foregroundTools, this.proactive), ...guardedProactiveTools, ...planningTools(this.planningRuntime), ...mailTools(this.mailRuntime), ...briefTools(briefSources)],
-      sections: [{ key: "umpi", tag: false, render: () => `${ASSISTANT_INSTRUCTIONS}\n${COMPANION_INSTRUCTIONS}\n${PROACTIVE_INSTRUCTIONS}\n${PLANNING_INSTRUCTIONS}\n${MAIL_INSTRUCTIONS}\n${SITUATION_INSTRUCTIONS}\n${JOURNAL_INSTRUCTIONS}\n${BRIEF_INSTRUCTIONS}\n${CODING_OWNER_INSTRUCTIONS}\n${BROWSER_OWNER_INSTRUCTIONS}\n${SUBAGENT_INSTRUCTIONS}\nOwner timezone: ${this.timezone}.` }, coreContextSection, { key: "response-style", tag: false, render: () => RESPONSE_STYLE_INSTRUCTIONS }] };
+      sections: [{ key: "umpi", tag: false, render: () => `${ASSISTANT_INSTRUCTIONS}\n${COMPANION_INSTRUCTIONS}\n${PROACTIVE_INSTRUCTIONS}\n${PLANNING_INSTRUCTIONS}\n${MAIL_INSTRUCTIONS}\n${SITUATION_INSTRUCTIONS}\n${ACTIVITY_INSTRUCTIONS}\n${JOURNAL_INSTRUCTIONS}\n${BRIEF_INSTRUCTIONS}\n${CODING_OWNER_INSTRUCTIONS}\n${BROWSER_OWNER_INSTRUCTIONS}\n${SUBAGENT_INSTRUCTIONS}\nOwner timezone: ${this.timezone}.` }, coreContextSection, { key: "response-style", tag: false, render: () => RESPONSE_STYLE_INSTRUCTIONS }] };
     registry.install(umpiExtension); registry.install(codingProfile); registry.install(browserProfile);
     registry.install(delegation); registry.install(assistantChild); registry.install(codingChild);
     this.harness = new PiHarness({
@@ -548,6 +552,7 @@ export class Assistant extends Agent<Env> {
       planning: { ...this.planningRuntime.status(), backend: this.obsyVault ? "obsy" : null, ...(this.obsyIssue ? { backendIssue: this.obsyIssue } : {}) },
       mail: this.mailRuntime.status(),
       situation: this.situation.status(),
+      activity: this.activity.status(),
       brief: this.brief.status(),
       alerts: this.alerts.status(),
       journal: this.journal.status(),
@@ -673,6 +678,8 @@ export class Assistant extends Agent<Env> {
         const job = jobAction[2] === "approve" ? this.store.approveJob(jobAction[1]!, expectedVersion) : this.store.cancelJob(jobAction[1]!, expectedVersion);
         return Response.json(job);
       }
+      if (path === "/api/executor/context/poll" && request.method === "POST") return Response.json(this.activity.poll(await readJson(request)));
+      if (path === "/api/executor/context/report" && request.method === "POST") return Response.json(this.activity.report(await readJson(request, 262_144)));
       if (path === "/api/executor/poll" && request.method === "POST") {
         const body = await readJson(request);
         // Starting queued work changes the companion's authoritative Live Activity state.

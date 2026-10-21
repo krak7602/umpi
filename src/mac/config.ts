@@ -16,6 +16,8 @@ export interface MacConfig {
   pollIntervalMs: number;
   coding: { enabled: boolean };
   browser: { enabled: boolean; allSites: boolean; sites: BrowserSitePolicy[] };
+  /** Sends Aside's activity summaries and answers owner-requested Aside memory searches. Off by default. */
+  context?: { enabled: boolean };
 }
 
 export const DEFAULT_CONFIG_PATH = join(homedir(), ".config", "umpi", "mac", "config.json");
@@ -97,6 +99,8 @@ export function parseConfig(value: unknown): MacConfig {
   const browser = input.browser === undefined ? { enabled: false, allSites: false, sites: [] } : record(input.browser);
   const allSites = browser.allSites === undefined ? false : browser.allSites;
   if (typeof browser.enabled !== "boolean" || typeof allSites !== "boolean" || !Array.isArray(browser.sites) || browser.sites.length > MAX_BROWSER_SITES) throw new Error("Configure browser.enabled, browser.allSites and explicit browser site policies");
+  const context = input.context === undefined ? { enabled: false } : record(input.context);
+  if (typeof context.enabled !== "boolean") throw new Error("context.enabled must be explicitly true or false");
   const local = ["localhost", "127.0.0.1", "[::1]"].includes(new URL(coordinatorUrl(input.serverUrl)).hostname);
   const browserSites = browser.sites.map(site => parseBrowserSite(site, local));
   if (new Set(browserSites.map(site => site.siteId)).size !== browserSites.length || browser.enabled && !allSites && browserSites.length === 0) throw new Error("Enabled restricted browser execution needs distinct approved site policies");
@@ -108,6 +112,7 @@ export function parseConfig(value: unknown): MacConfig {
     pollIntervalMs,
     coding: { enabled: coding.enabled },
     browser: { enabled: browser.enabled, allSites, sites: browserSites },
+    context: { enabled: context.enabled },
   };
 }
 
@@ -166,6 +171,13 @@ function updateConfig(path: string, update: (document: Record<string, unknown>, 
 export function setCodingEnabled(path: string, enabled: boolean): MacConfig {
   return updateConfig(path, document => {
     document.coding = { ...(document.coding === undefined ? {} : record(document.coding)), enabled };
+  });
+}
+
+/** Called only while the daemon's exclusive state locks are held by the CLI. */
+export function setContextEnabled(path: string, enabled: boolean): MacConfig {
+  return updateConfig(path, document => {
+    document.context = { ...(document.context === undefined ? {} : record(document.context)), enabled };
   });
 }
 

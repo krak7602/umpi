@@ -2,7 +2,8 @@ import { parseArgs } from "node:util";
 import { resolve } from "node:path";
 import { closeSync, fstatSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { DEFAULT_CONFIG_PATH, grantBrowserSite, initializeConfig, loadConfig, privateFile, revokeBrowserSite, setBrowserEnabled, setCodingEnabled, stateDirectory } from "./config.js";
+import { DEFAULT_CONFIG_PATH, grantBrowserSite, initializeConfig, loadConfig, privateFile, revokeBrowserSite, setBrowserEnabled, setCodingEnabled, setContextEnabled, stateDirectory } from "./config.js";
+import { AsideContextLane } from "./aside-context.js";
 import { ExecutionJournal, readJournalStatus } from "./journal.js";
 import { MacExecutor } from "./daemon.js";
 import { CodingJournal, MacCodingExecutor, readCodingJournalStatus } from "./coding.js";
@@ -21,6 +22,8 @@ const HELP = `umpi Mac executor (Node 24)
   npm run mac -- browser-revoke --site ID
   npm run mac -- browser-enable [--all-sites]
   npm run mac -- browser-disable
+  npm run mac -- context-enable
+  npm run mac -- context-disable
 
 Common options:
   --config PATH             Private config (default ~/.config/umpi/mac/config.json)
@@ -62,6 +65,11 @@ supervision stops the owned foreground process group, not deliberately detached 
 new-group services. External file/network effects are not contained or rolled back.
 Coding and shell work share one execution slot. Disabling prevents new coding work;
 it does not discard accepted runs, uncertain outcomes, or pending result delivery.
+
+Context sends Aside's own 10-minute activity summaries (never raw clicks, keystrokes,
+screen text or page snapshots) to the coordinator every 5 minutes, and answers the
+owner's Aside memory searches from chat with at most 8 short results. It reads Aside
+data read-only and keeps only a cursor file in the state directory.
 
 Browser uses its own independent lane and only task-owned Aside tabs. For restricted
 execution, register the same exact site policy with the coordinator, inspect its
@@ -152,7 +160,7 @@ async function main(): Promise<void> {
   if (values.help || positionals.length === 0) { process.stdout.write(HELP); return; }
   if (positionals.length !== 1) throw new UsageError("Specify exactly one command. Use --help.");
   const command = positionals[0];
-  if (!["init", "run", "status", "resume", "coding-enable", "coding-disable", "browser-enable", "browser-disable", "browser-grant", "browser-revoke"].includes(command!)) throw new UsageError("Unknown command. Use --help.");
+  if (!["init", "run", "status", "resume", "coding-enable", "coding-disable", "browser-enable", "browser-disable", "browser-grant", "browser-revoke", "context-enable", "context-disable"].includes(command!)) throw new UsageError("Unknown command. Use --help.");
   if (values["all-sites"] !== undefined && command !== "browser-enable") throw new UsageError("--all-sites is only accepted by browser-enable");
   if (command === "browser-grant") {
     if (!values.policy || !values["policy-digest"] || values.site) throw new UsageError("browser-grant requires --policy PATH and --policy-digest SHA256");
@@ -177,7 +185,7 @@ async function main(): Promise<void> {
   const config = loadConfig(configPath);
   const directory = stateDirectory(configPath, values["state-dir"]);
   if (command === "status") {
-    process.stdout.write(`${JSON.stringify({ executorId: config.executorId, serverUrl: config.serverUrl, workspaces: config.workspaces, journal: readJournalStatus(directory), coding: { enabled: config.coding.enabled, journal: readCodingJournalStatus(directory) }, browser: { enabled: config.browser.enabled, allSites: config.browser.allSites, sites: config.browser.sites.map(site => ({ siteId: site.siteId, policyDigest: createHash("sha256").update(browserSitePolicyJson(site)).digest("hex") })), journal: readBrowserJournalStatus(directory) } }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ executorId: config.executorId, serverUrl: config.serverUrl, workspaces: config.workspaces, journal: readJournalStatus(directory), coding: { enabled: config.coding.enabled, journal: readCodingJournalStatus(directory) }, context: { enabled: config.context?.enabled ?? false }, browser: { enabled: config.browser.enabled, allSites: config.browser.allSites, sites: config.browser.sites.map(site => ({ siteId: site.siteId, policyDigest: createHash("sha256").update(browserSitePolicyJson(site)).digest("hex") })), journal: readBrowserJournalStatus(directory) } }, null, 2)}\n`);
     return;
   }
   if (command === "resume" && !values["confirm-stopped"]) throw new UsageError("Verify all prior shell, coding and browser work has stopped, then explicitly pass --confirm-stopped");
@@ -213,6 +221,14 @@ async function main(): Promise<void> {
       process.stdout.write("Local browser site approval revoked. Revoking the last site disables restricted opt-in only; prior state and pending reports were preserved.\n");
       return;
     }
+    if (command === "context-enable" || command === "context-disable") {
+      const enabled = command === "context-enable";
+      setContextEnabled(configPath, enabled);
+      process.stdout.write(enabled
+        ? "Aside context enabled: activity summaries are sent every 5 minutes, and memory searches requested from chat are answered.\n"
+        : "Aside context disabled. Nothing more is sent; summaries already sent stay in the coordinator until they expire.\n");
+      return;
+    }
     if (command === "coding-enable" || command === "coding-disable") {
       const enabled = command === "coding-enable";
       setCodingEnabled(configPath, enabled);
@@ -235,7 +251,8 @@ async function main(): Promise<void> {
     try {
       const coding = new MacCodingExecutor(config, codingJournal);
       const browser = new MacBrowserExecutor(config, browserJournal);
-      const executor = new MacExecutor(config, journal, event => process.stderr.write(`umpi-mac: ${event}\n`), coding, browser);
+      const context = config.context?.enabled ? new AsideContextLane(config.executorId, directory) : undefined;
+      const executor = new MacExecutor(config, journal, event => process.stderr.write(`umpi-mac: ${event}\n`), coding, browser, context);
       await executor.run(stop.signal);
     } finally {
       process.removeListener("SIGINT", onSignal);

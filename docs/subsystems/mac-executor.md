@@ -31,6 +31,7 @@ The journal binds both the executor ID and coordinator origin. Editing only `ser
 | `pollIntervalMs` | 100–60,000 ms; default 1,000 ms |
 | `coding.enabled` | Default `false`; permits separately approved coding-task claims, not automatic task approval |
 | `browser.enabled`, `browser.allSites`, `browser.sites` | Default disabled/false/empty; native eligibility opt-in and optional exact local grants, never task approval |
+| `context.enabled` | Default `false`; sends Aside activity summaries and answers owner memory searches ([Aside context](#aside-context)) |
 
 At the default interval, each continuously polled lane makes about 2.6 million polls per 30-day month. Enabled coding and browser lanes add their own poll streams. These are real Worker/DO requests, not a zero-cost or push-only connection. Review shared allowances. Increasing the interval reduces requests but delays assignment and cancellation.
 
@@ -64,6 +65,16 @@ Only task-owned Aside tabs are driven through fixed generated MCP operations. Or
 
 [Browser access](browser-access.md#native-aside-lane) owns native action/privacy limits; [operation](../runbooks/local-development.md#operate-browser-tasks) owns grants, opt-in, and recovery commands. Bounded public-page evidence confirms that successful completion follows owned-tab closure. Native Aside is not a network sandbox, and enabling the lane does not reconfigure the Aside installation or unrelated user tabs.
 
+### Aside context
+
+The context lane is an opt-in, read-only bridge to Aside's own derived data. `context-enable` and `context-disable` change it while the daemon is stopped. It runs no model-supplied command and executes nothing on approval. Each tick:
+
+- It polls `/api/executor/context/poll` for owner memory lookups, at most two per tick. It runs `aside memory search --json -n 8 -- <query>` with a fixed argument list, no shell, a 15-second limit, and an environment without Umpi or token variables. It reports at most 8 results of path, title, a 600-character excerpt, date and score.
+- Every 5 minutes it reads new completed rows from `context_awareness_summaries` in `~/.aside/u/0/context-awareness/ledger.db`, opened read-only. It sends at most 24 per report: window, title, description, a body cut to 3,000 characters, apps and sites. It never selects the raw events table (clicks, typed text, screen text, page snapshots), which stays on the Mac.
+- Its only state is `aside-context.json`, a cursor and last-send time. The cursor advances only after the coordinator accepts a batch.
+
+A failed Aside read is skipped until the next tick and never stops shell, coding or browser work. The Aside ledger is an internal Aside file, so a future Aside update can change it; the reader then sends nothing. The lane adds its own poll stream, like the other lanes. The [runtime contract](assistant-runtime.md#aside-context) owns how the coordinator stores and uses the data.
+
 ### Evidence
 
 [Core verification](../learning/assistant-core-verification.md) includes a real command that finished during local Worker downtime, later delivered its saved result, and did not repeat its file write after reconnect. Hosted verification also exercised pending approval, stale-version rejection, a real Mac command, a model completion reply, and executor restart with the same acknowledged completion. Regression tests cover real process groups, deadline handling, crash recovery, conflicting assignments, and private storage boundaries. These checks do not establish a sandbox or prove every external command is idempotent.
@@ -74,3 +85,4 @@ Only task-owned Aside tabs are driven through fixed generated MCP operations. Or
 - 2026-10-13: Added opt-in private-copy coding execution and preserved run history. Documented foreground-group-only native supervision rather than claiming sandbox or detached-descendant containment.
 - 2026-10-13: Added an independent opt-in Aside lane, exact site grants, metadata-only status, and truthful original-closure receipts. Kept unknown descendants and lost borrowed-tab recovery under explicit owner reconciliation.
 - 2026-10-14: Replaced installed-executor rollout history with the reusable browser opt-in, ownership, and stop boundary.
+- 2026-10-22: Added the opt-in Aside context lane: activity summaries every 5 minutes and owner-requested memory searches, with raw activity kept on the Mac.

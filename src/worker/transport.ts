@@ -208,7 +208,7 @@ export async function authorize(request: Request, env: TelegramConfig & { UMPI_C
       deviceVerifier(authorization); return;
     }
   }
-  const executor = (path === "/api/executor/poll" || path === "/api/executor/complete" || /^\/api\/executor\/(?:coding|browser)\/(poll|report)$/.test(path)) && request.method === "POST";
+  const executor = (path === "/api/executor/poll" || path === "/api/executor/complete" || /^\/api\/executor\/(?:coding|browser|context)\/(poll|report)$/.test(path)) && request.method === "POST";
   const memory = /^\/api\/core-context\/(?:reviews(?:\/[A-Za-z0-9_.:-]+(?:\/(?:approve|reject))?)?|history(?:\/\d+)?|restore)$/.test(path);
   const schedule = (path === "/api/schedule" && request.method === "GET")
     || (path === "/api/schedule/settings" && request.method === "PUT")
