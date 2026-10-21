@@ -51,7 +51,7 @@ A coherent version set is pinned and exercised locally and on Cloudflare. [Assis
 
 Permissions and approvals, messaging, personal tools, scheduling policy, cross-executor routing, delivery, and device integration remain application responsibilities. The model interprets intent; application code owns operational correctness. Retried admission IDs do not guarantee exactly-once external effects. Calls, messages, writes, and deployments each need explicit ownership and handling for uncertain outcomes. [Interaction quality](concepts/interaction-quality.md) defines task-state and reconciliation requirements.
 
-The coordinator uses subscription-backed reasoning through an independent Umpi OAuth login, with Claude Opus 5.5 on the Claude subscription by default. API-key fallback is disabled; [model authentication](subsystems/model-auth.md) owns provider and billing-route rules. Voice-note transcription uses a separate subscription OAuth grant; general live calls remain optional and must meet the [voice retention criteria](concepts/interaction-quality.md#voice-retention-criteria).
+The coordinator uses subscription-backed reasoning through an independent Umpi OAuth login, with Claude Opus 5.5 on the Claude subscription by default. An optional API key is used only while the subscription is at its limit; [model authentication](subsystems/model-auth.md) owns provider and billing-route rules. Voice-note transcription uses a separate subscription OAuth grant; general live calls remain optional and must meet the [voice retention criteria](concepts/interaction-quality.md#voice-retention-criteria).
 
 ### Cost assumptions
 
