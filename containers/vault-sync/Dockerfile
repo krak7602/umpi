@@ -1,6 +1,8 @@
 FROM node:24.20.0-trixie AS build
 WORKDIR /build
 COPY package.json package-lock.json ./
+# The root lockfile installs the vendored obsy packages from these tarballs.
+COPY vendor/obsy ./vendor/obsy
 RUN npm ci --ignore-scripts --no-audit --no-fund
 COPY src/shared ./src/shared
 COPY src/vault ./src/vault
