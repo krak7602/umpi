@@ -180,6 +180,17 @@ For a code rollout, preserve native Pi/application SQLite, provider refresh owne
 
 Additional child calls use the existing subscription and its usage limits. Assistant-only children do not start containers; cloud coding children keep the already approved runner active during model/tool work. Existing Workers/DO/storage and active-container charges still apply.
 
+### Operate the Aside context
+
+The [lane contract](../subsystems/mac-executor.md#aside-context) owns what is read and sent. Aside context awareness must be on in Aside for summaries to exist; memory search works without it. Stop the executor, then:
+
+```sh
+npm run mac -- context-enable
+npm run mac -- run
+```
+
+`GET /api/status` → `activity` shows the Mac's last poll and the stored summary range. In chat, ask what you worked on today, or ask Umpi to search Aside's memory. `context-disable` stops sending; summaries already sent expire after 14 days.
+
 ### Operate browser tasks
 
 The [browser contract](../subsystems/browser-access.md) owns approval, site scope,
@@ -755,4 +766,5 @@ Publish reviewed Git content, not an archive of the working directory: ignored l
 - 2026-10-19: Added default-check operation.
 - 2026-10-19: Added journal-write operation and the Obsidian Sync billing failure mode.
 - 2026-10-21: Added the obsy vault configuration and switch procedure, then removed the Obsidian Headless client and container provisioning steps.
+- 2026-10-22: Added the Aside context lane operation.
 - 2026-10-22: Added the optional API-key fallback secret and failure causes in status.

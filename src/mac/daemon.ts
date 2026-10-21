@@ -10,6 +10,8 @@ import { MacBrowserExecutor, parseBrowserPollResult } from "./browser.js";
 import type { MacConfig } from "./config.js";
 import { ExecutionJournal } from "./journal.js";
 import { rejectedCommand, startCommand, type RunningCommand } from "./command.js";
+import { parseContextPollResult, type ContextPollResult, type ContextReport } from "../shared/context.js";
+import type { AsideContextLane } from "./aside-context.js";
 
 export class CoordinatorUnavailable extends Error {
   constructor(readonly status?: number) {
@@ -122,6 +124,20 @@ export class CoordinatorClient {
     const response = await this.request("/api/executor/browser/report", report, signal);
     await response.body?.cancel();
   }
+
+  async pollContext(signal?: AbortSignal): Promise<ContextPollResult> {
+    const response = await this.request("/api/executor/context/poll", { executorId: this.config.executorId }, signal);
+    try {
+      const body = await response.text();
+      if (body.length > 65_536) throw new Error("Context poll response too large");
+      return parseContextPollResult(JSON.parse(body));
+    } catch { throw new CoordinatorUnavailable(); }
+  }
+
+  async reportContext(report: ContextReport, signal?: AbortSignal): Promise<void> {
+    const response = await this.request("/api/executor/context/report", report, signal);
+    await response.body?.cancel();
+  }
 }
 
 interface ActiveCommand {
@@ -139,7 +155,7 @@ export class MacExecutor {
   private readonly client: CoordinatorClient;
   private readonly shutdown = new AbortController();
 
-  constructor(readonly config: MacConfig, readonly journal: ExecutionJournal, private readonly emit: (event: ExecutorEvent) => void = () => {}, readonly coding?: MacCodingExecutor, readonly browser?: MacBrowserExecutor) {
+  constructor(readonly config: MacConfig, readonly journal: ExecutionJournal, private readonly emit: (event: ExecutorEvent) => void = () => {}, readonly coding?: MacCodingExecutor, readonly browser?: MacBrowserExecutor, readonly context?: AsideContextLane) {
     this.client = new CoordinatorClient(config);
   }
 
@@ -228,10 +244,20 @@ export class MacExecutor {
     if (this.fault) throw this.fault;
     // Browser has an independent slot and must receive cancellation even when
     // shell/coding transport fails or either execution lane is unavailable.
-    const results = await Promise.allSettled([this.pollCommandLanes(signal), this.pollBrowserLane(signal)]);
+    const results = await Promise.allSettled([this.pollCommandLanes(signal), this.pollBrowserLane(signal), this.pollContextLane(signal)]);
     const failures = results.filter(result => result.status === "rejected");
     const failure = failures.find(result => !(result.reason instanceof CoordinatorUnavailable)) ?? failures[0];
     if (failure) throw failure.reason;
+  }
+
+  private async pollContextLane(signal?: AbortSignal): Promise<void> {
+    if (this.stopping || !this.context) return;
+    try {
+      await this.context.tick({ poll: s => this.client.pollContext(s), report: (report, s) => this.client.reportContext(report, s) }, signal);
+    } catch (error) {
+      // A local Aside read problem never stops shell, coding or browser work; the next tick retries.
+      if (error instanceof CoordinatorUnavailable) throw error;
+    }
   }
 
   private async pollBrowserLane(signal?: AbortSignal): Promise<void> {

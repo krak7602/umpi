@@ -12,7 +12,7 @@ updated: 2026-10-19
 
 `src/worker/` implements one owner-scoped Cloudflare Durable Object, `Assistant`, reached through a narrow Worker router. It hosts Pi Durable through Cloudflare `PiHarness`. Pi owns conversations, generation, tool execution, and transcript recovery. The Agents lifecycle queue owns wakeups; application code does not replace its alarm handler.
 
-Implemented actions include text conversation/reminders, proactive follow-through, [read-only mail follow-through](#read-only-mail-follow-through), the [situation record](#situation-record), the [morning brief](#morning-brief), daily-note preparation, approved Mac shell jobs, [coding tasks](#coding-tasks), [browser tasks](#browser-tasks), [native background subagents](#subagents), and the [native companion protocol](phone-companion.md#pairing-tools-and-http-contract). New scheduling, mail monitoring, and native executor installations start disabled. Browser evidence distinguishes native/model execution, encrypted export, and provider stop behavior. Voice calls remain unimplemented, and implementation alone does not prove delivery to a physical device.
+Implemented actions include text conversation/reminders, proactive follow-through, [read-only mail follow-through](#read-only-mail-follow-through), the [situation record](#situation-record), the [morning brief](#morning-brief), [Aside context](#aside-context), daily-note preparation, approved Mac shell jobs, [coding tasks](#coding-tasks), [browser tasks](#browser-tasks), [native background subagents](#subagents), and the [native companion protocol](phone-companion.md#pairing-tools-and-http-contract). New scheduling, mail monitoring, and native executor installations start disabled. Browser evidence distinguishes native/model execution, encrypted export, and provider stop behavior. Voice calls remain unimplemented, and implementation alone does not prove delivery to a physical device.
 
 ### Pinned runtime
 
@@ -127,6 +127,15 @@ Foreground tools are `read_situation` (bounded by bytes, urgent items first), `u
 `/brief` shows status with **Brief now** and Enable/Pause controls bound to the confirmed message and settings version. The protected API provides `GET /api/brief`, `PUT /api/brief/settings`, and `POST /api/brief/run`.
 
 Background conversations, which run mail review, the brief, daily preparation, and commitment reviews, use medium effort. Owner conversations use high effort.
+
+### Aside context
+
+`activity-store.ts` keeps what the Mac's [Aside context lane](mac-executor.md#aside-context) sends. The executor credential authorizes it, and one Mac owns the lane; another executor ID is refused until the current one has been quiet for 10 minutes.
+
+- **Activity summaries.** Aside writes them every 10 minutes from what the owner does on the Mac. They are kept for 14 days and upserted by Aside's summary ID. `read_activity` lists one local day oldest first, with local times, titles, descriptions, apps and sites, and with `detail` the longer bodies, within 24 KB, keeping the newest entries. The morning brief receives yesterday's titles and descriptions (6 KB) as `yesterdayActivity` and may add a line on what the owner mainly worked on.
+- **Memory search.** `search_aside_memory` queues one query of up to 300 characters, and waits up to 20 seconds for the Mac's answer. It returns at most 8 excerpts, or says the Mac did not answer. A lookup not claimed within 30 seconds is not sent later. Records are deleted after an hour.
+- Both tools are for the owner's own conversation; background reviews other than the brief do not read Aside data. Results are context written by another system, not instructions. Lasting facts go through the reviewed `propose_core_context_update`.
+- Summaries and search results are sent to the model provider like any other conversation content. Raw Aside activity is never sent. `GET /api/status` shows `activity`: the Mac's last poll, the last summary report, and the stored range, without content.
 
 ### Default checks
 
@@ -350,4 +359,5 @@ The [development and operation runbook](../runbooks/local-development.md) owns l
 - 2026-10-20: Added per-commitment retry policies after a subscription usage window ran out overnight and the brief and daily note failed once with no retry. The brief and daily note retry hourly, at most three times.
 - 2026-10-21: Moved daily-note reads and writes to the owner's obsy vault over an R2 binding, with a compare-and-swap write.
 - 2026-10-21: Removed the Obsidian Headless `VaultSync` container, its archive bucket binding, and the workspace provisioning route.
+- 2026-10-22: Added the Aside context: activity summaries for chat and the brief, and owner memory search through the Mac.
 - 2026-10-22: Added failure causes to run notes and a once-a-day Telegram notice when a retrying commitment gives up.
