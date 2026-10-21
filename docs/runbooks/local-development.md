@@ -150,7 +150,7 @@ npm run coding -- download --task "$TASK_ID" --run "$RUN_ID" \
 
 Read `/api/coding/sources` to verify the stored source ID, cwd, digest, and capture time. Cloud approval posts `{expectedVersion, sourceId}` to `/api/coding/tasks/:id/cloud` only for unclaimed work. An unavailable or uncertain claimed Mac must not be migrated by silence. For a continuation, review the fresh version and bounded run approval; prior private copy/checkpoint must exist. Read `/api/coding/tasks/:id/runs` and use `download --run` for historical patches. Review incremental patches in baseline order, not as independent patches against the original checkout.
 
-Before any hosted coding rollout, obtain explicit owner authorization for new resources and deployment. Keep public and private Wrangler definitions aligned: `CODING_WORKER` → `CodingWorker`, appended `v3-coding-worker`, its separate `containers/coding/Dockerfile` definition with Basic/max one, and `CODING_ARCHIVE` → the intended private R2 bucket. Preserve all existing Assistant/VaultSync migrations, bindings, archives, names, private installation values, and credential state. Provision the authorized private bucket and confirm Containers/R2 access; a paid account alone is not provisioning proof. Do not reuse the vault container or archive for coding.
+Before any hosted coding rollout, obtain explicit owner authorization for new resources and deployment. Keep public and private Wrangler definitions aligned: `CODING_WORKER` → `CodingWorker`, appended `v3-coding-worker`, its separate `containers/coding/Dockerfile` definition with Basic/max one, and `CODING_ARCHIVE` → the intended private R2 bucket. Preserve all existing Assistant migrations, bindings, archives, names, private installation values, and credential state. Provision the authorized private bucket and confirm Containers/R2 access; a paid account alone is not provisioning proof. Do not reuse the vault container or archive for coding.
 
 On first deployment, [Cloudflare can serve Worker routes before container provisioning completes](https://developers.cloudflare.com/containers/guides/deploy/). Inspect application and instance health before treating cloud execution as available. A missing allocation is not proof that code ran. Keep a dispatched run's owner, confirm actual stop, and explicitly reconcile uncertainty before a new approved run. Do not reset state, enlarge allocation, or replay the same run to bypass provisioning failure.
 
@@ -308,7 +308,7 @@ to `/cancel`. Review actual stop and retained outcome before creating replacemen
 work. The same-Worker BrowserWorker is not security-isolated by its DO bindings.
 
 Before a separately authorized hosted rollout, preserve private installation
-values and existing Assistant/VaultSync/CodingWorker migrations, bindings, state,
+values and existing Assistant/CodingWorker migrations, bindings, state,
 and provider refresh ownership. Align `BROWSER_WORKER` → `BrowserWorker`, appended
 `v4-browser-worker`, `BROWSER`, and the dedicated private `BROWSER_ARCHIVE` R2
 binding. Provision/confirm Browser Run and R2 access; do not substitute Containers
@@ -407,39 +407,19 @@ Heads-ups and nudges are plain Telegram messages; correct a wrong fact in chat (
 
 ### Operate journal writes
 
-Close-out, intra-day additions, and check-ins run when follow-through is enabled and the private note workspace is connected. Inspect `GET /api/journal` for queued, written, and failed lines and the last issue. Change them with the current `expectedVersion`, for example `{"expectedVersion": 1, "checkIns": ["13:00", "18:00"], "closeOut": true, "intraDay": true}` to `PUT /api/journal/settings`.
+Close-out, intra-day additions, and check-ins run when follow-through is enabled and the obsy vault is configured. Inspect `GET /api/journal` for queued, written, and failed lines and the last issue. Change them with the current `expectedVersion`, for example `{"expectedVersion": 1, "checkIns": ["13:00", "18:00"], "closeOut": true, "intraDay": true}` to `PUT /api/journal/settings`.
 
-With the obsy vault configured, notes need only the R2 binding. With the VaultSync fallback, the workspace depends on an active Obsidian Sync subscription: a lapsed subscription makes every preparation and journal write report "private note workspace is unavailable"; restore billing and then request preparation again.
+Notes need only the R2 binding; no sync subscription or container is involved. "Private note workspace is unavailable" means a vault read failed; check the binding and prefix in `GET /api/status`.
 
 ### Use the obsy vault for notes
 
-The [runtime contract](../subsystems/assistant-runtime.md#note-storage) owns behavior. In private `wrangler.local.jsonc`, bind the vault bucket as `OBSY_LIBRARY` and set `UMPI_OBSY_PREFIX` to the vault's key prefix (empty, or ending in `/`). The binding needs no access key; never give umpi the key that the owner's devices use. `GET /api/status` shows `planning.backend` as `obsy`, `vault-sync`, or `null` with `backendIssue`.
+The [runtime contract](../subsystems/assistant-runtime.md#note-storage) owns behavior. In private `wrangler.local.jsonc`, bind the vault bucket as `OBSY_LIBRARY` and set `UMPI_OBSY_PREFIX` to the vault's key prefix (empty, or ending in `/`). The binding needs no access key; never give umpi the key that the owner's devices use. `GET /api/status` shows `planning.backend` as `obsy`, or `null` with `backendIssue`.
 
-To switch: pause daily preparation and journal writes, copy the last journal changes from the old vault into the obsy vault, deploy, request one manual preparation, and check it. From the obsy repository, with the owner's env file, `obsy history journals/<day>.md` shows `agent umpi`. Then resume the schedule. To update the vendored packages, see [vendor/obsy](../../vendor/obsy/README.md).
+To check a write, from the obsy repository with the owner's env file, `obsy history journals/<day>.md` shows `agent umpi`; `obsy undo <seq>` reverses one. To update the vendored packages, see [vendor/obsy](../../vendor/obsy/README.md).
 
 ### Operate daily-note preparation
 
-The [runtime contract](../subsystems/assistant-runtime.md#daily-note-preparation) owns behavior and concurrency limits. New installations start paused and require explicit resource, credential-transfer, deployment, and activation authorization. Use bounded manual and automatic checks for fresh vault/calendar input, acknowledged upload, exact read-back, container inactivity, stale-edit rejection, and interruption recovery before enabling a real schedule.
-
-#### Prepare the separate private sync client
-
-Run these in your own private terminal. Login and encryption-password/MFA prompts must not be captured in chat or command arguments.
-
-```sh
-npm run vault -- login
-npm run vault -- remotes
-npm run vault -- setup --vault-id REMOTE_VAULT_ID --source-vault /path/to/desktop-vault
-npm run vault -- sync
-npm run vault -- export --output "$HOME/.config/umpi/headless/bootstrap.gz"
-```
-
-`REMOTE_VAULT_ID` is selected from the private remote listing, not stored in repository configuration. The source-vault argument inventories directory names only; it is never the sync target. `--root PATH` chooses a different owner-only client root outside the repository. Default state is under `~/.config/umpi/headless`: an isolated HOME, separate workspace, and a scoped-setup receipt. On macOS the official client uses HOME's `.obsidian-headless`; XDG alone does not isolate its account state. On Linux it uses the private XDG configuration directory.
-
-Setup supports `--journals`, `--template`, and repeated `--exclude-folder` arguments. It selects bidirectional/conflict mode, disables configuration synchronization, and explicitly persists an empty attachment allow-list: the pinned CLI's empty `--file-types` option otherwise restores attachment defaults. Existing unrelated top-level directories are excluded, but root note formats and later-created directories can still sync. This is an operational filter, not least-privilege authorization to the remote vault.
-
-An unfinished setup cannot sync/export. Repeating setup for the same unfinished isolated vault can finish its configuration; it cannot replace a completed client or a different vault. Configuration changes invalidate the saved receipt. Export requires stopped, acknowledged state and an unused private output path. Do not copy a running client, export the desktop profile, delete unresolved scratch blindly, or put the archive into Git/image layers. The archive contains usable account/encryption material and private notes.
-
-Obsidian Headless 0.0.14 is an official beta CLI, not a copied or patched SDK. A reported standard-encryption setup issue can prevent completing setup; do not invent an encryption password or substitute desktop secrets. Keep automation paused if the actual client cannot complete setup and a disposable round trip.
+The [runtime contract](../subsystems/assistant-runtime.md#daily-note-preparation) owns behavior and concurrency limits. New installations start paused and require explicit resource, credential-transfer, deployment, and activation authorization. Use bounded manual and automatic checks for fresh vault/calendar input, a confirmed write, exact read-back, stale-edit rejection, and interruption recovery before enabling a real schedule.
 
 #### Authorize the read-only calendar
 
@@ -458,29 +438,11 @@ When an old output already exists, use `--credentials` with a new private destin
 
 After explicit cloud authorization, install that JSON as the `UMPI_CALENDAR_CREDENTIALS` Worker secret using Wrangler's private stdin flow. Do not put its contents in `wrangler*.jsonc`, command arguments, source, or logs. An absent grant produces a coverage gap; it must not masquerade as “no meetings.”
 
-#### Provision and verify before enabling
+#### Verify before enabling
 
-Keep `VAULT_SYNC`, the `v2-vault-sync` migration, the container definition, and `VAULT_ARCHIVE` aligned in public/private configuration while preserving private identities. Provision the intended private R2 bucket and confirm account access to Containers/R2 before an authorized deployment. Workers Paid is not proof that every required resource is already provisioned. The dedicated image uses Linux/amd64 and a deny-all Docker context allow-list; it must never be shared with model-controlled coding.
+Configure the obsy vault (above). Then verify fresh calendar coverage, the intended timezone/time, current approved core context, and a real native Pi preparation. Open `/plan` to prepare today, inspect the result, and check the commit with `obsy history`. Only after those checks enable daily preparation; `/schedule` must also be enabled. The default preparation time is local `02:30`, adjustable through the protected settings route. Check a real durable wake and actual write rather than treating a registered deadline as completion. Normal success should remain quiet.
 
-After the new owner routes are actually live, inspect the provisioning generation and deliberately upload the private archive:
-
-```sh
-npm run vault -- status "$COORDINATOR_ORIGIN"
-npm run vault -- upload "$COORDINATOR_ORIGIN" \
-  --archive "$HOME/.config/umpi/headless/bootstrap.gz" --expected-revision 0
-```
-
-Use the observed generation, not `0` on a replacement. Pass matching custom journal/template flags if setup used them. The control token comes from the private environment, not argv. Upload streams an exact-length bounded body, validates/restores the archive, commits its pointer, and leaves daily scheduling paused. A successful provisioning response explicitly says `syncVerified: false`; it does not prove a valid live login, remote upload, or phone delivery.
-
-First exercise a disposable note through the real provider: download, write, acknowledged upload, second-client visibility, a concurrent nonempty edit, and interrupted upload/reconciliation. Direct journal editing uses normal Sync conflict semantics: concurrent remote deletion/clearing can be overwritten, and an offline device's unseen changes cannot be protected by local preflight. Retained before/after text is evidence, not a distributed lock or automatic undo.
-
-Then verify fresh calendar coverage, the intended timezone/time, current approved core context, and a real native Pi preparation. Open `/plan` to prepare today and inspect the result. Only after those checks enable daily preparation; `/schedule` must also be enabled. The default preparation time is local `02:30`, adjustable through the protected settings route. Check a real durable wake and actual upload rather than treating a registered deadline as completion. Normal success should remain quiet.
-
-For unknown uploads, inspect the exact retained write through the [owner API](../subsystems/assistant-runtime.md#protected-http-surface) and the current note. Explicit prepare-today can resume only the retained same-day intent while its brief/core authority is still current. A changed source or expired day needs owner reconciliation; release with its expected status only after review. Release does not undo a remote edit or retract I/O already dispatched. Never overwrite a retained intent with a newly guessed patch.
-
-Compute is on-demand, not a continuously running Obsidian process. Actual container duration, R2 storage/operations, Worker/DO usage, and model work still count. The adapter requests destruction after each operation and retains an idle-shutdown fallback. No zero-cost claim or runtime forecast is justified before measuring the real workspace.
-
-
+For an unconfirmed write, inspect the exact retained write through the [owner API](../subsystems/assistant-runtime.md#protected-http-surface) and the current note. Explicit prepare-today can resume only the retained same-day intent while its brief/core authority is still current; resuming is safe because the obsy write first checks whether the note already holds the intended text. A changed source or expired day needs owner reconciliation; release with its expected status only after review. Never overwrite a retained intent with a newly guessed patch.
 
 ### Native app development
 
@@ -782,4 +744,4 @@ Publish reviewed Git content, not an archive of the working directory: ignored l
 - 2026-10-19: Added multi-mailbox login and secret upload, the 30-day situation backfill, and morning brief operation.
 - 2026-10-19: Added default-check operation.
 - 2026-10-19: Added journal-write operation and the Obsidian Sync billing failure mode.
-- 2026-10-21: Added the obsy vault configuration and switch procedure.
+- 2026-10-21: Added the obsy vault configuration and switch procedure, then removed the Obsidian Headless client and container provisioning steps.

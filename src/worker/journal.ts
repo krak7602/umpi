@@ -252,7 +252,7 @@ export class JournalRuntime {
         this.store.settle(entries, "queued", result.status === "conflict" ? "The note changed during the write; it will be retried from the current note." : "The note upload was not confirmed; it will be retried.", now);
       }
     } catch (error) {
-      this.store.settle(entries, "queued", error instanceof Error && /unavailable|provision/i.test(error.message) ? "The private note workspace is unavailable." : "The note write failed; it will be retried.", now);
+      this.store.settle(entries, "queued", error instanceof Error && /unavailable/i.test(error.message) ? "The private note workspace is unavailable." : "The note write failed; it will be retried.", now);
     }
   }
 
@@ -283,7 +283,7 @@ export class JournalRuntime {
     }
   }
 
-  /** Vault work runs in the background so the coordinator never waits on a container. */
+  /** Vault work runs in the background so the coordinator never waits on note I/O. */
   drive(now = Date.now()): void {
     if (!this.proactive.settings().enabled || this.working || !this.sources.vault() || this.nextDue(now) === undefined || this.nextDue(now)! > now) return;
     this.working = this.work(now).finally(() => { this.working = undefined; void this.sources.wake(); });

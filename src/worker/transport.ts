@@ -217,7 +217,6 @@ export async function authorize(request: Request, env: TelegramConfig & { UMPI_C
     || (/^\/api\/schedule\/wakeups\/[A-Za-z0-9_.:-]+\/cancel$/.test(path) && request.method === "POST");
   const planning = (path === "/api/planning" && request.method === "GET")
     || (path === "/api/planning/settings" && request.method === "PUT")
-    || (path === "/api/planning/workspace" && ["GET", "PUT"].includes(request.method))
     || (path === "/api/planning/prepare" && request.method === "POST")
     || (/^\/api\/planning\/days\/\d{4}-\d{2}-\d{2}$/.test(path) && request.method === "GET")
     || (/^\/api\/planning\/briefs\/\d{4}-\d{2}-\d{2}$/.test(path) && request.method === "PUT")

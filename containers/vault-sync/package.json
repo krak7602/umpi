@@ -1,9 +1,0 @@
-{
-  "name": "umpi-vault-sync-runtime",
-  "private": true,
-  "version": "0.1.0",
-  "license": "MIT",
-  "dependencies": {
-    "obsidian-headless": "0.0.14"
-  }
-}

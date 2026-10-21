@@ -16,7 +16,6 @@
   "durable_objects": {
     "bindings": [
       { "name": "ASSISTANT", "class_name": "Assistant" },
-      { "name": "VAULT_SYNC", "class_name": "VaultSync" },
       { "name": "CODING_WORKER", "class_name": "CodingWorker" },
       { "name": "BROWSER_WORKER", "class_name": "BrowserWorker" }
     ]
@@ -25,15 +24,10 @@
     { "tag": "v1", "new_sqlite_classes": ["Assistant"] },
     { "tag": "v2-vault-sync", "new_sqlite_classes": ["VaultSync"] },
     { "tag": "v3-coding-worker", "new_sqlite_classes": ["CodingWorker"] },
-    { "tag": "v4-browser-worker", "new_sqlite_classes": ["BrowserWorker"] }
+    { "tag": "v4-browser-worker", "new_sqlite_classes": ["BrowserWorker"] },
+    { "tag": "v5-retire-vault-sync", "deleted_classes": ["VaultSync"] }
   ],
   "containers": [{
-    "class_name": "VaultSync",
-    "image": "./containers/vault-sync/Dockerfile",
-    "image_build_context": ".",
-    "instance_type": "lite",
-    "max_instances": 1
-  }, {
     "class_name": "CodingWorker",
     "image": "./containers/coding/Dockerfile",
     "image_build_context": ".",
@@ -41,7 +35,6 @@
     "max_instances": 1
   }],
   "r2_buckets": [
-    { "binding": "VAULT_ARCHIVE", "bucket_name": "replace-with-umpi-vault-state" },
     { "binding": "CODING_ARCHIVE", "bucket_name": "replace-with-umpi-coding-state" },
     { "binding": "BROWSER_ARCHIVE", "bucket_name": "replace-with-umpi-browser-state" },
     { "binding": "OBSY_LIBRARY", "bucket_name": "replace-with-obsy-vault" }

@@ -14,7 +14,6 @@
     "memory": "node --env-file-if-exists=.dev.vars --import tsx src/cli/core-context.ts",
     "calendar": "tsx src/cli/calendar.ts",
     "mail": "tsx src/cli/mail.ts",
-    "vault": "node --env-file-if-exists=.dev.vars --import tsx src/cli/vault.ts",
     "coding": "node --env-file-if-exists=.dev.vars --import tsx src/cli/coding.ts",
     "browser": "tsx src/cli/browser.ts",
     "setup": "tsx src/cli/setup.ts",
@@ -46,7 +45,6 @@
     "@types/html-to-text": "9.0.4",
     "@types/node": "24.19.2",
     "esbuild": "0.28.2",
-    "obsidian-headless": "0.0.14",
     "tsx": "4.23.15",
     "typescript": "7.0.2",
     "wrangler": "4.149.0"

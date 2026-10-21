@@ -4,7 +4,7 @@ import { VaultAgent } from "@obsy/agent";
 import { initVault, webEnvironment } from "@obsy/core";
 import { R2Storage, type R2BucketLike } from "@obsy/storage-r2";
 import { ObsyVaultClient } from "../src/worker/obsy-vault.js";
-import { DEFAULT_VAULT_SCOPE, vaultNoteRevision } from "../src/shared/vault-planning.js";
+import { DEFAULT_VAULT_SCOPE, parseVaultApply, vaultNoteRevision } from "../src/shared/vault-planning.js";
 
 const PREFIX = "library/", DAY = "2026-10-21", PATH = `journals/${DAY}.md`;
 const TEMPLATE = "# {{date:MMM Do, YYYY}}\n\n## Plan\n";
@@ -85,4 +85,11 @@ test("an expired obsy write is unconfirmed and writes nothing", async () => {
   const before = await client.getSnapshot(DAY);
   const result = await client.applyNote(intent(before.revision, "# Day\n- late\n", new Date(Date.now() - 1).toISOString()));
   assert.equal(result.status, "unconfirmed"); assert.equal((await device.read(PATH))?.text, "# Day\n");
+});
+
+test("the apply contract requires explicit expiry and cannot smuggle a path or command", () => {
+  const intent = { intentId: "fixture-intent", day: "2026-10-12", beforeRevision: vaultNoteRevision(null), text: "candidate" };
+  assert.throws(() => parseVaultApply(intent));
+  assert.throws(() => parseVaultApply({ ...intent, expiresAt: "2026-10-13T00:00:00.000Z", path: "another.md" }));
+  assert.throws(() => parseVaultApply({ ...intent, expiresAt: "2026-10-13T00:00:00.000Z", command: "anything" }));
 });
