@@ -127,6 +127,10 @@ await new FileCredentialStore().delete("openai-codex");
 
 The hosted coordinator owns refresh after handoff; local auth status can therefore be empty. Credential presence alone is not a provider test. Send a short voice note and confirm its real text reply. Protected voice-inbox status retains readable failure/interruption outcomes, not audio or Telegram file IDs. A possibly dispatched transcription is not automatically repeated after restart; send text or a new message rather than replaying an uncertain old update.
 
+### Send images in Telegram
+
+Send a photo, an album, or an image file in the private Telegram chat, with or without a caption. No command or configuration is needed. An image file over 1 MB is refused with a reply; send it as a photo so Telegram compresses it. Videos and other attachments are skipped. With a caption, Umpi acts on the caption and says the attachment was not used. [The Telegram contract](../subsystems/assistant-runtime.md#images-and-other-attachments) owns the limits. Protected `telegram.voiceNotes.inbox` status shows image outcomes with `source: "image"`.
+
 ### Operate coding tasks
 
 The [authoritative coding contract](../subsystems/assistant-runtime.md#coding-tasks) defines approval, tools, limits, cloud lifetime, and completion. The [Mac contract](../subsystems/mac-executor.md#coding-execution) defines private journals and foreground-group supervision. Bounded native/cloud evidence is in [verification](../learning/assistant-core-verification.md#coding-task-verification). Every installation requires its own explicit resource, deployment, and native opt-in decisions.

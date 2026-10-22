@@ -66,9 +66,9 @@ import { assistantSubagentExtension } from "./subagent-profile.js";
 import { subagentRequest } from "./subagent-http.js";
 import type { SubagentReport, SubagentScope } from "./subagent-types.js";
 import { TelegramInbox } from "./telegram-inbox.js";
-import { downloadTelegramVoice } from "./telegram-voice.js";
+import { downloadTelegramImage, downloadTelegramVoice } from "./telegram-voice.js";
 import { SUBSCRIPTION_TRANSCRIPTION_MODEL, transcribeSubscriptionAudio } from "./subscription-transcription.js";
-import { MAX_VOICE_NOTE_BYTES, MAX_VOICE_NOTE_SECONDS, VoiceNoteError, type TelegramInboxDelivery } from "../shared/voice-note.js";
+import { MAX_VOICE_NOTE_BYTES, MAX_VOICE_NOTE_SECONDS, VoiceNoteError, type TelegramImage, type TelegramInboxDelivery } from "../shared/voice-note.js";
 import { classifyModelError, describeModelFailure, type ModelFailure } from "../model/failure.js";
 import { ModelFallback } from "./model-fallback.js";
 
@@ -155,7 +155,7 @@ class Coordinator extends LifecycleCapability {
             try { proactive.assertRunCurrent(op.sessionId); }
             catch { store.settle(op.id, "Background review is no longer actionable.", true); continue; }
           }
-          await harness.submit(op.modelInput ?? op.text, { session: op.sessionId, operationId: op.id });
+          await harness.submit(store.modelContent(op), { session: op.sessionId, operationId: op.id });
           store.submitted(op.id);
         }
         if (this.waits.has(op.id)) continue;
@@ -357,6 +357,7 @@ export class Assistant extends Agent<Env> {
     this.telegramInbox = new TelegramInbox({
       db: this.store.db,
       download: (note, signal) => downloadTelegramVoice(note, this.config, signal),
+      downloadImage: (image, maxBytes, signal) => downloadTelegramImage(image, maxBytes, this.config, signal),
       transcribe: (audio, signal) => transcribeSubscriptionAudio(audio, async () => {
         const stored = await this.credentials.read("openai-codex");
         if (stored?.type !== "oauth") throw new VoiceNoteError("authorization_missing");
@@ -503,7 +504,7 @@ export class Assistant extends Agent<Env> {
     this.proactive.drive(Date.now(), this.store.hasForegroundInput(), sessions);
   }
 
-  private async admit(id: string, text: string, channel: Channel, guard?: () => void, ownerSource?: OwnerMessageSource): Promise<Operation> {
+  private async admit(id: string, text: string, channel: Channel, guard?: () => void, ownerSource?: OwnerMessageSource, images?: TelegramImage[]): Promise<Operation> {
     const existing = this.store.operation(`message:${channel}:${id}`);
     if (!existing && !(await this.modelReady())) throw new StateError(503, this.modelIssue!);
     const sessionId = await this.session(channel);
@@ -511,12 +512,12 @@ export class Assistant extends Agent<Env> {
     await this.coordinator.wake();
     guard?.();
     const op = this.store.db.transaction(() => {
-      const admitted = this.store.admit(id, text, channel, sessionId, ownerSource);
+      const admitted = this.store.admit(id, text, channel, sessionId, ownerSource, images);
       if (admitted.status === "admitted" || admitted.status === "submitted") this.proactive.deferForForeground();
       return admitted;
     });
     if (op.status === "admitted") {
-      await this.harness.submit(op.modelInput ?? op.text, { session: op.sessionId, operationId: op.id });
+      await this.harness.submit(this.store.modelContent(op), { session: op.sessionId, operationId: op.id });
       this.store.submitted(op.id);
     }
     return this.store.operation(op.id)!;
@@ -527,10 +528,12 @@ export class Assistant extends Agent<Env> {
     const sessionId = this.store.session("telegram");
     const pendingChoice = !existing && sessionId && !input.text.trimStart().startsWith("/") ? this.store.pendingChoice(sessionId) : undefined;
     const op = await this.admit(input.id, input.text, "telegram", undefined, {
-      kind: input.source === "voice" ? "telegram-voice" : "telegram-text",
+      kind: input.source === "voice" ? "telegram-voice" : input.source === "image" ? "telegram-image" : "telegram-text",
       ...(input.sentAt === undefined ? {} : { sentAt: input.sentAt }),
       ...(input.caption === undefined ? {} : { caption: input.caption }),
-    });
+      ...(input.skipped === undefined ? {} : { skipped: input.skipped }),
+      ...(input.omittedImages === undefined ? {} : { omittedImages: input.omittedImages }),
+    }, input.images);
     if (pendingChoice) {
       for (const delivery of this.store.deliveries(`choice:${pendingChoice.id}`)) {
         if (delivery.status === "sent" && delivery.messageId !== undefined && delivery.replyMarkup) {
@@ -745,7 +748,7 @@ export class Assistant extends Agent<Env> {
           ]);
           return Response.json({ ok: true });
         }
-        if (input.kind === "voice") {
+        if (input.kind !== "message") {
           const accepted = await this.telegramInbox.accept(input);
           return Response.json({ ok: true, inputId: accepted.id, status: accepted.status });
         }

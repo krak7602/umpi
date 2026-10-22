@@ -1,7 +1,7 @@
 import { InputError, boundedText, record } from "../shared/protocol.js";
 import { StateError, type Delivery, type TelegramMarkup } from "./store.js";
 import { companionRole } from "./companion-routes.js";
-import type { TelegramTextMessage, TelegramVoiceNote } from "../shared/voice-note.js";
+import { IMAGE_TYPES, MAX_IMAGE_BYTES, MAX_IMAGE_SIDE, type TelegramImageMessage, type TelegramTextMessage, type TelegramUnreadableMessage, type TelegramVoiceNote } from "../shared/voice-note.js";
 
 export interface TelegramConfig {
   TELEGRAM_BOT_TOKEN?: string;
@@ -51,7 +51,7 @@ export async function secretEqual(actual: string, expected: string): Promise<boo
 }
 
 export type TelegramUpdate =
-  | TelegramTextMessage | TelegramVoiceNote
+  | TelegramTextMessage | TelegramVoiceNote | TelegramImageMessage | TelegramUnreadableMessage
   | { kind: "callback"; id: string; callbackId: string; messageId: number; data: string };
 
 function requireTelegramOwner(sender: Record<string, unknown>, chat: Record<string, unknown>, config: TelegramConfig): void {
@@ -120,12 +120,71 @@ export function telegramUpdate(value: unknown, config: TelegramConfig): Telegram
     if (message.caption !== undefined && message.caption !== "") note.caption = boundedText(message.caption, 1024, "Telegram caption");
     return note;
   }
-  if (message.audio !== undefined || message.document !== undefined || message.caption !== undefined ||
-      message.video !== undefined || message.video_note !== undefined || message.photo !== undefined ||
-      message.animation !== undefined || message.sticker !== undefined) throw new InputError("Ambiguous Telegram text message");
+  const caption = message.caption === undefined || message.caption === "" ? undefined : boundedText(message.caption, 1024, "Telegram caption");
+  const image = telegramImage(message);
+  if (image) {
+    if (message.text !== undefined) throw new InputError("Ambiguous Telegram image message");
+    if (!Number.isSafeInteger(message.message_id) || Number(message.message_id) <= 0) throw new InputError("Invalid Telegram image metadata");
+    const result: TelegramImageMessage = { kind: "image", id, messageId: message.message_id as number, image, sentAt: telegramSentAt(message.date) };
+    if (caption !== undefined) result.caption = caption;
+    if (message.media_group_id !== undefined) result.mediaGroupId = boundedText(message.media_group_id, 64, "Telegram album ID");
+    return result;
+  }
+  const attachment = UNREADABLE.find(([field]) => message[field] !== undefined)?.[1];
+  if (attachment) {
+    if (message.text !== undefined) throw new InputError("Ambiguous Telegram message");
+    // A caption is still an owner request; only the attachment is skipped.
+    const result: TelegramTextMessage | TelegramUnreadableMessage = caption === undefined
+      ? { kind: "unreadable", id, attachment } : { kind: "message", id, text: caption, skipped: attachment };
+    if (message.date !== undefined) result.sentAt = telegramSentAt(message.date);
+    return result;
+  }
+  // Service messages (a pin, a changed chat photo) carry no owner request.
+  if (message.text === undefined && caption === undefined) return undefined;
+  if (message.caption !== undefined) throw new InputError("Ambiguous Telegram text message");
   const text: TelegramTextMessage = { kind: "message", id, text: boundedText(message.text, 16_384, "Telegram text") };
   if (message.date !== undefined) text.sentAt = telegramSentAt(message.date);
   return text;
+}
+
+/** Attachments Umpi cannot read, in the words used to tell the owner. */
+const UNREADABLE = [
+  ["video", "a video"], ["video_note", "a video message"], ["animation", "a GIF"], ["audio", "an audio file"],
+  ["document", "a file"], ["sticker", "a sticker"], ["location", "a location"], ["venue", "a location"],
+  ["contact", "a contact"], ["poll", "a poll"], ["dice", "a dice roll"], ["paid_media", "paid media"], ["story", "a story"],
+] as const;
+
+function telegramImageSize(value: unknown, label: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isSafeInteger(value) || Number(value) <= 0) throw new InputError(`Invalid Telegram ${label}`);
+  return value as number;
+}
+
+/**
+ * A photo uses the largest size within the side and byte limits (or the smallest if none fits).
+ * An image sent as a file is used as is. Other files are not images.
+ */
+function telegramImage(message: Record<string, unknown>): TelegramImageMessage["image"] | undefined {
+  if (message.photo !== undefined) {
+    if (!Array.isArray(message.photo) || !message.photo.length || message.photo.length > 16) throw new InputError("Invalid Telegram photo");
+    const sizes = message.photo.map(item => {
+      const size = record(item);
+      const width = telegramImageSize(size.width, "photo width"), height = telegramImageSize(size.height, "photo height");
+      if (width === undefined || height === undefined) throw new InputError("Invalid Telegram photo size");
+      return { fileId: telegramFileId(size.file_id), fileUniqueId: telegramFileId(size.file_unique_id), fileSize: telegramImageSize(size.file_size, "photo size"), width, height };
+    });
+    const area = (size: { width: number; height: number }) => size.width * size.height;
+    const fitting = sizes.filter(size => Math.max(size.width, size.height) <= MAX_IMAGE_SIDE && (size.fileSize ?? 0) <= MAX_IMAGE_BYTES);
+    const chosen = fitting.length ? fitting.reduce((best, size) => area(size) > area(best) ? size : best)
+      : sizes.reduce((best, size) => area(size) < area(best) ? size : best);
+    return { fileId: chosen.fileId, fileUniqueId: chosen.fileUniqueId, ...(chosen.fileSize === undefined ? {} : { fileSize: chosen.fileSize }), mimeType: "image/jpeg" };
+  }
+  if (message.document === undefined) return undefined;
+  const document = record(message.document);
+  const mimeType = typeof document.mime_type === "string" ? document.mime_type.toLowerCase() : undefined;
+  if (!mimeType || !(IMAGE_TYPES as readonly string[]).includes(mimeType)) return undefined;
+  const fileSize = telegramImageSize(document.file_size, "file size");
+  return { fileId: telegramFileId(document.file_id), fileUniqueId: telegramFileId(document.file_unique_id), ...(fileSize === undefined ? {} : { fileSize }), mimeType };
 }
 
 export type SendResult = { status: "sent" | "failed" | "uncertain"; error?: string; messageId?: number };
