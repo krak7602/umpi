@@ -1,6 +1,7 @@
 import { InputError, identifier, boundedText, timestamp, parseAssignment, parsePoll, parseCompletion, type JobCompletion, type JobStatus, type ExecutorPollResult, record } from "../shared/protocol.js";
 import { formatTelegramApproval } from "./telegram-view.js";
 import { renderTelegramMarkdown } from "./telegram-markdown.js";
+import { IMAGE_TYPES, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE, type TelegramImage } from "../shared/voice-note.js";
 
 export interface Database {
   all<T extends object>(query: string, ...bindings: (string | number | null)[]): T[];
@@ -8,10 +9,17 @@ export interface Database {
 }
 export type Channel = "control" | "telegram";
 export interface OwnerMessageSource {
-  kind: "telegram-text" | "telegram-voice";
+  kind: "telegram-text" | "telegram-voice" | "telegram-image";
   sentAt?: string;
   caption?: string;
+  /** For text: an attachment that was not used, such as "a video". */
+  skipped?: string;
+  /** For images: how many are attached, and how many of an album were left out. */
+  images?: number;
+  omittedImages?: number;
 }
+/** Model input: text, followed by the images of a Telegram image message. */
+export type ModelInput = string | ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[];
 export class StateError extends Error {
   constructor(public readonly status: number, message: string) { super(message); }
 }
@@ -87,6 +95,8 @@ export class Store {
   constructor(readonly db: Database) {
     for (const statement of [
       "CREATE TABLE IF NOT EXISTS umpi_operations (id TEXT PRIMARY KEY, status TEXT NOT NULL, data TEXT NOT NULL)",
+      // Owner images wait here only until Pi accepts the message; Pi's transcript then holds them.
+      "CREATE TABLE IF NOT EXISTS umpi_operation_images (id TEXT PRIMARY KEY, data TEXT NOT NULL)",
       "CREATE TABLE IF NOT EXISTS umpi_jobs (id TEXT PRIMARY KEY, status TEXT NOT NULL, executor TEXT, cwd TEXT NOT NULL, data TEXT NOT NULL)",
       "CREATE TABLE IF NOT EXISTS umpi_reminders (id TEXT PRIMARY KEY, status TEXT NOT NULL, due INTEGER NOT NULL, data TEXT NOT NULL)",
       "CREATE TABLE IF NOT EXISTS umpi_outbox (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, part INTEGER NOT NULL, status TEXT NOT NULL, data TEXT NOT NULL)",
@@ -143,19 +153,25 @@ export class Store {
     if (!row) throw new StateError(409, "Unknown conversation channel");
     return row.channel;
   }
-  admit(requestId: string, text: string, channel: Channel, sessionId: string, ownerSource?: OwnerMessageSource): Operation {
+  admit(requestId: string, text: string, channel: Channel, sessionId: string, ownerSource?: OwnerMessageSource, images?: TelegramImage[]): Operation {
     identifier(requestId, "message ID"); boundedText(text, 16_384, "message");
     let source: OwnerMessageSource | undefined;
     if (ownerSource !== undefined) {
       const input = record(ownerSource);
-      if (channel !== "telegram" || typeof input.kind !== "string" || !["telegram-text", "telegram-voice"].includes(input.kind) || Object.keys(input).some(key => !["kind", "sentAt", "caption"].includes(key))) throw new InputError("Invalid owner message source");
-      if (input.kind === "telegram-text" && input.caption !== undefined) throw new InputError("Only voice notes carry a caption");
+      if (channel !== "telegram" || typeof input.kind !== "string" || !["telegram-text", "telegram-voice", "telegram-image"].includes(input.kind) || Object.keys(input).some(key => !["kind", "sentAt", "caption", "skipped", "images", "omittedImages"].includes(key))) throw new InputError("Invalid owner message source");
+      if (input.kind !== "telegram-voice" && input.caption !== undefined) throw new InputError("Only voice notes carry a caption");
+      if (input.kind !== "telegram-text" && input.skipped !== undefined) throw new InputError("Only text messages record a skipped attachment");
+      if ((input.kind === "telegram-image") !== (images !== undefined) || input.kind !== "telegram-image" && (input.images !== undefined || input.omittedImages !== undefined)) throw new InputError("Images need an image message source");
       source = {
         kind: input.kind as OwnerMessageSource["kind"],
         ...(input.sentAt === undefined ? {} : { sentAt: timestamp(input.sentAt, "message sent time") }),
         ...(input.caption === undefined ? {} : { caption: boundedText(input.caption, 1_024, "voice-note caption") }),
+        ...(input.skipped === undefined ? {} : { skipped: boundedText(input.skipped, 64, "skipped attachment") }),
+        ...(images === undefined ? {} : { images: images.length }),
+        ...(input.omittedImages === undefined ? {} : { omittedImages: boundedCount(input.omittedImages, "omitted images") }),
       };
-    }
+    } else if (images !== undefined) throw new InputError("Images need an image message source");
+    if (images !== undefined) validateImages(images);
     const id = `message:${channel}:${requestId}`;
     return this.db.transaction(() => {
       const previous = this.operation(id);
@@ -175,8 +191,13 @@ export class Store {
         }
       }
       if (source) {
-        op.modelInput = `Authenticated Telegram owner-message context: ${JSON.stringify(source)}\nResolve relative dates from the original sentAt in the owner's timezone when present, not from a delayed transcription/processing time. An explicit owner date takes precedence. Any caption is also owner input.\n\n${op.modelInput ?? text}`;
+        const notes = [
+          ...(source.skipped ? [`The owner also attached ${source.skipped}, which Umpi cannot read, so it was not used. Say so in a few words, then do what the message asks.`] : []),
+          ...(source.images ? [`The owner's ${source.images === 1 ? "image is" : `${source.images} images are`} attached after this text.${source.omittedImages ? ` ${source.omittedImages} more image(s) of the album exceeded the size limit and were not used; say so briefly.` : ""}`] : []),
+        ];
+        op.modelInput = `Authenticated Telegram owner-message context: ${JSON.stringify(source)}\nResolve relative dates from the original sentAt in the owner's timezone when present, not from a delayed transcription/processing time. An explicit owner date takes precedence. Any caption is also owner input.${notes.map(note => `\n${note}`).join("")}\n\n${op.modelInput ?? text}`;
       }
+      if (images?.length) this.db.all("INSERT INTO umpi_operation_images VALUES (?, ?)", id, JSON.stringify(images));
       this.operationWrite(op); return op;
     });
   }
@@ -216,12 +237,26 @@ export class Store {
   recentOperations(includeBackground = true): Operation[] {
     return this.rows(`SELECT data FROM umpi_operations${includeBackground ? "" : " WHERE json_extract(data, '$.background') IS NULL"} ORDER BY rowid DESC LIMIT 50`);
   }
-  submitted(id: string): void { const op = this.operation(id)!; if (op.status === "admitted") this.operationWrite({ ...op, status: "submitted" }); }
+  /** The input to submit to Pi for an admitted operation. */
+  modelContent(op: Operation): ModelInput {
+    const text = op.modelInput ?? op.text;
+    const row = this.db.all<{ data: string }>("SELECT data FROM umpi_operation_images WHERE id=?", op.id)[0];
+    if (!row) return text;
+    return [{ type: "text", text }, ...(JSON.parse(row.data) as TelegramImage[]).map(image => ({ type: "image" as const, data: image.data, mimeType: image.mimeType }))];
+  }
+  submitted(id: string): void {
+    this.db.transaction(() => {
+      const op = this.operation(id)!;
+      if (op.status === "admitted") this.operationWrite({ ...op, status: "submitted" });
+      this.db.all("DELETE FROM umpi_operation_images WHERE id=?", id);
+    });
+  }
   settle(id: string, result: string, failed = false): void {
     this.db.transaction(() => {
       const op = this.operation(id);
       if (!op || op.status === "done" || op.status === "failed") return;
       this.operationWrite({ ...op, status: failed ? "failed" : "done", ...(failed ? { error: result } : { result }) });
+      this.db.all("DELETE FROM umpi_operation_images WHERE id=?", id);
       // A successful tool-only turn may already have posted its native interaction.
       if (!op.background && (result.trim() || failed)) {
         const output = result.trim() || "The model request failed. Check protected model status.";
@@ -503,4 +538,18 @@ export class Store {
       this.finishDelivery(delivery.id, "uncertain", "Coordinator restarted during send; inspect Telegram before any manual resend");
     }
   }
+}
+
+function boundedCount(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 0 || Number(value) > 64) throw new InputError(`Invalid ${label}`);
+  return value as number;
+}
+function validateImages(images: TelegramImage[]): void {
+  if (!Array.isArray(images) || !images.length || images.length > MAX_IMAGES_PER_MESSAGE) throw new InputError("Invalid owner images");
+  let bytes = 0;
+  for (const image of images) {
+    if (!(IMAGE_TYPES as readonly string[]).includes(image?.mimeType) || typeof image.data !== "string" || !/^[A-Za-z0-9+/]+={0,2}$/.test(image.data) || image.data.length % 4) throw new InputError("Invalid owner image");
+    bytes += image.data.length / 4 * 3;
+  }
+  if (bytes > MAX_IMAGE_BYTES + 2 * images.length) throw new InputError("Owner images exceed the size limit");
 }

@@ -59,9 +59,11 @@ test("callback payload bounds reject inaccessible, inline, ambiguous, and oversi
 test("text admission retains owner boundaries and does not silently accept invalid messages", () => {
   const message = { text: "Pick the second option", from: { id: 123, is_bot: false }, chat: { id: 123, type: "private" } };
   assert.equal(telegramUpdate({ update_id: 1, message }, config)?.kind, "message");
-  for (const text of ["", "x".repeat(16_385), "bad\0text", undefined]) {
+  for (const text of ["", "x".repeat(16_385), "bad\0text"]) {
     assert.throws(() => telegramUpdate({ update_id: 1, message: { ...message, text } }, config), InputError);
   }
+  // A message with no text or attachment (a service message) is ignored, so Telegram does not redeliver it.
+  assert.equal(telegramUpdate({ update_id: 1, message: { ...message, text: undefined } }, config), undefined);
   assert.throws(() => telegramUpdate({ update_id: 1, message: { ...message, from: callback.callback_query.message.from } }, config), StateError);
 });
 
