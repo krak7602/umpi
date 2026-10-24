@@ -5,6 +5,12 @@
  */
 export const WAKE_PING_MS = 60_000;
 export const WAKE_PONG_TIMEOUT_MS = 15_000;
+/**
+ * The runtime answers "ping" even for a socket its object no longer holds, which can happen when a
+ * deploy restarts the coordinator just after connecting. So the first keepalive, and every tenth,
+ * is "hello", which only the coordinator itself answers with "ready".
+ */
+export const WAKE_CHECK_EVERY = 10;
 const MAX_RECONNECT_MS = 60_000;
 
 export interface WakeSocket {
@@ -35,6 +41,7 @@ export class WakeChannel {
   private attempt = 0;
   private timers = new Set<ReturnType<typeof setTimeout>>();
   private pong: ReturnType<typeof setTimeout> | undefined;
+  private pings = 0;
 
   constructor(private readonly options: WakeChannelOptions) {}
 
@@ -74,7 +81,7 @@ export class WakeChannel {
     this.socket = socket;
     socket.addEventListener("open", () => {
       if (socket !== this.socket) return;
-      this.attempt = 0;
+      this.attempt = 0; this.pings = 0;
       this.setOpen(true);
       // Anything queued while disconnected is collected now.
       this.options.onWake();
@@ -83,7 +90,7 @@ export class WakeChannel {
     socket.addEventListener("message", event => {
       if (socket !== this.socket) return;
       const data = String(event.data);
-      if (data === "pong") { if (this.pong) { clearTimeout(this.pong); this.timers.delete(this.pong); this.pong = undefined; } }
+      if (data === "pong" || data === "ready") { if (this.pong) { clearTimeout(this.pong); this.timers.delete(this.pong); this.pong = undefined; } }
       else if (data === "wake") this.options.onWake();
     });
     const lost = () => {
@@ -116,7 +123,7 @@ export class WakeChannel {
     this.later(WAKE_PING_MS, () => {
       // A timer that fires far too late means the Mac slept; that socket is probably dead.
       if (this.now() - expected > WAKE_PING_MS) { this.reset(); return; }
-      try { this.socket?.send("ping"); } catch { this.reset(); return; }
+      try { this.socket?.send(this.pings++ % WAKE_CHECK_EVERY === 0 ? "hello" : "ping"); } catch { this.reset(); return; }
       this.pong = this.later(WAKE_PONG_TIMEOUT_MS, () => this.reset());
       this.schedulePing();
     });

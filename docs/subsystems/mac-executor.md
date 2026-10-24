@@ -46,7 +46,7 @@ Polling depends on state:
 | Idle, wake socket down or coordinator unreachable | 15 seconds |
 | No wake channel (embedded use, as in tests) | `pollIntervalMs` |
 
-The executor sends `ping` every minute. The coordinator's runtime answers `pong` without waking its Durable Object, so an idle connection adds no requests or duration there. A missing `pong` within 15 seconds, or a ping timer that fires a minute late (the Mac slept), replaces the socket. A lost socket reconnects with a growing backoff of up to a minute, and every connect is followed by a poll. The coordinator treats a socket without a ping for three minutes as stale.
+The executor sends `ping` every minute. The coordinator's runtime answers `pong` without waking its Durable Object, so an idle connection adds no requests or duration there. The runtime can also answer for a socket the object no longer holds. This was seen when a deploy restarted the object just after the executor connected. So the first keepalive after connecting, and every tenth, is `hello`, which only the object answers, with `ready`. That wakes the object about 144 times a day. A missing answer within 15 seconds, or a keepalive timer that fires a minute late (the Mac slept), replaces the socket. A lost socket reconnects with a growing backoff of up to a minute, and every connect is followed by a poll. The coordinator treats a socket without a ping for three minutes as stale.
 
 Idle, the executor makes a few hundred requests a day instead of several per second, and the coordinator can hibernate between jobs. The log records `wake_connected` and `wake_disconnected` with timestamps.
 

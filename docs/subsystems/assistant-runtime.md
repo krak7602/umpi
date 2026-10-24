@@ -332,7 +332,7 @@ Exact `GET` and `HEAD` requests to `/`, `/privacy`, and `/terms` serve public st
 | `GET /api/subagents` | Control | Bounded child metadata, including requested stop and pending reports |
 | `GET /api/subagents/:id` | Control | Child scope, durable latest report, and actual native-idle inspection |
 | `POST /api/subagents/:id/cancel` | Control | `{expectedVersion}`; stop the exact child generation, not a later follow-up |
-| `GET /api/executor/wake?executorId=ID` (WebSocket upgrade) | Executor | The only accepted upgrade. The coordinator sends `wake` when new Mac work appears; the runtime answers `ping`. See [wake socket](mac-executor.md#wake-socket-and-polling) |
+| `GET /api/executor/wake?executorId=ID` (WebSocket upgrade) | Executor | The only accepted upgrade. The coordinator sends `wake` when new Mac work appears; the runtime answers `ping`, and the coordinator answers `hello` with `ready`. See [wake socket](mac-executor.md#wake-socket-and-polling) |
 | `POST /api/executor/poll` | Executor | Executor identity and canonical workspace list; assignment and cancellation requests |
 | `POST /api/executor/complete` | Executor | Immutable completion from the assigned executor |
 | `POST /api/executor/coding/poll` or `/report` | Executor | Separate coding assignment/report protocol; never owner approval or source administration |
