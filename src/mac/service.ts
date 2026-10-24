@@ -10,13 +10,16 @@ import { fileURLToPath } from "node:url";
  * the repository checkout while it runs.
  */
 export const SERVICE_LABEL = "dev.umpi.executor";
+/** Login Items names a background item after its app; without one, macOS shows Node's signer. */
+export const SERVICE_APP_NAME = "Umpi Executor";
 
-export interface ServicePaths { plist: string; directory: string; bundle: string; manifest: string; log: string }
+export interface ServicePaths { plist: string; directory: string; bundle: string; manifest: string; log: string; app: string; launcher: string }
 export function servicePaths(configPath: string, home = homedir()): ServicePaths {
   const directory = join(home, "Library", "Application Support", "Umpi", "executor");
   return {
     plist: join(home, "Library", "LaunchAgents", `${SERVICE_LABEL}.plist`),
     directory, bundle: join(directory, "umpi-executor.mjs"), manifest: join(directory, "build.json"),
+    app: join(directory, `${SERVICE_APP_NAME}.app`), launcher: join(directory, `${SERVICE_APP_NAME}.app`, "Contents", "MacOS", "umpi-executor"),
     log: join(dirname(resolve(configPath)), "executor.log"),
   };
 }
@@ -24,7 +27,7 @@ export function servicePaths(configPath: string, home = homedir()): ServicePaths
 const xml = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const string = (value: string) => `<string>${xml(value)}</string>`;
 
-export interface PlistInput { node: string; bundle: string; args: string[]; log: string; workingDirectory: string; path: string }
+export interface PlistInput { launcher: string; args: string[]; log: string; workingDirectory: string; path: string }
 /**
  * KeepAlive restarts the executor after a crash or a failed start; an orderly stop (exit 0) stays stopped.
  * PATH is the installing shell's PATH, so approved commands and coding tasks find the same tools.
@@ -36,7 +39,9 @@ export function servicePlist(input: PlistInput): string {
 <dict>
   <key>Label</key>${string(SERVICE_LABEL)}
   <key>ProgramArguments</key>
-  <array>${[input.node, input.bundle, "run", ...input.args].map(string).join("")}</array>
+  <array>${[input.launcher, "run", ...input.args].map(string).join("")}</array>
+  <key>AssociatedBundleIdentifiers</key>
+  <array>${string(SERVICE_LABEL)}</array>
   <key>EnvironmentVariables</key>
   <dict><key>PATH</key>${string(input.path)}</dict>
   <key>WorkingDirectory</key>${string(input.workingDirectory)}
@@ -49,6 +54,41 @@ export function servicePlist(input: PlistInput): string {
 </dict>
 </plist>
 `;
+}
+
+const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+
+/** A background-only app whose launcher runs the bundled executor with this Node. */
+export function serviceAppFiles(node: string, bundle: string): { infoPlist: string; launcher: string } {
+  return {
+    infoPlist: `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>${string(SERVICE_LABEL)}
+  <key>CFBundleName</key>${string(SERVICE_APP_NAME)}
+  <key>CFBundleDisplayName</key>${string(SERVICE_APP_NAME)}
+  <key>CFBundleExecutable</key>${string("umpi-executor")}
+  <key>CFBundlePackageType</key>${string("APPL")}
+  <key>CFBundleShortVersionString</key>${string("1.0")}
+  <key>CFBundleVersion</key>${string("1")}
+  <key>LSBackgroundOnly</key><true/>
+  <key>LSUIElement</key><true/>
+</dict>
+</plist>
+`,
+    launcher: `#!/bin/sh\nexec ${shellQuote(node)} ${shellQuote(bundle)} "$@"\n`,
+  };
+}
+
+function writeServiceApp(paths: ServicePaths, node: string): void {
+  rmSync(paths.app, { recursive: true, force: true });
+  const files = serviceAppFiles(node, paths.bundle);
+  mkdirSync(dirname(paths.launcher), { recursive: true, mode: 0o700 });
+  writeFileSync(join(paths.app, "Contents", "Info.plist"), files.infoPlist, { mode: 0o644 });
+  writeFileSync(paths.launcher, files.launcher, { mode: 0o700 });
+  // An ad-hoc local signature, so the app has a stable identity; no developer account is involved.
+  execFileSync("codesign", ["--force", "--sign", "-", "--identifier", SERVICE_LABEL, paths.app], { stdio: "ignore" });
 }
 
 /** Bundles the executor CLI into one ES module. The repository root is fixed for the outside-repository checks. */
@@ -104,12 +144,13 @@ export async function installService(configPath: string, stateDir: string | unde
   await buildExecutorBundle(temporary);
   chmodSync(temporary, 0o600); renameSync(temporary, paths.bundle);
   writeFileSync(paths.manifest, `${JSON.stringify({ builtAt: new Date().toISOString(), commit, node: process.version })}\n`, { mode: 0o600 });
+  writeServiceApp(paths, process.execPath);
   // launchd would create the log with the default umask; it must stay owner-only.
   closeSync(openSync(paths.log, "a", 0o600)); chmodSync(paths.log, 0o600);
   const args = ["--config", resolve(configPath), ...(stateDir ? ["--state-dir", resolve(stateDir)] : [])];
   mkdirSync(dirname(paths.plist), { recursive: true });
   rmSync(paths.plist, { force: true });
-  writeFileSync(paths.plist, servicePlist({ node: process.execPath, bundle: paths.bundle, args, log: paths.log, workingDirectory: homedir(), path: process.env.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin" }), { mode: 0o644 });
+  writeFileSync(paths.plist, servicePlist({ launcher: paths.launcher, args, log: paths.log, workingDirectory: homedir(), path: process.env.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin" }), { mode: 0o644 });
   await bootout();
   // Bootstrap can still fail briefly after bootout while launchd releases the old job.
   for (let attempt = 1; ; attempt++) {
