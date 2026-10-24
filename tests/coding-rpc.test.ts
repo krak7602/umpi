@@ -398,6 +398,15 @@ test("real watcher coverage reports a change and close prevents later callbacks"
   await env.cleanup(BACKGROUND_CONTEXT);
 });
 
+/** A simulated crash leaves its command running, as a real one would; stop its whole group afterwards. */
+function killOrphanedGroup(pid: number): void {
+  const group = (target: number) => Number(execFileSync("ps", ["-o", "pgid=", "-p", String(target)], { encoding: "utf8" }).trim());
+  try {
+    const orphan = group(pid);
+    if (orphan > 1 && orphan !== group(process.pid)) process.kill(-orphan, "SIGKILL");
+  } catch { /* Already gone. */ }
+}
+
 test("SIGKILL after command admission recovers uncertainty without replaying an external effect", async t => {
   const f = workspace(t);
   const marker = join(f.cwd, "started.json");
@@ -406,6 +415,8 @@ test("SIGKILL after command admission recovers uncertainty without replaying an 
   const runner = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", source], { stdio: "ignore" });
   try {
     await fileAppears(marker);
+    const { pid } = JSON.parse(readFileSync(marker, "utf8")) as { pid: number };
+    t.after(() => killOrphanedGroup(pid));
     const exited = once(runner, "exit");
     runner.kill("SIGKILL");
     await exited;
