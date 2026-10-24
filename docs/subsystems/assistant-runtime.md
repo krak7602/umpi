@@ -332,6 +332,7 @@ Exact `GET` and `HEAD` requests to `/`, `/privacy`, and `/terms` serve public st
 | `GET /api/subagents` | Control | Bounded child metadata, including requested stop and pending reports |
 | `GET /api/subagents/:id` | Control | Child scope, durable latest report, and actual native-idle inspection |
 | `POST /api/subagents/:id/cancel` | Control | `{expectedVersion}`; stop the exact child generation, not a later follow-up |
+| `GET /api/executor/wake?executorId=ID` (WebSocket upgrade) | Executor | The only accepted upgrade. The coordinator sends `wake` when new Mac work appears; the runtime answers `ping`. See [wake socket](mac-executor.md#wake-socket-and-polling) |
 | `POST /api/executor/poll` | Executor | Executor identity and canonical workspace list; assignment and cancellation requests |
 | `POST /api/executor/complete` | Executor | Immutable completion from the assigned executor |
 | `POST /api/executor/coding/poll` or `/report` | Executor | Separate coding assignment/report protocol; never owner approval or source administration |
@@ -370,3 +371,4 @@ The [development and operation runbook](../runbooks/local-development.md) owns l
 - 2026-10-22: Added the Aside context: activity summaries for chat and the brief, and owner memory search through the Mac.
 - 2026-10-22: Added failure causes to run notes and a once-a-day Telegram notice when a retrying commitment gives up.
 - 2026-10-22: Added image input (photos, image files and albums). Other attachments are skipped with a short reply instead of a rejected webhook.
+- 2026-10-24: Added the executor wake socket, owned by a lifecycle capability, and protected `executor` status (online, last seen). After a day without the executor, one Telegram notice says Mac work is waiting.

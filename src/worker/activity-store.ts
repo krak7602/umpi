@@ -79,6 +79,10 @@ export class ActivityStore {
     return id;
   }
   memoryResult(id: string): RequestRecord | undefined { return this.request(id); }
+  /** Lookups waiting for the Mac, newest first; older ones are no longer sent. */
+  pendingRequestIds(now = Date.now()): string[] {
+    return this.db.all<{ id: string }>("SELECT id FROM umpi_context_requests WHERE status='pending' AND created >= ? ORDER BY created DESC LIMIT 4", now - REQUEST_CLAIM_MS).map(row => row.id);
+  }
 
   /** Summaries whose window ends inside [from, to), oldest first. */
   read(from: number, to: number, limit = 200): ActivitySummary[] {

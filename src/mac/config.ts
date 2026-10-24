@@ -21,7 +21,9 @@ export interface MacConfig {
 }
 
 export const DEFAULT_CONFIG_PATH = join(homedir(), ".config", "umpi", "mac", "config.json");
-const repositoryRoot = realpathSync(fileURLToPath(new URL("../../", import.meta.url)));
+/** Set when the executor is bundled for the login item, whose file is outside the repository. */
+declare const UMPI_REPOSITORY_ROOT: string | undefined;
+const repositoryRoot = realpathSync(typeof UMPI_REPOSITORY_ROOT === "string" ? UMPI_REPOSITORY_ROOT : fileURLToPath(new URL("../../", import.meta.url)));
 
 function within(path: string, root: string): boolean {
   const suffix = relative(root, path);

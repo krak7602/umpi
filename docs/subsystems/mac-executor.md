@@ -10,7 +10,7 @@ updated: 2026-10-14
 
 ### Boundary
 
-`src/mac/` implements an outbound HTTP executor. It does not expose SSH or a listening Mac service. It polls the [coordinator](assistant-runtime.md) with a separate executor credential and advertises canonical workspace roots. The current coordinator dispatches only to an exactly matching advertised workspace.
+`src/mac/` implements an outbound HTTP executor. It does not expose SSH or a listening Mac service. It polls the [coordinator](assistant-runtime.md) with a separate executor credential and advertises canonical workspace roots. An outbound [wake socket](#wake-socket-and-polling) tells it when to poll; work never travels over that socket. The current coordinator dispatches only to an exactly matching advertised workspace.
 
 Commands run as the Mac user through `/bin/sh -c`. Validating the starting directory is **not a filesystem sandbox**: an approved command can access other files and capabilities available to that user. Review the exact command, working directory, timeout, and version before approving it. The initial local setup can restrict advertised workspaces, but it cannot sandbox a native coding harness.
 
@@ -28,12 +28,33 @@ The journal binds both the executor ID and coordinator origin. Editing only `ser
 | `executorToken` | Executor-only bearer credential; never the control token |
 | `executorId` | Stable identity; preserve it with its journal |
 | `workspaces` | Exact existing canonical repository directories; not bulk discovery under a parent folder |
-| `pollIntervalMs` | 100–60,000 ms; default 1,000 ms |
+| `pollIntervalMs` | 100–60,000 ms; default 1,000 ms; the interval while work is active ([wake socket](#wake-socket-and-polling)) |
 | `coding.enabled` | Default `false`; permits separately approved coding-task claims, not automatic task approval |
 | `browser.enabled`, `browser.allSites`, `browser.sites` | Default disabled/false/empty; native eligibility opt-in and optional exact local grants, never task approval |
 | `context.enabled` | Default `false`; sends Aside activity summaries and answers owner memory searches ([Aside context](#aside-context)) |
 
-At the default interval, each continuously polled lane makes about 2.6 million polls per 30-day month. Enabled coding and browser lanes add their own poll streams. These are real Worker/DO requests, not a zero-cost or push-only connection. Review shared allowances. Increasing the interval reduces requests but delays assignment and cancellation.
+### Wake socket and polling
+
+The executor keeps one outbound WebSocket to `/api/executor/wake` with its executor credential in a request header. The coordinator sends only `wake`, after its reconcile finds Mac work that it has not announced: a queued job, a cancellation, a queued or changed Mac coding or browser task, or an Aside memory lookup. The executor then polls every lane at once. A wake carries no work and grants nothing; assignment, cancellation and reports still use the authenticated poll and report routes.
+
+Polling depends on state:
+
+| State | Poll interval |
+| --- | --- |
+| A command, coding run or browser run is active, or results wait for delivery | `pollIntervalMs` (default 1 second) |
+| Idle, wake socket connected | 5 minutes, or at once on a wake. The Aside lane sends summaries on this beat. |
+| Idle, wake socket down or coordinator unreachable | 15 seconds |
+| No wake channel (embedded use, as in tests) | `pollIntervalMs` |
+
+The executor sends `ping` every minute. The coordinator's runtime answers `pong` without waking its Durable Object, so an idle connection adds no requests or duration there. A missing `pong` within 15 seconds, or a ping timer that fires a minute late (the Mac slept), replaces the socket. A lost socket reconnects with a growing backoff of up to a minute, and every connect is followed by a poll. The coordinator treats a socket without a ping for three minutes as stale.
+
+Idle, the executor makes a few hundred requests a day instead of several per second, and the coordinator can hibernate between jobs. The log records `wake_connected` and `wake_disconnected` with timestamps.
+
+### Login item
+
+`npm run mac -- service-install` runs the executor as a per-user launchd agent, `dev.umpi.executor`. It bundles `src/mac/cli.ts` with esbuild into `~/Library/Application Support/Umpi/executor/umpi-executor.mjs` and runs it with the installing Node, without a TypeScript loader or npm. It is independent of terminal and Claude sessions and of later edits to the checkout. The agent starts at login and restarts after a crash or a failed start, at most every 30 seconds; an orderly stop stays stopped. Its PATH is the installing shell's PATH, so approved commands and coding tasks find the same tools. Output goes to `executor.log` beside the config, owner-only. The plist holds paths only, never a credential.
+
+Run `service-install` again after updating the code or Node; it replaces the running copy. It refuses while another executor runs, because the daemon lock would make the agent retry. `service-status` reports the launchd state, PID, last exit code, and the bundled commit. `service-restart` restarts it, and `service-uninstall` stops it and removes the plist and bundle while keeping config, journals and log.
 
 ### Execution and recovery
 
@@ -73,7 +94,7 @@ The context lane is an opt-in, read-only bridge to Aside's own derived data. `co
 - Every 5 minutes it reads new completed rows from `context_awareness_summaries` in `~/.aside/u/0/context-awareness/ledger.db`, opened read-only. It sends at most 24 per report: window, title, description, a body cut to 3,000 characters, apps and sites. It never selects the raw events table (clicks, typed text, screen text, page snapshots), which stays on the Mac.
 - Its only state is `aside-context.json`, a cursor and last-send time. The cursor advances only after the coordinator accepts a batch.
 
-A failed Aside read is skipped until the next tick and never stops shell, coding or browser work. The Aside ledger is an internal Aside file, so a future Aside update can change it; the reader then sends nothing. The lane adds its own poll stream, like the other lanes. The [runtime contract](assistant-runtime.md#aside-context) owns how the coordinator stores and uses the data.
+A failed Aside read is skipped until the next tick and never stops shell, coding or browser work. The Aside ledger is an internal Aside file, so a future Aside update can change it; the reader then sends nothing. The lane runs on every poll; idle, that is every 5 minutes, and a lookup wakes the executor at once. The [runtime contract](assistant-runtime.md#aside-context) owns how the coordinator stores and uses the data.
 
 ### Evidence
 
@@ -86,3 +107,4 @@ A failed Aside read is skipped until the next tick and never stops shell, coding
 - 2026-10-13: Added an independent opt-in Aside lane, exact site grants, metadata-only status, and truthful original-closure receipts. Kept unknown descendants and lost borrowed-tab recovery under explicit owner reconciliation.
 - 2026-10-14: Replaced installed-executor rollout history with the reusable browser opt-in, ownership, and stop boundary.
 - 2026-10-22: Added the opt-in Aside context lane: activity summaries every 5 minutes and owner-requested memory searches, with raw activity kept on the Mac.
+- 2026-10-24: Added the wake socket and state-based polling, after one-second polling of every lane kept the coordinator awake. Added the launchd login item after an executor started from a terminal session stopped with that session and was not restarted for two days.

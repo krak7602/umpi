@@ -240,10 +240,17 @@ export async function editTelegramKeyboard(messageId: number, replyMarkup: Teleg
   return telegramUi("editMessageReplyMarkup", { chat_id: config.TELEGRAM_CHAT_ID, message_id: messageId, reply_markup: replyMarkup }, config, fetcher);
 }
 
+export const EXECUTOR_WAKE_PATH = "/api/executor/wake";
+export function isExecutorWakeUpgrade(request: Request): boolean {
+  return new URL(request.url).pathname === EXECUTOR_WAKE_PATH && request.method === "GET" && request.headers.get("upgrade")?.toLowerCase() === "websocket";
+}
+
 /** The only admitted HTTP surfaces; control and executor privileges are deliberately disjoint. */
 export async function authorize(request: Request, env: TelegramConfig & { UMPI_CONTROL_TOKEN?: string; UMPI_EXECUTOR_TOKEN?: string; UMPI_BROWSER_SYNC_TOKEN?: string }, deviceVerifier?: ((authorization: string | null) => unknown) | "forward-device"): Promise<void> {
   const path = new URL(request.url).pathname;
-  if (request.headers.has("upgrade")) throw new StateError(404, "Not found");
+  // The executor wake socket is the only accepted upgrade; it carries no work, only "poll now".
+  const wakeSocket = isExecutorWakeUpgrade(request);
+  if (request.headers.has("upgrade") && !wakeSocket) throw new StateError(404, "Not found");
   if (path === "/telegram/webhook" && request.method === "POST") {
     const missing = telegramMissing(env);
     if (missing.length) throw new StateError(503, `Telegram is not configured: ${missing.join(", ")}`);
@@ -267,7 +274,7 @@ export async function authorize(request: Request, env: TelegramConfig & { UMPI_C
       deviceVerifier(authorization); return;
     }
   }
-  const executor = (path === "/api/executor/poll" || path === "/api/executor/complete" || /^\/api\/executor\/(?:coding|browser|context)\/(poll|report)$/.test(path)) && request.method === "POST";
+  const executor = (path === "/api/executor/poll" || path === "/api/executor/complete" || /^\/api\/executor\/(?:coding|browser|context)\/(poll|report)$/.test(path)) && request.method === "POST" || wakeSocket;
   const memory = /^\/api\/core-context\/(?:reviews(?:\/[A-Za-z0-9_.:-]+(?:\/(?:approve|reject))?)?|history(?:\/\d+)?|restore)$/.test(path);
   const schedule = (path === "/api/schedule" && request.method === "GET")
     || (path === "/api/schedule/settings" && request.method === "PUT")

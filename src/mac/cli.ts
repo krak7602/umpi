@@ -9,12 +9,20 @@ import { MacExecutor } from "./daemon.js";
 import { CodingJournal, MacCodingExecutor, readCodingJournalStatus } from "./coding.js";
 import { BrowserJournal, MacBrowserExecutor, readBrowserJournalStatus } from "./browser.js";
 import { browserSitePolicyJson } from "../shared/browser.js";
+import { coordinatorUrl } from "../shared/coordinator-url.ts";
+import { WakeChannel } from "./wake.js";
+import { installService, restartService, servicePaths, serviceState, uninstallService } from "./service.js";
+import { execFileSync } from "node:child_process";
 
 const HELP = `umpi Mac executor (Node 24)
 
   npm run mac -- init --server-url URL --workspace PATH [--workspace PATH]
   npm run mac -- run
   npm run mac -- status
+  npm run mac -- service-install
+  npm run mac -- service-status
+  npm run mac -- service-restart
+  npm run mac -- service-uninstall
   npm run mac -- resume --confirm-stopped
   npm run mac -- coding-enable
   npm run mac -- coding-disable
@@ -50,6 +58,13 @@ executorToken, executorId, workspaces, optional pollIntervalMs, coding.enabled,
 and browser.enabled/browser.allSites/browser.sites (both lanes default disabled). Stop the daemon
 before changing config. Preserve state and executorId together. All grant/opt-in
 changes require exclusive stopped-daemon state ownership and preserve other values.
+
+service-install runs the executor as a login item (launchd agent dev.umpi.executor). It starts at
+login, restarts after a crash, and runs a bundled copy under ~/Library/Application Support/Umpi
+with this Node and this shell's PATH. Run it again after updating the code or Node; it replaces the
+running copy. Logs go to executor.log beside the config. Stop any executor started with run first.
+The executor keeps one outbound wake socket to the coordinator. While idle it checks in every 5
+minutes and polls at once when woken; while work runs it polls at the configured interval.
 
 Commands run as this Mac user through /bin/sh. Workspace validation restricts the
 starting cwd, NOT filesystem access. This is not a sandbox. UMPI_* and TELEGRAM_*
@@ -160,7 +175,7 @@ async function main(): Promise<void> {
   if (values.help || positionals.length === 0) { process.stdout.write(HELP); return; }
   if (positionals.length !== 1) throw new UsageError("Specify exactly one command. Use --help.");
   const command = positionals[0];
-  if (!["init", "run", "status", "resume", "coding-enable", "coding-disable", "browser-enable", "browser-disable", "browser-grant", "browser-revoke", "context-enable", "context-disable"].includes(command!)) throw new UsageError("Unknown command. Use --help.");
+  if (!["init", "run", "status", "resume", "service-install", "service-status", "service-restart", "service-uninstall", "coding-enable", "coding-disable", "browser-enable", "browser-disable", "browser-grant", "browser-revoke", "context-enable", "context-disable"].includes(command!)) throw new UsageError("Unknown command. Use --help.");
   if (values["all-sites"] !== undefined && command !== "browser-enable") throw new UsageError("--all-sites is only accepted by browser-enable");
   if (command === "browser-grant") {
     if (!values.policy || !values["policy-digest"] || values.site) throw new UsageError("browser-grant requires --policy PATH and --policy-digest SHA256");
@@ -184,6 +199,27 @@ async function main(): Promise<void> {
   if (command !== "resume" && values["confirm-stopped"]) throw new UsageError("--confirm-stopped is only accepted by resume");
   const config = loadConfig(configPath);
   const directory = stateDirectory(configPath, values["state-dir"]);
+  if (command === "service-status") {
+    process.stdout.write(`${JSON.stringify(serviceState(servicePaths(configPath)), null, 2)}\n`);
+    return;
+  }
+  if (command === "service-uninstall") {
+    uninstallService(configPath);
+    process.stdout.write("Login item removed. The executor is stopped; its config, journals and log are kept.\n");
+    return;
+  }
+  if (command === "service-restart") {
+    restartService();
+    process.stdout.write("Executor restarted by launchd.\n");
+    return;
+  }
+  if (command === "service-install") {
+    let commit: string | null = null;
+    try { commit = execFileSync("git", ["rev-parse", "--short", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || null; } catch { /* Not a checkout. */ }
+    const state = await installService(configPath, values["state-dir"], commit);
+    process.stdout.write(`${JSON.stringify(state, null, 2)}\nLogin item installed. It starts at login and restarts after a crash.\n`);
+    return;
+  }
   if (command === "status") {
     process.stdout.write(`${JSON.stringify({ executorId: config.executorId, serverUrl: config.serverUrl, workspaces: config.workspaces, journal: readJournalStatus(directory), coding: { enabled: config.coding.enabled, journal: readCodingJournalStatus(directory) }, context: { enabled: config.context?.enabled ?? false }, browser: { enabled: config.browser.enabled, allSites: config.browser.allSites, sites: config.browser.sites.map(site => ({ siteId: site.siteId, policyDigest: createHash("sha256").update(browserSitePolicyJson(site)).digest("hex") })), journal: readBrowserJournalStatus(directory) } }, null, 2)}\n`);
     return;
@@ -252,8 +288,13 @@ async function main(): Promise<void> {
       const coding = new MacCodingExecutor(config, codingJournal);
       const browser = new MacBrowserExecutor(config, browserJournal);
       const context = config.context?.enabled ? new AsideContextLane(config.executorId, directory) : undefined;
-      const executor = new MacExecutor(config, journal, event => process.stderr.write(`umpi-mac: ${event}\n`), coding, browser, context);
-      await executor.run(stop.signal);
+      const log = (event: string) => process.stderr.write(`umpi-mac: ${new Date().toISOString()} ${event}\n`);
+      const executor = new MacExecutor(config, journal, log, coding, browser, context);
+      const wake = new WakeChannel({ origin: coordinatorUrl(config.serverUrl), token: config.executorToken, executorId: config.executorId,
+        onWake: () => executor.requestPoll(), onState: connected => log(connected ? "wake_connected" : "wake_disconnected") });
+      executor.useWake(wake);
+      wake.start();
+      try { await executor.run(stop.signal); } finally { wake.stop(); }
     } finally {
       process.removeListener("SIGINT", onSignal);
       process.removeListener("SIGTERM", onSignal);
