@@ -653,14 +653,15 @@ Cloudflare provisions the domain's DNS and certificate through this configuratio
 
 Use the configured bot from Telegram on desktop or phone. Keep its handle and owner/chat IDs in private installation records. Send ordinary text or `/status` for a readable summary. Review the exact command and folder, then use its native Approve or Cancel button. Edited commands require fresh approval; an old button cannot approve the revision. Clarification questions offer native options, but typing your own answer also works. `/approve ID VERSION` and `/cancel ID [VERSION]` remain manual alternatives using IDs/versions from protected job status. The same origin serves public app information at `/`, `/privacy`, and `/terms`, not web chat; `/health` returns liveness. The public pages contain no sign-in flow or assistant state.
 
-Confirm the Mac configuration points at the intended origin. Start the executor when it is not already running:
+Confirm the Mac configuration points at the intended origin, then install the executor as a login item:
 
 ```sh
 npm run mac -- status
-npm run mac -- run
+npm run mac -- service-install
+npm run mac -- service-status
 ```
 
-No local Worker process is needed for hosted use. No LaunchAgent or login item is installed. The executor must be running and the Mac awake for new native execution. Keep its stable ID and journal. Do not edit only `serverUrl` to switch coordinators: the journal has a matching origin binding that must be reconciled before a handoff. Review the [polling cost boundary](../subsystems/mac-executor.md#local-state) before leaving the daemon running continuously.
+No local Worker process is needed for hosted use. The login item starts the executor at login and restarts it after a crash; see [login item](../subsystems/mac-executor.md#login-item). Run `service-install` again after pulling new code or changing Node. Stop a terminal-started `npm run mac -- run` first. The Mac must be awake for new native execution; work waits in the coordinator while it sleeps, and protected status `executor.online` shows the connection. Keep its stable ID and journal. Do not edit only `serverUrl` to switch coordinators: the journal has a matching origin binding that must be reconciled before a handoff. Idle, the executor waits on its [wake socket](../subsystems/mac-executor.md#wake-socket-and-polling) and checks in every 5 minutes.
 
 Inspect protected hosted status without putting a token in command arguments. Export `COORDINATOR_ORIGIN` as above before running this Node command:
 

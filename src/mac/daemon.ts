@@ -1,4 +1,3 @@
-import { setTimeout as delay } from "node:timers/promises";
 import type { ExecutorPollResult, JobCompletion, MacJobAssignment } from "../shared/protocol.js";
 import { parsePollResult } from "../shared/protocol.js";
 import { coordinatorUrl } from "../shared/coordinator-url.ts";
@@ -12,6 +11,11 @@ import { ExecutionJournal } from "./journal.js";
 import { rejectedCommand, startCommand, type RunningCommand } from "./command.js";
 import { parseContextPollResult, type ContextPollResult, type ContextReport } from "../shared/context.js";
 import type { AsideContextLane } from "./aside-context.js";
+
+/** With the wake socket up, an idle executor checks in this often; the Aside lane pushes on the same beat. */
+export const IDLE_POLL_MS = 5 * 60_000;
+/** Without the wake socket, new work is found within this time. */
+export const DEGRADED_POLL_MS = 15_000;
 
 export class CoordinatorUnavailable extends Error {
   constructor(readonly status?: number) {
@@ -154,6 +158,9 @@ export class MacExecutor {
   private disconnected: boolean | undefined;
   private readonly client: CoordinatorClient;
   private readonly shutdown = new AbortController();
+  private wake: { readonly connected: boolean } | undefined;
+  private pollRequested = false;
+  private resume: (() => void) | undefined;
 
   constructor(readonly config: MacConfig, readonly journal: ExecutionJournal, private readonly emit: (event: ExecutorEvent) => void = () => {}, readonly coding?: MacCodingExecutor, readonly browser?: MacBrowserExecutor, readonly context?: AsideContextLane) {
     this.client = new CoordinatorClient(config);
@@ -161,6 +168,33 @@ export class MacExecutor {
 
   get runningJobId(): string | null {
     return this.active?.jobId ?? null;
+  }
+
+  /** The wake socket decides whether an idle executor may wait for a wake instead of polling. */
+  useWake(wake: { readonly connected: boolean }): void { this.wake = wake; }
+  /** Polls at once, for a coordinator wake. */
+  requestPoll(): void { this.pollRequested = true; this.resume?.(); }
+
+  /** Work in progress keeps the fast interval: commands, runs, and their unsent results. */
+  get busy(): boolean {
+    return this.active !== undefined || this.coding?.activeRunId != null || this.browser?.activeRunId != null
+      || this.journal.pendingCompletions().length > 0 || this.journal.snapshot().outstanding.some(entry => entry.phase !== "terminal")
+      || (this.coding?.journal.pendingReports().length ?? 0) > 0 || (this.browser?.journal.pendingReports().length ?? 0) > 0;
+  }
+  nextDelay(unavailable: boolean): number {
+    // Without a wake channel (an embedded or older setup) the executor keeps its configured interval.
+    if (this.busy || !this.wake) return this.config.pollIntervalMs;
+    return !unavailable && this.wake.connected ? IDLE_POLL_MS : DEGRADED_POLL_MS;
+  }
+  private async pause(ms: number): Promise<void> {
+    if (this.pollRequested) { this.pollRequested = false; return; }
+    await new Promise<void>(resolve => {
+      const done = () => { clearTimeout(timer); this.shutdown.signal.removeEventListener("abort", done); this.resume = undefined; resolve(); };
+      const timer = setTimeout(done, ms);
+      this.resume = done;
+      this.shutdown.signal.addEventListener("abort", done, { once: true });
+    });
+    this.pollRequested = false;
   }
 
   async acceptAssignment(assignment: MacJobAssignment, cancelled = false): Promise<void> {
@@ -325,7 +359,8 @@ export class MacExecutor {
         if (unavailable !== this.disconnected) this.emit(unavailable ? "coordinator_unavailable" : "coordinator_connected");
         this.disconnected = unavailable;
         if (this.fault) throw this.fault;
-        try { await delay(this.config.pollIntervalMs, undefined, { signal: this.shutdown.signal }); } catch { break; }
+        await this.pause(this.nextDelay(unavailable));
+        if (this.stopping) break;
       }
     } finally {
       signal.removeEventListener("abort", stop);

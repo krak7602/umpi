@@ -11,7 +11,7 @@ import { InputError, boundedText, identifier, record } from "../shared/protocol.
 import { DurableCredentials } from "./credentials.js";
 import { Store, StateError, type Channel, type Operation, type OwnerMessageSource } from "./store.js";
 import { assistantTools, ASSISTANT_INSTRUCTIONS, RESPONSE_STYLE_INSTRUCTIONS } from "./tools.js";
-import { readJson, authorize, telegramMissing, telegramUpdate, sendTelegram, answerTelegramCallback, editTelegramKeyboard, type TelegramConfig } from "./transport.js";
+import { readJson, authorize, isExecutorWakeUpgrade, telegramMissing, telegramUpdate, sendTelegram, answerTelegramCallback, editTelegramKeyboard, type TelegramConfig } from "./transport.js";
 import { formatTelegramStatus } from "./telegram-view.js";
 import { coreContextSection, coreContextTools, readCoreContext, replaceCoreContext, readMemoryReviews, readMemoryReview, readMemoryHistory, readMemoryRevision, proposeMemoryRestore, decideMemoryReview } from "./core-context.js";
 import { reconcileMemoryTelegram, handleMemoryTelegramCallback, enqueueMemoryOverview } from "./memory-telegram.js";
@@ -39,6 +39,8 @@ import { enqueueMailControls, handleMailCallback, formatMailStatus } from "./mai
 import { SituationStore } from "./situation-store.js";
 import { situationTools, SITUATION_INSTRUCTIONS } from "./situation-tools.js";
 import { ActivityStore } from "./activity-store.js";
+import { ExecutorPresence } from "./executor-presence.js";
+import { ExecutorWake } from "./executor-wake.js";
 import { activityTools, ACTIVITY_INSTRUCTIONS } from "./activity-tools.js";
 import { BriefStore } from "./brief-store.js";
 import { briefTools, guardBriefReviewTools, BRIEF_INSTRUCTIONS } from "./brief-tools.js";
@@ -198,6 +200,7 @@ class Coordinator extends LifecycleCapability {
         const result = await sendCompanionPush(push.target, { revision: push.revision, jobs: push.jobs }, this.assistant.config);
         this.assistant.companion.finishPush(push.target.deviceId, push.hash, result.status);
       }
+      this.assistant.driveExecutor();
       const due = store.nextReminder();
       // Missing credentials do not justify a two-second polling loop; auth updates wake the queue.
       const pending = store.pendingOperations().some(op => op.status === "submitted");
@@ -234,6 +237,8 @@ export class Assistant extends Agent<Env> {
   readonly credentials: DurableCredentials;
   readonly harness: PiHarness;
   private readonly coordinator: Coordinator;
+  readonly executorPresence: ExecutorPresence;
+  private readonly executorWake: ExecutorWake;
   private readonly openingSessions = new Map<string, Promise<string>>();
   private readonly providerId: string;
   private readonly modelId: string;
@@ -267,6 +272,10 @@ export class Assistant extends Agent<Env> {
     this.planning = new PlanningStore(this.proactive, this.timezone);
     this.situation = new SituationStore(this.store.db, this.timezone);
     this.activity = new ActivityStore(this.store.db);
+    this.executorPresence = new ExecutorPresence(this.store.db);
+    this.executorWake = new ExecutorWake({ presence: this.executorPresence, authorize: request => authorize(request, this.config), pingAt: socket => this.ctx.getWebSocketAutoResponseTimestamp(socket) });
+    // The executor's keepalive is answered by the runtime, so an idle socket never wakes this object.
+    this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     this.mail = new MailStore(this.proactive, this.situation);
     this.brief = new BriefStore(this.proactive);
     const systemOwned = (id: string) => this.mail.ownsCommitment(id) || this.brief.ownsCommitment(id) || this.planning.ownsCommitment(id);
@@ -342,7 +351,7 @@ export class Assistant extends Agent<Env> {
       track: work => this.lifecycle.trackAlarmWork(work),
     });
     const browserProfile = browserExtension(this.browserRuntime);
-    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...activityTools(this.store, this.activity, this.timezone), ...journalTools(this.journal, id => this.store.isBackgroundSession(id)), ...delegation.tools ?? []];
+    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...activityTools(this.store, this.activity, this.timezone, () => this.notifyExecutor()), ...journalTools(this.journal, id => this.store.isBackgroundSession(id)), ...delegation.tools ?? []];
     const guardedProactiveTools = guardBriefReviewTools(guardMailReviewTools(guardPlanningReviewTools(proactiveTools(this.proactive, () => this.coordinator.wake()), this.planningRuntime), this.mailRuntime), this.brief);
     const briefSources = { brief: this.brief, situation: this.situation, mail: this.mail, planning: this.planningRuntime, calendarCredentials: () => this.config.UMPI_CALENDAR_CREDENTIALS, activity: this.activity };
     const umpiExtension: Extension = { name: "umpi", tools: [...guardBackgroundTools(foregroundTools, this.proactive), ...guardedProactiveTools, ...planningTools(this.planningRuntime), ...mailTools(this.mailRuntime), ...briefTools(briefSources)],
@@ -373,7 +382,7 @@ export class Assistant extends Agent<Env> {
       track: work => { this.lifecycle.trackAlarmWork(work); },
     });
     this.store.pendingForegroundInput = () => this.telegramInbox.hasPending();
-    this.lifecycle.use(this.harness).use(this.coordinator);
+    this.lifecycle.use(this.harness).use(this.coordinator).use(this.executorWake);
   }
 
   private subagentScope(parentSessionId: string): SubagentScope {
@@ -544,6 +553,31 @@ export class Assistant extends Agent<Env> {
     return op.id;
   }
 
+  /** Work the Mac would find on its next poll. Each item changes when that work needs the Mac again. */
+  executorDemand(): string[] {
+    const items: string[] = [];
+    for (const job of this.store.jobs()) {
+      if (job.status === "queued" || job.status === "running" && job.cancelRequested) items.push(`job:${job.jobId}:${job.status}:${job.cancelRequested}`);
+    }
+    for (const task of this.coding.active()) if (task.target === "mac") items.push(`coding:${task.taskId}:${task.status}`);
+    for (const task of this.browser.active()) if (task.target === "mac") items.push(`browser:${task.taskId}:${task.status}`);
+    for (const id of this.activity.pendingRequestIds()) items.push(`memory:${id}`);
+    return items;
+  }
+  notifyExecutor(): void { this.executorWake.wake(this.executorDemand()); }
+  private executorPollSeenAt(): number | null {
+    const times = (this.store.executors() as { lastSeenAt?: string }[]).map(executor => Date.parse(executor.lastSeenAt ?? "")).filter(Number.isFinite);
+    return times.length ? Math.max(...times) : null;
+  }
+  /** Wakes the Mac for new work, and tells the owner once when it has been away for a day. */
+  driveExecutor(now = Date.now()): void {
+    this.notifyExecutor();
+    const notice = this.executorPresence.offlineNotice(this.executorWake.live(now).length > 0, this.executorPollSeenAt(), now);
+    if (!notice) return;
+    const since = new Intl.DateTimeFormat("en-GB", { timeZone: this.timezone, weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(notice.lastSeen);
+    this.store.enqueue(notice.id, "telegram", `Your Mac's Umpi executor has not connected since ${since}. Mac jobs, coding and browser tasks, and Aside context wait until it is back. On the Mac, run npm run mac -- service-status.`);
+  }
+
   private async status(): Promise<object> {
     const configured = await this.modelReady();
     const core = await readCoreContext(await this.harness.pi(), BACKGROUND_CONTEXT);
@@ -556,6 +590,7 @@ export class Assistant extends Agent<Env> {
       mail: this.mailRuntime.status(),
       situation: this.situation.status(),
       activity: this.activity.status(),
+      executor: this.executorPresence.status(this.executorWake.live().length > 0, this.executorWake.live().length, this.executorPollSeenAt()),
       brief: this.brief.status(),
       alerts: this.alerts.status(),
       journal: this.journal.status(),
@@ -853,7 +888,8 @@ export default {
       await authorize(request, env, "forward-device");
       // Do not expose Agent RPC, WebSockets, arbitrary object names, or SDK control headers.
       const headers = new Headers();
-      for (const key of ["authorization", "content-type", "content-length", "x-telegram-bot-api-secret-token", "x-umpi-coding-cwd", "content-encoding"]) {
+      const upgrade = isExecutorWakeUpgrade(request) ? ["upgrade", "connection", "sec-websocket-key", "sec-websocket-version", "sec-websocket-extensions"] : [];
+      for (const key of ["authorization", "content-type", "content-length", "x-telegram-bot-api-secret-token", "x-umpi-coding-cwd", "content-encoding", ...upgrade]) {
         const value = request.headers.get(key); if (value !== null) headers.set(key, value);
       }
       const forwarded = new Request(request.url, { method: request.method, headers, body: request.body });
