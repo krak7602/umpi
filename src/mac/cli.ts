@@ -2,7 +2,7 @@ import { parseArgs } from "node:util";
 import { resolve } from "node:path";
 import { closeSync, fstatSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { DEFAULT_CONFIG_PATH, grantBrowserSite, initializeConfig, loadConfig, privateFile, revokeBrowserSite, setBrowserEnabled, setCodingEnabled, setContextEnabled, stateDirectory } from "./config.js";
+import { DEFAULT_CONFIG_PATH, setBrowserExport, grantBrowserSite, initializeConfig, loadConfig, privateFile, revokeBrowserSite, setBrowserEnabled, setCodingEnabled, setContextEnabled, stateDirectory } from "./config.js";
 import { AsideContextLane } from "./aside-context.js";
 import { ExecutionJournal, readJournalStatus } from "./journal.js";
 import { MacExecutor } from "./daemon.js";
@@ -11,6 +11,8 @@ import { BrowserJournal, MacBrowserExecutor, readBrowserJournalStatus } from "./
 import { browserSitePolicyJson } from "../shared/browser.js";
 import { coordinatorUrl } from "../shared/coordinator-url.ts";
 import { WakeChannel } from "./wake.js";
+import { BrowserExportLane } from "./browser-export-lane.js";
+import { loadBrowserExportConfig } from "./browser-export.js";
 import { installService, restartService, servicePaths, serviceState, uninstallService } from "./service.js";
 import { execFileSync } from "node:child_process";
 
@@ -32,6 +34,8 @@ const HELP = `umpi Mac executor (Node 24)
   npm run mac -- browser-disable
   npm run mac -- context-enable
   npm run mac -- context-disable
+  npm run mac -- browser-export-enable --export-config PATH
+  npm run mac -- browser-export-disable
 
 Common options:
   --config PATH             Private config (default ~/.config/umpi/mac/config.json)
@@ -85,6 +89,12 @@ Context sends Aside's own 10-minute activity summaries (never raw clicks, keystr
 screen text or page snapshots) to the coordinator every 5 minutes, and answers the
 owner's Aside memory searches from chat with at most 8 short results. It reads Aside
 data read-only and keeps only a cursor file in the state directory.
+
+browser-export-enable runs the browser login exporter (npm run browser) inside this executor
+instead of a separate watch process. PATH is its existing private export config; its separate
+browser-sync credential, helper and state stay there. It checks for approved snapshot requests
+every 5 minutes and at once when woken, and keeps each site's six-hour refresh. Stop any
+separate npm run browser -- watch first; both would contend for the same exporter state.
 
 Browser uses its own independent lane and only task-owned Aside tabs. For restricted
 execution, register the same exact site policy with the coordinator, inspect its
@@ -167,6 +177,7 @@ async function main(): Promise<void> {
         "policy-digest": { type: "string" },
         site: { type: "string" },
         "all-sites": { type: "boolean" },
+        "export-config": { type: "string" },
         help: { type: "boolean", short: "h" },
       },
     });
@@ -175,8 +186,9 @@ async function main(): Promise<void> {
   if (values.help || positionals.length === 0) { process.stdout.write(HELP); return; }
   if (positionals.length !== 1) throw new UsageError("Specify exactly one command. Use --help.");
   const command = positionals[0];
-  if (!["init", "run", "status", "resume", "service-install", "service-status", "service-restart", "service-uninstall", "coding-enable", "coding-disable", "browser-enable", "browser-disable", "browser-grant", "browser-revoke", "context-enable", "context-disable"].includes(command!)) throw new UsageError("Unknown command. Use --help.");
+  if (!["init", "run", "status", "resume", "browser-export-enable", "browser-export-disable", "service-install", "service-status", "service-restart", "service-uninstall", "coding-enable", "coding-disable", "browser-enable", "browser-disable", "browser-grant", "browser-revoke", "context-enable", "context-disable"].includes(command!)) throw new UsageError("Unknown command. Use --help.");
   if (values["all-sites"] !== undefined && command !== "browser-enable") throw new UsageError("--all-sites is only accepted by browser-enable");
+  if ((values["export-config"] !== undefined) !== (command === "browser-export-enable")) throw new UsageError("browser-export-enable requires --export-config PATH, and only it accepts that option");
   if (command === "browser-grant") {
     if (!values.policy || !values["policy-digest"] || values.site) throw new UsageError("browser-grant requires --policy PATH and --policy-digest SHA256");
   } else if (command === "browser-revoke") {
@@ -224,7 +236,7 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "status") {
-    process.stdout.write(`${JSON.stringify({ executorId: config.executorId, serverUrl: config.serverUrl, workspaces: config.workspaces, journal: readJournalStatus(directory), coding: { enabled: config.coding.enabled, journal: readCodingJournalStatus(directory) }, context: { enabled: config.context?.enabled ?? false }, browser: { enabled: config.browser.enabled, allSites: config.browser.allSites, sites: config.browser.sites.map(site => ({ siteId: site.siteId, policyDigest: createHash("sha256").update(browserSitePolicyJson(site)).digest("hex") })), journal: readBrowserJournalStatus(directory) } }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ executorId: config.executorId, serverUrl: config.serverUrl, workspaces: config.workspaces, journal: readJournalStatus(directory), coding: { enabled: config.coding.enabled, journal: readCodingJournalStatus(directory) }, context: { enabled: config.context?.enabled ?? false }, browserExport: { enabled: config.browserExport !== undefined }, browser: { enabled: config.browser.enabled, allSites: config.browser.allSites, sites: config.browser.sites.map(site => ({ siteId: site.siteId, policyDigest: createHash("sha256").update(browserSitePolicyJson(site)).digest("hex") })), journal: readBrowserJournalStatus(directory) } }, null, 2)}\n`);
     return;
   }
   if (command === "resume" && !values["confirm-stopped"]) throw new UsageError("Verify all prior shell, coding and browser work has stopped, then explicitly pass --confirm-stopped");
@@ -258,6 +270,17 @@ async function main(): Promise<void> {
     if (command === "browser-revoke") {
       revokeBrowserSite(configPath, values.site!);
       process.stdout.write("Local browser site approval revoked. Revoking the last site disables restricted opt-in only; prior state and pending reports were preserved.\n");
+      return;
+    }
+    if (command === "browser-export-enable" || command === "browser-export-disable") {
+      if (command === "browser-export-enable") {
+        // Validates the exporter's private config before the executor depends on it.
+        try { loadBrowserExportConfig(values["export-config"]!); } catch { throw new UsageError("The browser export config is missing, not private, or invalid; create it with npm run browser -- config-create"); }
+      }
+      setBrowserExport(configPath, command === "browser-export-enable" ? resolve(values["export-config"]!) : null);
+      process.stdout.write(command === "browser-export-enable"
+        ? "Browser login export enabled in the executor. Stop any separate npm run browser -- watch, then restart the executor.\n"
+        : "Browser login export disabled in the executor. Its private config and state were kept.\n");
       return;
     }
     if (command === "context-enable" || command === "context-disable") {
@@ -296,6 +319,7 @@ async function main(): Promise<void> {
       const wake = new WakeChannel({ origin: coordinatorUrl(config.serverUrl), token: config.executorToken, executorId: config.executorId,
         onWake: () => executor.requestPoll(), onState: connected => log(connected ? "wake_connected" : "wake_disconnected") });
       executor.useWake(wake);
+      if (config.browserExport) executor.useBrowserExport(new BrowserExportLane(loadBrowserExportConfig(config.browserExport.configPath), { emit: log }));
       wake.start();
       try { await executor.run(stop.signal); } finally { wake.stop(); }
     } finally {

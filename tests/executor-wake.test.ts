@@ -10,7 +10,8 @@ import type { Database } from "../src/worker/store.js";
 import { WakeChannel, WAKE_PING_MS, WAKE_PONG_TIMEOUT_MS, type WakeSocket } from "../src/mac/wake.js";
 import { DEGRADED_POLL_MS, IDLE_POLL_MS, MacExecutor } from "../src/mac/daemon.js";
 import { ExecutionJournal } from "../src/mac/journal.js";
-import type { MacConfig } from "../src/mac/config.js";
+import { parseConfig, type MacConfig } from "../src/mac/config.js";
+import { BrowserExportLane, EXPORT_CHECK_MS } from "../src/mac/browser-export-lane.js";
 import { serviceAppFiles, servicePlist, SERVICE_LABEL } from "../src/mac/service.js";
 
 const env = { UMPI_CONTROL_TOKEN: "c".repeat(40), UMPI_EXECUTOR_TOKEN: "e".repeat(40) };
@@ -151,4 +152,35 @@ test("the login item runs through its own app, restarts after a crash, keeps the
   assert.match(app.infoPlist, /<key>CFBundleName<\/key><string>Umpi Executor<\/string>/);
   assert.match(app.infoPlist, /<key>LSBackgroundOnly<\/key><true\/>/);
   assert.equal(app.launcher, `#!/bin/sh\nexec '/opt/node it'\\''s/bin/node' '/x/umpi-executor.mjs' "$@"\n`);
+});
+
+test("the browser login exporter runs in the background at most every five minutes, or at once after a wake", async () => {
+  let now = 0, runs = 0, release!: () => void;
+  const events: string[] = [];
+  const sync = async (_config: unknown, runtime: { output?: (metadata: never) => void }) => {
+    runs++;
+    await new Promise<void>(resolve => { release = resolve; });
+    runtime.output?.({} as never);
+    if (runs === 2) throw new Error("helper failed");
+    return [];
+  };
+  const lane = new BrowserExportLane({} as never, { emit: event => { events.push(event); }, sync: sync as never, now: () => now });
+  const signal = new AbortController().signal;
+  lane.tick(signal); assert.equal(runs, 1, "the first tick runs");
+  lane.tick(signal); assert.equal(runs, 1, "runs never overlap");
+  release(); await lane.idle();
+  assert.deepEqual(events, ["browser_snapshots_exported 1"]);
+  now += 60_000; lane.tick(signal); assert.equal(runs, 1, "not yet due");
+  lane.wake(); lane.tick(signal); assert.equal(runs, 2, "a wake runs it at once");
+  release(); await lane.idle();
+  assert.equal(events.at(-1), "browser_export_failed");
+  now += EXPORT_CHECK_MS; lane.tick(signal); assert.equal(runs, 3, "due again after five minutes");
+  release(); await lane.idle();
+});
+
+test("the executor config records only an absolute path to the exporter's own config", () => {
+  const base = { serverUrl: "https://coordinator.example", executorToken: "private-test-token-with-at-least-32-characters", executorId: "executor-test", workspaces: [tmpdir()] };
+  assert.deepEqual(parseConfig({ ...base, browserExport: { configPath: "/Users/me/.config/umpi/browser/export.json" } }).browserExport, { configPath: "/Users/me/.config/umpi/browser/export.json" });
+  assert.equal(parseConfig(base).browserExport, undefined);
+  for (const browserExport of [{ configPath: "relative.json" }, { configPath: "/x.json", browserSyncToken: "t" }, "x"]) assert.throws(() => parseConfig({ ...base, browserExport }));
 });

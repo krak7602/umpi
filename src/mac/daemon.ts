@@ -11,6 +11,7 @@ import { ExecutionJournal } from "./journal.js";
 import { rejectedCommand, startCommand, type RunningCommand } from "./command.js";
 import { parseContextPollResult, type ContextPollResult, type ContextReport } from "../shared/context.js";
 import type { AsideContextLane } from "./aside-context.js";
+import type { BrowserExportLane } from "./browser-export-lane.js";
 
 /** With the wake socket up, an idle executor checks in this often; the Aside lane pushes on the same beat. */
 export const IDLE_POLL_MS = 5 * 60_000;
@@ -159,6 +160,7 @@ export class MacExecutor {
   private readonly client: CoordinatorClient;
   private readonly shutdown = new AbortController();
   private wake: { readonly connected: boolean } | undefined;
+  private exportLane: BrowserExportLane | undefined;
   private pollRequested = false;
   private resume: (() => void) | undefined;
 
@@ -172,8 +174,10 @@ export class MacExecutor {
 
   /** The wake socket decides whether an idle executor may wait for a wake instead of polling. */
   useWake(wake: { readonly connected: boolean }): void { this.wake = wake; }
+  /** Runs the browser login exporter alongside the other lanes. */
+  useBrowserExport(lane: BrowserExportLane): void { this.exportLane = lane; }
   /** Polls at once, for a coordinator wake. */
-  requestPoll(): void { this.pollRequested = true; this.resume?.(); }
+  requestPoll(): void { this.pollRequested = true; this.exportLane?.wake(); this.resume?.(); }
 
   /** Work in progress keeps the fast interval: commands, runs, and their unsent results. */
   get busy(): boolean {
@@ -278,6 +282,8 @@ export class MacExecutor {
     if (this.fault) throw this.fault;
     // Browser has an independent slot and must receive cancellation even when
     // shell/coding transport fails or either execution lane is unavailable.
+    // The exporter runs in the background on its own schedule; it never delays these polls.
+    if (!this.stopping) this.exportLane?.tick(signal ?? this.shutdown.signal);
     const results = await Promise.allSettled([this.pollCommandLanes(signal), this.pollBrowserLane(signal), this.pollContextLane(signal)]);
     const failures = results.filter(result => result.status === "rejected");
     const failure = failures.find(result => !(result.reason instanceof CoordinatorUnavailable)) ?? failures[0];
@@ -365,7 +371,7 @@ export class MacExecutor {
     } finally {
       signal.removeEventListener("abort", stop);
       stop();
-      await Promise.all([this.coding?.shutdown(), this.browser?.shutdown(), this.waitForIdle()]);
+      await Promise.all([this.coding?.shutdown(), this.browser?.shutdown(), this.waitForIdle(), this.exportLane?.idle()]);
       // Durable results remain available for the next run if shutdown delivery
       // fails. Do not hold teardown open for an unreachable coordinator.
       try { await this.flushCompletions(AbortSignal.timeout(2000)); } catch { /* Retry from the journal on reconnect. */ }

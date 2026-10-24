@@ -18,6 +18,8 @@ export interface MacConfig {
   browser: { enabled: boolean; allSites: boolean; sites: BrowserSitePolicy[] };
   /** Sends Aside's activity summaries and answers owner-requested Aside memory searches. Off by default. */
   context?: { enabled: boolean };
+  /** The browser login exporter's own private config; its separate browser-sync credential stays there. */
+  browserExport?: { configPath: string };
 }
 
 export const DEFAULT_CONFIG_PATH = join(homedir(), ".config", "umpi", "mac", "config.json");
@@ -103,6 +105,12 @@ export function parseConfig(value: unknown): MacConfig {
   if (typeof browser.enabled !== "boolean" || typeof allSites !== "boolean" || !Array.isArray(browser.sites) || browser.sites.length > MAX_BROWSER_SITES) throw new Error("Configure browser.enabled, browser.allSites and explicit browser site policies");
   const context = input.context === undefined ? { enabled: false } : record(input.context);
   if (typeof context.enabled !== "boolean") throw new Error("context.enabled must be explicitly true or false");
+  let browserExport: MacConfig["browserExport"];
+  if (input.browserExport !== undefined) {
+    const value = record(input.browserExport);
+    if (Object.keys(value).some(key => key !== "configPath") || typeof value.configPath !== "string" || !isAbsolute(value.configPath)) throw new Error("browserExport.configPath must be an absolute path");
+    browserExport = { configPath: value.configPath };
+  }
   const local = ["localhost", "127.0.0.1", "[::1]"].includes(new URL(coordinatorUrl(input.serverUrl)).hostname);
   const browserSites = browser.sites.map(site => parseBrowserSite(site, local));
   if (new Set(browserSites.map(site => site.siteId)).size !== browserSites.length || browser.enabled && !allSites && browserSites.length === 0) throw new Error("Enabled restricted browser execution needs distinct approved site policies");
@@ -115,6 +123,7 @@ export function parseConfig(value: unknown): MacConfig {
     coding: { enabled: coding.enabled },
     browser: { enabled: browser.enabled, allSites, sites: browserSites },
     context: { enabled: context.enabled },
+    ...(browserExport ? { browserExport } : {}),
   };
 }
 
@@ -180,6 +189,14 @@ export function setCodingEnabled(path: string, enabled: boolean): MacConfig {
 export function setContextEnabled(path: string, enabled: boolean): MacConfig {
   return updateConfig(path, document => {
     document.context = { ...(document.context === undefined ? {} : record(document.context)), enabled };
+  });
+}
+
+/** Runs the browser login exporter inside this executor; null stops it. Its config is validated by the caller. */
+export function setBrowserExport(path: string, configPath: string | null): MacConfig {
+  return updateConfig(path, document => {
+    if (configPath === null) delete document.browserExport;
+    else document.browserExport = { configPath: resolve(configPath) };
   });
 }
 

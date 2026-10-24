@@ -309,17 +309,20 @@ Only after separate credential-upload authorization:
 
 ```sh
 npm run browser -- sync --config "$PRIVATE/browser-export.json"
-npm run browser -- watch --config "$PRIVATE/browser-export.json"
+npm run mac -- browser-export-enable --export-config "$PRIVATE/browser-export.json"
+npm run mac -- service-install
 ```
 
-`sync` makes one explicit export/upload attempt for the configured mode. `watch`
-runs in the foreground until stopped. Preserve its private `refresh.sqlite`;
-the [snapshot contract](../subsystems/browser-access.md#one-way-snapshots) defines
-the per-site six-hour schedule, approximately one-minute request polling, and
-failure/restart fences. The CLI installs no login item or OS background service.
-Run `watch` under a separately configured process supervisor if unattended refresh
-is intended; Umpi does not install one. Review private attempt/success metadata;
-a running watcher is not proof of successful refresh or signed-in state.
+`sync` makes one explicit export/upload attempt for the configured mode. For unattended
+refresh, `browser-export-enable` runs the same scheduled export inside the Mac executor's
+[login item](../subsystems/mac-executor.md#login-item); `service-install` restarts it with
+the change. The exporter keeps its own private config, browser-sync credential, helper and
+`refresh.sqlite`; preserve them. The [snapshot contract](../subsystems/browser-access.md#one-way-snapshots)
+defines the per-site six-hour schedule, request discovery and failure/restart fences.
+Stop any separate `npm run browser -- watch` first: both would contend for the same state.
+`watch` remains for a foreground run without the executor. The log records
+`browser_snapshots_exported` and `browser_export_failed`; review private attempt/success
+metadata, since a running exporter is not proof of successful refresh or signed-in state.
 Locked/denied Keychain access needs deliberate owner action.
 
 Read `/api/browser/snapshots`. For unclaimed work only, review the selected
