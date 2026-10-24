@@ -64,7 +64,11 @@ export async function buildExecutorBundle(outfile: string): Promise<void> {
 
 function launchctl(args: string[], allowFailure = false): string {
   try { return execFileSync("launchctl", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); }
-  catch (error) { if (allowFailure) return ""; throw new Error(`launchctl ${args[0]} failed`, { cause: error }); }
+  catch (error) {
+    if (allowFailure) return "";
+    const detail = String((error as { stderr?: unknown }).stderr ?? "").trim().split("\n")[0]?.slice(0, 200);
+    throw new Error(`launchctl ${args[0]} failed${detail ? `: ${detail}` : ""}`, { cause: error });
+  }
 }
 const domain = () => `gui/${userInfo().uid}`;
 
@@ -104,16 +108,37 @@ export async function installService(configPath: string, stateDir: string | unde
   closeSync(openSync(paths.log, "a", 0o600)); chmodSync(paths.log, 0o600);
   const args = ["--config", resolve(configPath), ...(stateDir ? ["--state-dir", resolve(stateDir)] : [])];
   mkdirSync(dirname(paths.plist), { recursive: true });
+  rmSync(paths.plist, { force: true });
   writeFileSync(paths.plist, servicePlist({ node: process.execPath, bundle: paths.bundle, args, log: paths.log, workingDirectory: homedir(), path: process.env.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin" }), { mode: 0o644 });
-  launchctl(["bootout", `${domain()}/${SERVICE_LABEL}`], true);
-  launchctl(["bootstrap", domain(), paths.plist]);
+  await bootout();
+  // Bootstrap can still fail briefly after bootout while launchd releases the old job.
+  for (let attempt = 1; ; attempt++) {
+    try { launchctl(["bootstrap", domain(), paths.plist]); break; }
+    catch (error) { if (attempt >= 5) throw error; await pause(1_000); }
+  }
   launchctl(["enable", `${domain()}/${SERVICE_LABEL}`], true);
-  return serviceState(paths);
+  for (let waited = 0; waited < 10_000; waited += 250) {
+    const state = serviceState(paths);
+    if (state.running) return state;
+    await pause(250);
+  }
+  throw new Error("The login item was loaded but the executor is not running; check executor.log");
 }
 
-export function uninstallService(configPath: string): void {
-  const paths = servicePaths(configPath);
+const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+/** bootout returns before launchd has released the job; wait until it is gone. */
+async function bootout(): Promise<void> {
   launchctl(["bootout", `${domain()}/${SERVICE_LABEL}`], true);
+  for (let waited = 0; waited < 15_000; waited += 250) {
+    if (!launchctl(["print", `${domain()}/${SERVICE_LABEL}`], true)) return;
+    await pause(250);
+  }
+  throw new Error("launchd did not release the previous executor job");
+}
+
+export async function uninstallService(configPath: string): Promise<void> {
+  const paths = servicePaths(configPath);
+  await bootout();
   rmSync(paths.plist, { force: true });
   rmSync(paths.directory, { recursive: true, force: true });
 }

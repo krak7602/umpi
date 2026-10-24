@@ -204,19 +204,22 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "service-uninstall") {
-    uninstallService(configPath);
+    try { await uninstallService(configPath); } catch (error) { throw new UsageError(error instanceof Error ? error.message : "Login item removal failed"); }
     process.stdout.write("Login item removed. The executor is stopped; its config, journals and log are kept.\n");
     return;
   }
   if (command === "service-restart") {
-    restartService();
+    try { restartService(); } catch (error) { throw new UsageError(error instanceof Error ? error.message : "Restart failed"); }
     process.stdout.write("Executor restarted by launchd.\n");
     return;
   }
   if (command === "service-install") {
     let commit: string | null = null;
     try { commit = execFileSync("git", ["rev-parse", "--short", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || null; } catch { /* Not a checkout. */ }
-    const state = await installService(configPath, values["state-dir"], commit);
+    let state;
+    // launchd and build errors carry no credentials; show them so the owner can act.
+    try { state = await installService(configPath, values["state-dir"], commit); }
+    catch (error) { throw new UsageError(error instanceof Error ? error.message : "Login item installation failed"); }
     process.stdout.write(`${JSON.stringify(state, null, 2)}\nLogin item installed. It starts at login and restarts after a crash.\n`);
     return;
   }
