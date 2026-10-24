@@ -46,9 +46,11 @@ export class ExecutorWake extends LifecycleCapability {
     this.options.presence.connected(now);
     return new Response(null, { status: 101, webSocket: client });
   }
-  onWebSocketMessage(socket: WebSocket): boolean {
-    // Only the runtime-answered ping is expected; anything else is ignored.
-    return this.attachment(socket) !== undefined;
+  onWebSocketMessage(socket: WebSocket, message: string | ArrayBuffer): boolean {
+    if (!this.attachment(socket)) return false;
+    // "ping" is answered by the runtime. "hello" proves this object still holds the socket.
+    if (message === "hello") try { socket.send("ready"); } catch { /* The executor reconnects. */ }
+    return true;
   }
   onWebSocketClose(socket: WebSocket): boolean {
     if (!this.attachment(socket)) return false;

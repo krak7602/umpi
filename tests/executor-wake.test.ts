@@ -74,10 +74,10 @@ test("the wake channel authenticates by header, polls on connect and on wake, ke
   assert.equal(channel.connected, true); assert.equal(wakes, 1, "anything queued while away is collected on connect");
   sockets[0]!.emit("message", "wake"); assert.equal(wakes, 2);
   sockets[0]!.emit("message", "something else"); assert.equal(wakes, 2);
-  t.mock.timers.tick(WAKE_PING_MS); assert.deepEqual(sockets[0]!.sent, ["ping"]);
-  sockets[0]!.emit("message", "pong");
+  t.mock.timers.tick(WAKE_PING_MS); assert.deepEqual(sockets[0]!.sent, ["hello"], "the first keepalive checks that the coordinator holds the socket");
+  sockets[0]!.emit("message", "ready");
   t.mock.timers.tick(WAKE_PONG_TIMEOUT_MS); assert.equal(sockets.length, 1, "an answered ping keeps the socket");
-  t.mock.timers.tick(WAKE_PING_MS - WAKE_PONG_TIMEOUT_MS); assert.deepEqual(sockets[0]!.sent, ["ping", "ping"]);
+  t.mock.timers.tick(WAKE_PING_MS - WAKE_PONG_TIMEOUT_MS); assert.deepEqual(sockets[0]!.sent, ["hello", "ping"]);
   t.mock.timers.tick(WAKE_PONG_TIMEOUT_MS);
   assert.equal(sockets.length, 2, "an unanswered ping replaces the socket at once"); assert.equal(sockets[0]!.closed, 4000);
   sockets[1]!.emit("open"); sockets[1]!.emit("close");
