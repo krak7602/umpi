@@ -93,6 +93,10 @@ export class BrowserStore {
     return { sites: rows.map(row => this.value<BrowserSite>("snapshot-request", row.id)!), nextCursor: rows.at(-1)?.cursor ?? null };
   }
   requestedSnapshotSite(id: string): BrowserSite | undefined { return this.value("snapshot-request", id); }
+  /** Recent snapshot requests as "site:cursor"; a re-approval moves a site to a new cursor. */
+  snapshotRequestMarks(): string[] {
+    return this.owner.db.all<{ id: string; cursor: number }>("SELECT id,cursor FROM umpi_browser_snapshot_requests ORDER BY cursor DESC LIMIT 32").map(row => `${row.id}:${row.cursor}`);
+  }
   registerSite(value: unknown, expectedVersion: unknown): BrowserSite {
     const policy = parseBrowserSite(value, this.allowLoopback), previous = this.site(policy.siteId);
     if (!Number.isSafeInteger(expectedVersion) || expectedVersion !== (previous?.version ?? 0)) throw new StateError(409, "Browser site policy changed");

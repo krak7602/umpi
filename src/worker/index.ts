@@ -562,6 +562,8 @@ export class Assistant extends Agent<Env> {
     for (const task of this.coding.active()) if (task.target === "mac") items.push(`coding:${task.taskId}:${task.status}`);
     for (const task of this.browser.active()) if (task.target === "mac") items.push(`browser:${task.taskId}:${task.status}`);
     for (const id of this.activity.pendingRequestIds()) items.push(`memory:${id}`);
+    // The Mac's browser login exporter collects newly approved snapshot requests.
+    for (const mark of this.browser.snapshotRequestMarks()) items.push(`snapshot:${mark}`);
     return items;
   }
   notifyExecutor(): void { this.executorWake.wake(this.executorDemand()); }

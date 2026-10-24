@@ -50,6 +50,10 @@ The executor sends `ping` every minute. The coordinator's runtime answers `pong`
 
 Idle, the executor makes a few hundred requests a day instead of several per second, and the coordinator can hibernate between jobs. The log records `wake_connected` and `wake_disconnected` with timestamps.
 
+### Browser login export
+
+`browser-export-enable --export-config PATH` runs the [browser login exporter](browser-access.md#one-way-snapshots) as one more executor lane, in place of a separate `npm run browser -- watch` process. The executor config stores only the path. The exporter keeps its own private config, browser-sync credential, Keychain-authorized helper and `refresh.sqlite`, so the coordinator still sees two roles with disjoint privileges. The lane runs the exporter's scheduled sync in the background, so it never delays the other lanes. It runs at most every 5 minutes, and at once after a wake; the coordinator announces each newly approved snapshot request. Each site keeps its six-hour refresh. `browser-export-disable` removes the path and keeps the exporter's files.
+
 ### Login item
 
 `npm run mac -- service-install` runs the executor as a per-user launchd agent, `dev.umpi.executor`. It bundles `src/mac/cli.ts` with esbuild into `~/Library/Application Support/Umpi/executor/umpi-executor.mjs` and runs it with the installing Node, without a TypeScript loader or npm. launchd starts it through `Umpi Executor.app` in the same directory: a background-only app with an ad-hoc local signature and the bundle ID `dev.umpi.executor`, whose launcher runs Node with the bundle. The plist names that app in `AssociatedBundleIdentifiers`, so Login Items shows "Umpi Executor" rather than Node's signer. It is independent of terminal and Claude sessions and of later edits to the checkout. The agent starts at login and restarts after a crash or a failed start, at most every 30 seconds; an orderly stop stays stopped. Its PATH is the installing shell's PATH, so approved commands and coding tasks find the same tools. Output goes to `executor.log` beside the config, owner-only. The plist holds paths only, never a credential.
@@ -108,3 +112,4 @@ A failed Aside read is skipped until the next tick and never stops shell, coding
 - 2026-10-14: Replaced installed-executor rollout history with the reusable browser opt-in, ownership, and stop boundary.
 - 2026-10-22: Added the opt-in Aside context lane: activity summaries every 5 minutes and owner-requested memory searches, with raw activity kept on the Mac.
 - 2026-10-24: Added the wake socket and state-based polling, after one-second polling of every lane kept the coordinator awake. Added the launchd login item after an executor started from a terminal session stopped with that session and was not restarted for two days.
+- 2026-10-24: Moved the browser login exporter into the executor as a lane, so one login item runs everything and snapshot requests arrive by wake instead of minute polling.

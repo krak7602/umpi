@@ -168,7 +168,10 @@ All-site eligibility is never permission to export a full cookie jar.
 The separate `--approved-sites` mode uses an explicit private array of locally
 reviewed policies rather than the requested-site feed.
 
-`watch` polls for requests approximately once per minute. Private `refresh.sqlite`
+The Mac executor runs the scheduled export as a lane when `browser-export-enable` names the
+exporter config. It checks for requests every 5 minutes and at once when the coordinator
+announces a newly approved snapshot request over the executor's wake socket. A standalone
+`watch` polls approximately once per minute instead. Private `refresh.sqlite`
 persists the request cursor, policies, and per-site attempt/success schedule.
 Approximately six-hour attempt fences survive failures, interrupted attempts,
 policy updates, and restarts. It never prompts, detects login, or performs login
