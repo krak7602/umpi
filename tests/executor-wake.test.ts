@@ -11,7 +11,7 @@ import { WakeChannel, WAKE_PING_MS, WAKE_PONG_TIMEOUT_MS, type WakeSocket } from
 import { DEGRADED_POLL_MS, IDLE_POLL_MS, MacExecutor } from "../src/mac/daemon.js";
 import { ExecutionJournal } from "../src/mac/journal.js";
 import type { MacConfig } from "../src/mac/config.js";
-import { servicePlist, SERVICE_LABEL } from "../src/mac/service.js";
+import { serviceAppFiles, servicePlist, SERVICE_LABEL } from "../src/mac/service.js";
 
 const env = { UMPI_CONTROL_TOKEN: "c".repeat(40), UMPI_EXECUTOR_TOKEN: "e".repeat(40) };
 const upgrade = (path: string, token: string, method = "GET") => new Request(`https://coordinator.example${path}`, { method, headers: { authorization: `Bearer ${token}`, upgrade: "websocket" } });
@@ -136,13 +136,19 @@ test("a wake interrupts the idle wait", async t => {
   assert.ok(Date.now() - early < 100, "a wake during a poll is not lost");
 });
 
-test("the login item restarts after a crash, keeps the shell PATH, and escapes its values", () => {
-  const plist = servicePlist({ node: "/opt/node/bin/node", bundle: "/Users/me/Library/Application Support/Umpi/executor/umpi-executor.mjs", args: ["--config", "/Users/me/.config/umpi/mac/a&b.json"],
+test("the login item runs through its own app, restarts after a crash, keeps the shell PATH, and escapes its values", () => {
+  const launcher = "/Users/me/Library/Application Support/Umpi/executor/Umpi Executor.app/Contents/MacOS/umpi-executor";
+  const plist = servicePlist({ launcher, args: ["--config", "/Users/me/.config/umpi/mac/a&b.json"],
     log: "/Users/me/.config/umpi/mac/executor.log", workingDirectory: "/Users/me", path: "/opt/homebrew/bin:/usr/bin" });
   assert.match(plist, new RegExp(`<key>Label</key><string>${SERVICE_LABEL.replace(/\./g, "\\.")}</string>`));
-  assert.match(plist, /<array><string>\/opt\/node\/bin\/node<\/string><string>[^<]+umpi-executor\.mjs<\/string><string>run<\/string><string>--config<\/string><string>[^<]*a&amp;b\.json<\/string><\/array>/);
+  assert.match(plist, /<array><string>[^<]+Umpi Executor\.app\/Contents\/MacOS\/umpi-executor<\/string><string>run<\/string><string>--config<\/string><string>[^<]*a&amp;b\.json<\/string><\/array>/);
+  assert.match(plist, /<key>AssociatedBundleIdentifiers<\/key>\s*<array><string>dev\.umpi\.executor<\/string><\/array>/);
   assert.match(plist, /<key>KeepAlive<\/key><dict><key>SuccessfulExit<\/key><false\/><\/dict>/);
   assert.match(plist, /<key>RunAtLoad<\/key><true\/>/);
   assert.match(plist, /<key>PATH<\/key><string>\/opt\/homebrew\/bin:\/usr\/bin<\/string>/);
   assert.doesNotMatch(plist, /token/i);
+  const app = serviceAppFiles("/opt/node it's/bin/node", "/x/umpi-executor.mjs");
+  assert.match(app.infoPlist, /<key>CFBundleName<\/key><string>Umpi Executor<\/string>/);
+  assert.match(app.infoPlist, /<key>LSBackgroundOnly<\/key><true\/>/);
+  assert.equal(app.launcher, `#!/bin/sh\nexec '/opt/node it'\\''s/bin/node' '/x/umpi-executor.mjs' "$@"\n`);
 });
