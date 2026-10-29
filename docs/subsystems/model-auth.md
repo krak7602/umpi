@@ -21,7 +21,8 @@ API-key authentication is disabled on every registered provider. Ambient `ANTHRO
 The one exception is an optional Anthropic API key in the `UMPI_ANTHROPIC_FALLBACK_KEY` Worker secret, used only while the Claude subscription is at its limit:
 
 - The Anthropic provider watches each subscription request. A response classified as a rate or usage limit (HTTP 429) starts a 30-minute fallback window. Pi retries a 429 after a few seconds, and that retry, in the same turn, is authorized with the key. After the window, requests use the subscription again.
-- Without a valid `sk-ant-api…` key, a limit is only recorded and requests fail visibly, as before.
+- Console API keys start with `sk-ant-` and a key kind, such as `api03` or `usr`. Subscription OAuth tokens and Admin API keys are refused. `POST /api/model/fallback/check` tests the key against Anthropic's free model list and returns only the HTTP status.
+- Without a valid key, a limit is only recorded and requests fail visibly, as before.
 - `model.fallback` in `GET /api/status` shows whether a key is configured (and in `keyIssue`, why a set secret is not a usable API key; surrounding whitespace is ignored), whether the window is active and until when, the last limit, and requests billed to the key today. The key itself is never stored in SQLite or shown.
 - The first switch on a local day sends one Telegram notice saying API credits are in use and until when.
 - API credits are billed. Set a spend limit on the key's Console workspace. Keep Claude extra usage disabled unless paid overage is deliberately wanted. Commands launched on the Mac use their own application settings; this coordinator policy does not rewrite those settings.

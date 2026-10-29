@@ -36,7 +36,7 @@ export class ModelFallback implements SubscriptionFallback {
     if (!key || isAnthropicApiKey(key)) return null;
     if (key.startsWith("sk-ant-oat")) return "This is a subscription OAuth token, not an API key; create an API key in the Anthropic Console";
     if (key.startsWith("sk-ant-admin")) return "This is an Admin API key; create a standard API key in the Anthropic Console";
-    return "Not an Anthropic API key (expected sk-ant-api…)";
+    return "Not an Anthropic API key (expected sk-ant-…)";
   }
   active(): boolean { return this.configured() && this.state().limitedUntil > this.now(); }
   limited(): void {
@@ -52,6 +52,16 @@ export class ModelFallback implements SubscriptionFallback {
   used(): void {
     const now = this.now(), state = this.state(), day = this.day.format(now);
     this.save({ ...state, lastUsedAt: now, day, usedToday: state.day === day ? state.usedToday + 1 : 1 });
+  }
+  /** Checks the key with Anthropic's free model list. Only the HTTP status is returned. */
+  async check(fetcher: typeof fetch = fetch): Promise<object> {
+    const key = this.key();
+    if (!key) return { configured: false, keyIssue: this.keyIssue() };
+    try {
+      const response = await fetcher("https://api.anthropic.com/v1/models?limit=1", { redirect: "manual", signal: AbortSignal.timeout(15_000),
+        headers: { "x-api-key": key, "anthropic-version": "2023-06-01" } });
+      return { configured: true, accepted: response.ok, status: response.status };
+    } catch { return { configured: true, accepted: false, status: null }; }
   }
   status(): object {
     const state = this.state(), iso = (value: number | null) => value === null ? null : new Date(value).toISOString();

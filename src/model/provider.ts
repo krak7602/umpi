@@ -20,7 +20,8 @@ export interface SubscriptionFallback {
   /** A request is about to bill the API key. */
   used(): void;
 }
-export function isAnthropicApiKey(value: string): boolean { return /^sk-ant-api\d{2}-[A-Za-z0-9_-]{20,}$/.test(value); }
+/** Console API keys are `sk-ant-<kind>-…` (such as `api03` or `usr`); subscription OAuth and Admin API keys are never accepted. */
+export function isAnthropicApiKey(value: string): boolean { return /^sk-ant-(?!oat|admin)[a-z]+\d*-[A-Za-z0-9_-]{20,}$/.test(value); }
 
 /** Pi treats a non-OAuth Anthropic token as an API key, which bills API credits instead of the plan. */
 function claudeSubscriptionOnly(provider: ReturnType<typeof anthropicProvider>, fallback?: SubscriptionFallback): typeof provider {
