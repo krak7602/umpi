@@ -195,6 +195,16 @@ npm run mac -- run
 
 `GET /api/status` → `activity` shows the Mac's last poll and the stored summary range. In chat, ask what you worked on today, or ask Umpi to search Aside's memory. `context-disable` stops sending; summaries already sent expire after 14 days.
 
+### Turn on web search
+
+[Web search](../subsystems/assistant-runtime.md#web-search) needs a Parallel API key. Create one at [platform.parallel.ai](https://platform.parallel.ai), then install it through Wrangler's hidden prompt, never as an argument:
+
+```sh
+npx wrangler secret put UMPI_PARALLEL_API_KEY --config wrangler.local.jsonc
+```
+
+Check `web.configured` in `GET /api/status`, then ask Umpi to look something up. `web.spentUsd` and `web.budgetUsd` show the month's use against the budget. To change the budget, set `UMPI_WEB_MONTHLY_BUDGET` (thousandths of a US dollar) in the private configuration's `vars`. Remove the secret to turn web search off.
+
 ### Operate browser tasks
 
 The [browser contract](../subsystems/browser-access.md) owns approval, site scope,

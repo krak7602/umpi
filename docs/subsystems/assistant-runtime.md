@@ -137,6 +137,15 @@ Background conversations, which run mail review, the brief, daily preparation, a
 - Both tools are for the owner's own conversation; background reviews other than the brief do not read Aside data. Results are context written by another system, not instructions. Lasting facts go through the reviewed `propose_core_context_update`.
 - Summaries and search results are sent to the model provider like any other conversation content. Raw Aside activity is never sent. `GET /api/status` shows `activity`: the Mac's last poll, the last summary report, and the stored range, without content.
 
+### Web search
+
+`web-search.ts` gives the owner conversation public web access through [Parallel's](https://docs.parallel.ai) Search and Extract APIs. The key is the optional `UMPI_PARALLEL_API_KEY` Worker secret; without it, both tools say web search is not configured.
+
+- `web_search` takes an objective and one to three keyword queries, optionally limited to sites or to pages published after a date. It returns up to 8 results with URL, title, publish date and markdown excerpts, within 8,000 characters. `depth: "quick"` (the default) uses Parallel's `fast` mode; `thorough` uses `advanced`.
+- `read_web_page` reads up to 3 URLs, such as a search result or a link the owner sent: relevant excerpts for an objective, or with `full` the page from the top, within 12,000 characters in total. Pages Parallel cannot read are listed as `failed`.
+- Both are for the owner's conversation and its assistant subagents. Background reviews of mail, notes and the brief cannot use them, so text from those sources cannot steer a query. Results are website text, not instructions. Queries leave Umpi, so the model is told not to put private details about the owner into them unless the owner asked.
+- Each request is counted before it is sent, in thousandths of a US dollar at Parallel's list prices: a quick search or one page costs 1, a thorough search 5. When the UTC month's total would pass `UMPI_WEB_MONTHLY_BUDGET` (default 4500, that is $4.50, below Parallel's $5 monthly free credit), the tools refuse until the next month. `GET /api/status` shows `web`: whether a key is set, the month's spend, searches and pages, and the last provider error, never the key.
+
 ### Default checks
 
 `alerts.ts` adds three owner-default checks that run whenever follow-through is enabled. Two of them send templated Telegram text without a model turn.
@@ -256,7 +265,7 @@ The parent has `spawn_subagent`, `message_subagent`, `subagent_status`, and `can
 
 | Parent | Child capability | Responsibility retained by parent |
 | --- | --- | --- |
-| Foreground assistant | Selected native core context and read-only `current_time`, `list_reminders`, `job_status`, `read_core_context` | Interpret intent, supply missing sources, authorize mutations, integrate the result |
+| Foreground assistant | Selected native core context, read-only `current_time`, `list_reminders`, `job_status`, `read_core_context`, and [web search](#web-search) | Interpret intent, supply missing sources, authorize mutations, integrate the result |
 | Approved coding run | First-party `read`, `write`, `edit`, `bash`, and `read_coding_task` in the same approved copy/run | Assign non-overlapping file work, integrate changes, run final checks, finish the task |
 
 Coding authority derives from the exact parent session, task, run, and original deadline, never from model-supplied scope. Every child tool/RPC admission rechecks that authority. Child conversation/task identities remain part of replay identity, so sibling invocations cannot consume each other's receipts. Shared files are coordination, not separate worktrees or a security sandbox.
@@ -371,4 +380,5 @@ The [development and operation runbook](../runbooks/local-development.md) owns l
 - 2026-10-22: Added the Aside context: activity summaries for chat and the brief, and owner memory search through the Mac.
 - 2026-10-22: Added failure causes to run notes and a once-a-day Telegram notice when a retrying commitment gives up.
 - 2026-10-22: Added image input (photos, image files and albums). Other attachments are skipped with a short reply instead of a rejected webhook.
+- 2026-10-29: Added web search and page reading through Parallel, within a monthly budget.
 - 2026-10-24: Added the executor wake socket, owned by a lifecycle capability, and protected `executor` status (online, last seen). After a day without the executor, one Telegram notice says Mac work is waiting.
