@@ -33,7 +33,7 @@ test("the fallback activates for a window only with a valid key, and notifies on
   assert.equal(fallback.active(), true); assert.equal(notices.length, 1);
   assert.equal(notices[0]![0], "notice:model-fallback:2026-10-23"); assert.match(notices[0]![1], /until about 02:00/);
   assert.deepEqual({ ...fallback.status() as object, lastLimitedAt: undefined, lastUsedAt: undefined },
-    { configured: true, active: true, activeUntil: new Date(now + FALLBACK_WINDOW_MS).toISOString(), lastLimitedAt: undefined, lastUsedAt: undefined, requestsToday: 2 });
+    { configured: true, keyIssue: null, active: true, activeUntil: new Date(now + FALLBACK_WINDOW_MS).toISOString(), lastLimitedAt: undefined, lastUsedAt: undefined, requestsToday: 2 });
   now += FALLBACK_WINDOW_MS;
   assert.equal(fallback.active(), false);
   fallback.limited();
@@ -41,4 +41,10 @@ test("the fallback activates for a window only with a valid key, and notifies on
   assert.equal(notices[1]![0], notices[0]![0]);
   secret = "not-a-key";
   assert.equal(fallback.active(), false); assert.equal(fallback.key(), undefined);
+  assert.match((fallback.status() as { keyIssue: string }).keyIssue, /expected sk-ant-api/);
+  secret = "sk-ant-oat01-synthetic-subscription-token-0000";
+  assert.match((fallback.status() as { keyIssue: string }).keyIssue, /subscription OAuth token/);
+  assert.doesNotMatch(JSON.stringify(fallback.status()), /synthetic/, "status never shows the secret");
+  secret = "  sk-ant-api03-synthetic-fallback-key-0000\n";
+  assert.equal(fallback.key(), "sk-ant-api03-synthetic-fallback-key-0000", "a pasted newline or spaces are ignored");
 });

@@ -26,8 +26,18 @@ export class ModelFallback implements SubscriptionFallback {
   private save(state: FallbackState): void {
     this.db.all("INSERT INTO umpi_model_fallback VALUES (1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data", JSON.stringify(state));
   }
-  configured(): boolean { const key = this.secret(); return !!key && isAnthropicApiKey(key); }
-  key(): string | undefined { return this.configured() ? this.secret() : undefined; }
+  /** Pasted secrets can carry surrounding whitespace or a newline. */
+  private secretValue(): string | undefined { return this.secret()?.trim() || undefined; }
+  configured(): boolean { const key = this.secretValue(); return !!key && isAnthropicApiKey(key); }
+  key(): string | undefined { return this.configured() ? this.secretValue() : undefined; }
+  /** Why a set secret is not used, without revealing it. */
+  private keyIssue(): string | null {
+    const key = this.secretValue();
+    if (!key || isAnthropicApiKey(key)) return null;
+    if (key.startsWith("sk-ant-oat")) return "This is a subscription OAuth token, not an API key; create an API key in the Anthropic Console";
+    if (key.startsWith("sk-ant-admin")) return "This is an Admin API key; create a standard API key in the Anthropic Console";
+    return "Not an Anthropic API key (expected sk-ant-api…)";
+  }
   active(): boolean { return this.configured() && this.state().limitedUntil > this.now(); }
   limited(): void {
     const now = this.now(), state = this.state(), wasActive = state.limitedUntil > now;
@@ -45,7 +55,7 @@ export class ModelFallback implements SubscriptionFallback {
   }
   status(): object {
     const state = this.state(), iso = (value: number | null) => value === null ? null : new Date(value).toISOString();
-    return { configured: this.configured(), active: this.active(), activeUntil: this.active() ? iso(state.limitedUntil) : null,
+    return { configured: this.configured(), keyIssue: this.keyIssue(), active: this.active(), activeUntil: this.active() ? iso(state.limitedUntil) : null,
       lastLimitedAt: iso(state.lastLimitedAt), lastUsedAt: iso(state.lastUsedAt), requestsToday: state.day === this.day.format(this.now()) ? state.usedToday : 0 };
   }
 }
