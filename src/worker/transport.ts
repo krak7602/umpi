@@ -314,7 +314,7 @@ export async function authorize(request: Request, env: TelegramConfig & { UMPI_C
     if (!await secretEqual(request.headers.get("authorization") ?? "", `Bearer ${token}`)) throw new StateError(401, "Unauthorized browser synchronizer");
     return;
   }
-  const control = subagents || browser || coding || mail || brief || planning || schedule || memory || companion === "control" || path === "/api/status" || path === "/api/messages" || path === "/api/jobs" || path === "/api/reminders" || path === "/api/auth" || path === "/api/core-context" || /^\/api\/messages\/[A-Za-z0-9_.:-]+$/.test(path) || /^\/api\/jobs\/[A-Za-z0-9_.:-]+\/(approve|cancel)$/.test(path);
+  const control = subagents || browser || coding || mail || brief || planning || schedule || memory || companion === "control" || path === "/api/status" || path === "/api/model/fallback/check" && request.method === "POST" || path === "/api/messages" || path === "/api/jobs" || path === "/api/reminders" || path === "/api/auth" || path === "/api/core-context" || /^\/api\/messages\/[A-Za-z0-9_.:-]+$/.test(path) || /^\/api\/jobs\/[A-Za-z0-9_.:-]+\/(approve|cancel)$/.test(path);
   if (!executor && !control) throw new StateError(404, "Not found");
   if (!env.UMPI_CONTROL_TOKEN || !env.UMPI_EXECUTOR_TOKEN || env.UMPI_CONTROL_TOKEN.length < 32 || env.UMPI_EXECUTOR_TOKEN.length < 32 || env.UMPI_CONTROL_TOKEN === env.UMPI_EXECUTOR_TOKEN) {
     throw new StateError(503, "Configure distinct UMPI_CONTROL_TOKEN and UMPI_EXECUTOR_TOKEN secrets with at least 32 characters each");
