@@ -42,6 +42,7 @@ import { ActivityStore } from "./activity-store.js";
 import { ExecutorPresence } from "./executor-presence.js";
 import { ExecutorWake } from "./executor-wake.js";
 import { activityTools, ACTIVITY_INSTRUCTIONS } from "./activity-tools.js";
+import { DEFAULT_WEB_MONTHLY_BUDGET, WEB_INSTRUCTIONS, WebUsageStore, webForeground, webTools } from "./web-search.js";
 import { BriefStore } from "./brief-store.js";
 import { briefTools, guardBriefReviewTools, BRIEF_INSTRUCTIONS } from "./brief-tools.js";
 import { briefRequest, enqueueBriefControls, formatBriefStatus, handleBriefCallback } from "./brief-telegram.js";
@@ -102,6 +103,10 @@ export interface Env extends TelegramConfig, CompanionPushConfig {
   UMPI_TIMEZONE?: string;
   /** Optional Anthropic API key, used only while the Claude subscription is at its limit. */
   UMPI_ANTHROPIC_FALLBACK_KEY?: string;
+  /** Optional Parallel API key for web search. */
+  UMPI_PARALLEL_API_KEY?: string;
+  /** Monthly web search budget in thousandths of a US dollar; default 4500. */
+  UMPI_WEB_MONTHLY_BUDGET?: string;
 }
 
 class Coordinator extends LifecycleCapability {
@@ -250,6 +255,7 @@ export class Assistant extends Agent<Env> {
   modelIssue?: string;
   lastModelFailure?: ModelFailure & { at: string };
   readonly modelFallback: ModelFallback;
+  readonly webUsage: WebUsageStore;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -291,6 +297,10 @@ export class Assistant extends Agent<Env> {
     let fallbackZone = this.timezone;
     try { new Intl.DateTimeFormat("en-US", { timeZone: fallbackZone }).format(); } catch { fallbackZone = "UTC"; }
     this.modelFallback = new ModelFallback(this.store.db, () => env.UMPI_ANTHROPIC_FALLBACK_KEY, fallbackZone, (groupId, text) => this.store.enqueue(groupId, "telegram", text));
+    this.webUsage = new WebUsageStore(this.store.db, () => {
+      const budget = Number(env.UMPI_WEB_MONTHLY_BUDGET);
+      return Number.isInteger(budget) && budget >= 0 ? budget : DEFAULT_WEB_MONTHLY_BUDGET;
+    });
     this.proactive.onRetryExhausted = (commitment, reason, now) => {
       const day = new Intl.DateTimeFormat("en-CA", { timeZone: fallbackZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
       const label = commitment.id === "morning-brief" ? "Today's morning brief" : commitment.id.startsWith("daily-") ? "Today's daily-note preparation" : `"${commitment.purpose.slice(0, 80)}"`;
@@ -326,7 +336,8 @@ export class Assistant extends Agent<Env> {
         correct: (session, run, input, text) => this.subagents.correct(session, run, input, text),
       },
     });
-    const assistantChild = assistantSubagentExtension(this.store, this.timezone, () => this.coordinator.wake(), (api, context) => this.subagents.childScope(api, context));
+    const web = webTools({ key: () => this.config.UMPI_PARALLEL_API_KEY, usage: this.webUsage, foreground: webForeground(id => this.store.isBackgroundSession(id)) });
+    const assistantChild = assistantSubagentExtension(this.store, this.timezone, () => this.coordinator.wake(), (api, context) => this.subagents.childScope(api, context), web);
     const codingChild = codingSubagentExtension(this.codingRuntime, (api, context) => this.subagents.childScope(api, context));
     this.subagents = new SubagentRuntime({
       harness: () => this.harness.pi(),
@@ -351,11 +362,11 @@ export class Assistant extends Agent<Env> {
       track: work => this.lifecycle.trackAlarmWork(work),
     });
     const browserProfile = browserExtension(this.browserRuntime);
-    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...activityTools(this.store, this.activity, this.timezone, () => this.notifyExecutor()), ...journalTools(this.journal, id => this.store.isBackgroundSession(id)), ...delegation.tools ?? []];
+    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...activityTools(this.store, this.activity, this.timezone, () => this.notifyExecutor()), ...journalTools(this.journal, id => this.store.isBackgroundSession(id)), ...web, ...delegation.tools ?? []];
     const guardedProactiveTools = guardBriefReviewTools(guardMailReviewTools(guardPlanningReviewTools(proactiveTools(this.proactive, () => this.coordinator.wake()), this.planningRuntime), this.mailRuntime), this.brief);
     const briefSources = { brief: this.brief, situation: this.situation, mail: this.mail, planning: this.planningRuntime, calendarCredentials: () => this.config.UMPI_CALENDAR_CREDENTIALS, activity: this.activity };
     const umpiExtension: Extension = { name: "umpi", tools: [...guardBackgroundTools(foregroundTools, this.proactive), ...guardedProactiveTools, ...planningTools(this.planningRuntime), ...mailTools(this.mailRuntime), ...briefTools(briefSources)],
-      sections: [{ key: "umpi", tag: false, render: () => `${ASSISTANT_INSTRUCTIONS}\n${COMPANION_INSTRUCTIONS}\n${PROACTIVE_INSTRUCTIONS}\n${PLANNING_INSTRUCTIONS}\n${MAIL_INSTRUCTIONS}\n${SITUATION_INSTRUCTIONS}\n${ACTIVITY_INSTRUCTIONS}\n${JOURNAL_INSTRUCTIONS}\n${BRIEF_INSTRUCTIONS}\n${CODING_OWNER_INSTRUCTIONS}\n${BROWSER_OWNER_INSTRUCTIONS}\n${SUBAGENT_INSTRUCTIONS}\nOwner timezone: ${this.timezone}.` }, coreContextSection, { key: "response-style", tag: false, render: () => RESPONSE_STYLE_INSTRUCTIONS }] };
+      sections: [{ key: "umpi", tag: false, render: () => `${ASSISTANT_INSTRUCTIONS}\n${COMPANION_INSTRUCTIONS}\n${PROACTIVE_INSTRUCTIONS}\n${PLANNING_INSTRUCTIONS}\n${MAIL_INSTRUCTIONS}\n${SITUATION_INSTRUCTIONS}\n${ACTIVITY_INSTRUCTIONS}\n${WEB_INSTRUCTIONS}\n${JOURNAL_INSTRUCTIONS}\n${BRIEF_INSTRUCTIONS}\n${CODING_OWNER_INSTRUCTIONS}\n${BROWSER_OWNER_INSTRUCTIONS}\n${SUBAGENT_INSTRUCTIONS}\nOwner timezone: ${this.timezone}.` }, coreContextSection, { key: "response-style", tag: false, render: () => RESPONSE_STYLE_INSTRUCTIONS }] };
     registry.install(umpiExtension); registry.install(codingProfile); registry.install(browserProfile);
     registry.install(delegation); registry.install(assistantChild); registry.install(codingChild);
     this.harness = new PiHarness({
@@ -585,6 +596,7 @@ export class Assistant extends Agent<Env> {
     const core = await readCoreContext(await this.harness.pi(), BACKGROUND_CONTEXT);
     return {
       model: { providerId: this.providerId, modelId: this.modelId, configured, issue: this.modelIssue ?? null, lastFailure: this.lastModelFailure ?? null, fallback: this.modelFallback.status() },
+      web: this.webUsage.status(Boolean(this.config.UMPI_PARALLEL_API_KEY)),
       credentials: await this.credentials.list(), timezone: this.timezone,
       coreContext: { revision: core.revision, blocks: core.blocks.length, pendingSource: core.blocks.filter(block => block.pendingSource).length },
       schedule: this.proactive.status(),
