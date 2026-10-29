@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { classifyModelError, describeModelFailure } from "../src/model/failure.js";
 import { FALLBACK_WINDOW_MS, ModelFallback } from "../src/worker/model-fallback.js";
 import type { Database } from "../src/worker/store.js";
+import { authorize } from "../src/worker/transport.js";
 
 test("provider errors are classified by cause and credentials are removed from the stored text", () => {
   const limit = classifyModelError('429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s rate limit."}}');
@@ -64,4 +65,12 @@ test("the fallback key check sends only the key to the free model list and retur
   secret = "not-a-key";
   assert.deepEqual(await fallback.check(fetcher), { configured: false, keyIssue: "Not an Anthropic API key (expected sk-ant-…)" });
   assert.equal(seen.length, 1, "an unusable key is never sent");
+});
+
+test("only the control credential reaches the fallback key check", async () => {
+  const env = { UMPI_CONTROL_TOKEN: "c".repeat(40), UMPI_EXECUTOR_TOKEN: "e".repeat(40) };
+  const request = (token: string, method = "POST") => new Request("https://coordinator.example/api/model/fallback/check", { method, headers: { authorization: `Bearer ${token}` } });
+  await authorize(request(env.UMPI_CONTROL_TOKEN), env);
+  await assert.rejects(authorize(request(env.UMPI_EXECUTOR_TOKEN), env), { status: 401 });
+  await assert.rejects(authorize(request(env.UMPI_CONTROL_TOKEN, "GET"), env), { status: 404 });
 });
