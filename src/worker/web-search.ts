@@ -59,10 +59,10 @@ async function call(options: WebSearchOptions, path: string, body: object): Prom
   if (!key) throw new StateError(503, "Web search is not configured. Say so; do not guess.");
   let response: Response;
   try {
-    response = await (options.fetch ?? fetch)(`${PARALLEL_ORIGIN}${path}`, { method: "POST", redirect: "error", signal: AbortSignal.timeout(TIMEOUT_MS),
+    response = await (options.fetch ?? fetch)(`${PARALLEL_ORIGIN}${path}`, { method: "POST", redirect: "manual", signal: AbortSignal.timeout(TIMEOUT_MS),
       headers: { "x-api-key": key, "content-type": "application/json" }, body: JSON.stringify(body) });
-  } catch {
-    options.usage.failed("unreachable");
+  } catch (error) {
+    options.usage.failed(`unreachable (${error instanceof Error ? error.name : "unknown"})`);
     throw new StateError(502, "The web search provider could not be reached. Say that the lookup failed; do not guess.");
   }
   if (!response.ok) {
