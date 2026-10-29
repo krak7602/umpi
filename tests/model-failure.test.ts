@@ -41,10 +41,27 @@ test("the fallback activates for a window only with a valid key, and notifies on
   assert.equal(notices[1]![0], notices[0]![0]);
   secret = "not-a-key";
   assert.equal(fallback.active(), false); assert.equal(fallback.key(), undefined);
-  assert.match((fallback.status() as { keyIssue: string }).keyIssue, /expected sk-ant-api/);
+  assert.match((fallback.status() as { keyIssue: string }).keyIssue, /expected sk-ant-/);
   secret = "sk-ant-oat01-synthetic-subscription-token-0000";
   assert.match((fallback.status() as { keyIssue: string }).keyIssue, /subscription OAuth token/);
   assert.doesNotMatch(JSON.stringify(fallback.status()), /synthetic/, "status never shows the secret");
+  secret = "sk-ant-admin01-synthetic-admin-key-00000000";
+  assert.equal(fallback.key(), undefined); assert.match((fallback.status() as { keyIssue: string }).keyIssue, /Admin API key/);
+  secret = "sk-ant-usr-synthetic-console-key-000000000";
+  assert.equal(fallback.key(), secret, "newer Console key kinds are accepted");
   secret = "  sk-ant-api03-synthetic-fallback-key-0000\n";
   assert.equal(fallback.key(), "sk-ant-api03-synthetic-fallback-key-0000", "a pasted newline or spaces are ignored");
+});
+
+test("the fallback key check sends only the key to the free model list and returns only the status", async t => {
+  let secret: string | undefined = "sk-ant-usr-synthetic-console-key-000000000";
+  const fallback = new ModelFallback(database(t), () => secret, "UTC", () => undefined);
+  const seen: [string, Headers][] = [];
+  const fetcher = (async (url: string, init: RequestInit) => { seen.push([url, new Headers(init.headers)]); return new Response("{}", { status: 200 }); }) as typeof fetch;
+  assert.deepEqual(await fallback.check(fetcher), { configured: true, accepted: true, status: 200 });
+  assert.equal(seen[0]![0], "https://api.anthropic.com/v1/models?limit=1"); assert.equal(seen[0]![1].get("x-api-key"), secret);
+  assert.deepEqual(await fallback.check((async () => new Response("", { status: 401 })) as typeof fetch), { configured: true, accepted: false, status: 401 });
+  secret = "not-a-key";
+  assert.deepEqual(await fallback.check(fetcher), { configured: false, keyIssue: "Not an Anthropic API key (expected sk-ant-…)" });
+  assert.equal(seen.length, 1, "an unusable key is never sent");
 });

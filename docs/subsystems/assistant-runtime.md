@@ -291,6 +291,7 @@ Exact `GET` and `HEAD` requests to `/`, `/privacy`, and `/terms` serve public st
 | Method and path | Role | Contract |
 | --- | --- | --- |
 | `GET /api/status` | Control | Model configuration, non-secret credential metadata, recent operations, jobs, reminders, choices, deliveries, executors |
+| `POST /api/model/fallback/check` | Control | Whether Anthropic accepts the [fallback API key](model-auth.md#limit-only-api-key-fallback), as an HTTP status only |
 | `POST /api/messages` | Control | `{id, text}`; durable admission, HTTP 202 |
 | `GET /api/messages/:id` | Control | Operation status, result or error, and its answer deliveries |
 | `GET /api/jobs` | Control | Recent jobs, including exact command, cwd, timeout, version and outcome |

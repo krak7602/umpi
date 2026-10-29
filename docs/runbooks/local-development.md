@@ -48,7 +48,7 @@ The [fallback contract](../subsystems/model-auth.md#limit-only-api-key-fallback)
 npx wrangler secret put UMPI_ANTHROPIC_FALLBACK_KEY --config wrangler.local.jsonc
 ```
 
-Check `model.fallback.configured` in `GET /api/status`. Remove the secret to turn the fallback off. When a request fails, `model.lastFailure.kind` says why; `limit` means the plan's rate or usage limit.
+Check `model.fallback.configured` in `GET /api/status`; `keyIssue` says why a key is not usable. `POST /api/model/fallback/check` confirms that Anthropic accepts the key, without using credits. Remove the secret to turn the fallback off. When a request fails, `model.lastFailure.kind` says why; `limit` means the plan's rate or usage limit.
 
 ### Start and provision the local Worker
 

@@ -651,6 +651,7 @@ export class Assistant extends Agent<Env> {
       const schedule = await scheduleRequest(request, this.proactive, () => this.coordinator.wake(), () => this.session("control"), id => this.planning.ownsCommitment(id) || this.mail.ownsCommitment(id) || this.brief.ownsCommitment(id));
       if (schedule) return schedule;
       if (path === "/api/status" && request.method === "GET") return Response.json(await this.status());
+      if (path === "/api/model/fallback/check" && request.method === "POST") return Response.json(await this.modelFallback.check());
       if (path === "/api/jobs" && request.method === "GET") return Response.json({ jobs: this.store.jobs() });
       if (path === "/api/reminders" && request.method === "GET") return Response.json({ reminders: this.store.reminders() });
       if (path === "/api/core-context" && request.method === "GET") {
