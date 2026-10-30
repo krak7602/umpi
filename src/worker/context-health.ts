@@ -17,9 +17,24 @@ interface Health {
   responses: number; cachedResponses: number; lastResponseAt: number | null;
   compactions: number; lastCompaction: { at: number; reason: string; entries: number } | null;
   resets: number; lastResetAt: number | null;
+  /** Per UTC day: requests, cold starts, and tokens by how they were billed. */
+  days: Record<string, DayUsage>;
 }
+interface DayUsage { requests: number; cold: number; read: number; written: number; uncached: number; output: number }
 const empty = (): Health => ({ contextTokens: 0, input: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, output: 0, responses: 0, cachedResponses: 0, lastResponseAt: null,
-  compactions: 0, lastCompaction: null, resets: 0, lastResetAt: null });
+  compactions: 0, lastCompaction: null, resets: 0, lastResetAt: null, days: {} });
+const USAGE_DAYS = 14;
+/** A request whose prompt was mostly written to the cache, not read from it: the cache had expired or changed. */
+export const COLD_START_MIN_TOKENS = 2_000;
+/** Input billing relative to uncached input: cache reads 0.1, five-minute cache writes 1.25. */
+function inputEquivalent(day: DayUsage): number { return day.read * 0.1 + day.written * 1.25 + day.uncached; }
+function usageSummary(days: DayUsage[]): object {
+  const total = days.reduce((sum, day) => ({ requests: sum.requests + day.requests, cold: sum.cold + day.cold, read: sum.read + day.read, written: sum.written + day.written, uncached: sum.uncached + day.uncached, output: sum.output + day.output }),
+    { requests: 0, cold: 0, read: 0, written: 0, uncached: 0, output: 0 });
+  const equivalent = inputEquivalent(total);
+  return { requests: total.requests, coldStarts: total.cold, cacheRead: total.read, cacheWritten: total.written, uncachedInput: total.uncached, output: total.output,
+    inputEquivalent: Math.round(equivalent), coldWriteShare: equivalent ? Math.round(100 * total.written * 1.25 / equivalent) / 100 : null };
+}
 
 /** Per-conversation context size, cache use, compactions and resets. Counts only; never message content. */
 export class ContextHealth {
@@ -43,8 +58,15 @@ export class ContextHealth {
     if (!usage) return;
     const context = usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
     if (context <= 0) return;
-    this.update(conversationId, health => ({ ...health, contextTokens: context, input: usage.input, cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite,
-      cacheWrite1h: usage.cacheWrite1h ?? 0, output: usage.output, responses: health.responses + 1, cachedResponses: health.cachedResponses + (usage.cacheRead > 0 ? 1 : 0), lastResponseAt: this.now() }));
+    const day = new Date(this.now()).toISOString().slice(0, 10);
+    const cold = usage.cacheWrite >= COLD_START_MIN_TOKENS && usage.cacheWrite > usage.cacheRead;
+    this.update(conversationId, health => {
+      const today = health.days[day] ?? { requests: 0, cold: 0, read: 0, written: 0, uncached: 0, output: 0 };
+      const days = Object.fromEntries(Object.entries({ ...health.days, [day]: { requests: today.requests + 1, cold: today.cold + (cold ? 1 : 0), read: today.read + usage.cacheRead,
+        written: today.written + usage.cacheWrite, uncached: today.uncached + usage.input, output: today.output + usage.output } }).sort(([a], [b]) => a.localeCompare(b)).slice(-USAGE_DAYS));
+      return { ...health, contextTokens: context, input: usage.input, cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite,
+        cacheWrite1h: usage.cacheWrite1h ?? 0, output: usage.output, responses: health.responses + 1, cachedResponses: health.cachedResponses + (usage.cacheRead > 0 ? 1 : 0), lastResponseAt: this.now(), days };
+    });
   }
   compacting(conversationId: string, reason: string, entries: number): void {
     this.update(conversationId, health => ({ ...health, compactions: health.compactions + 1, lastCompaction: { at: this.now(), reason, entries } }));
@@ -79,7 +101,9 @@ export class ContextHealth {
         lastRequest: { input: health.input, cacheRead: health.cacheRead, cacheWrite: health.cacheWrite, cacheWrite1h: health.cacheWrite1h, output: health.output },
         responses: health.responses, cacheHitRate: health.responses ? Math.round(100 * health.cachedResponses / health.responses) / 100 : null,
         compactions: health.compactions, lastCompaction: health.lastCompaction && { ...health.lastCompaction, at: iso(health.lastCompaction.at) },
-        resets: health.resets, lastResetAt: iso(health.lastResetAt) }];
+        resets: health.resets, lastResetAt: iso(health.lastResetAt),
+        today: usageSummary(health.days[new Date(this.now()).toISOString().slice(0, 10)] ? [health.days[new Date(this.now()).toISOString().slice(0, 10)]!] : []),
+        last7Days: usageSummary(Object.entries(health.days).filter(([day]) => day >= new Date(this.now() - 6 * 86_400_000).toISOString().slice(0, 10)).map(([, usage]) => usage)) }];
     });
   }
 }

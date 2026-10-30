@@ -21,7 +21,7 @@ import { companionTools, COMPANION_INSTRUCTIONS } from "./companion-tools.js";
 import { sendCompanionPush, type CompanionPushConfig } from "./companion-push.js";
 import { ProactiveStore } from "./proactive-store.js";
 import { proactiveTools, PROACTIVE_INSTRUCTIONS } from "./proactive-tools.js";
-import { guardBackgroundTools } from "./proactive-runtime.js";
+import { backgroundTools, guardBackgroundTools } from "./proactive-runtime.js";
 import { scheduleRequest } from "./proactive-http.js";
 import { enqueueScheduleControls, handleScheduleCallback, formatScheduleStatus } from "./proactive-telegram.js";
 import { Buffer } from "node:buffer";
@@ -276,6 +276,7 @@ export class Assistant extends Agent<Env> {
   readonly decisions: Decisions;
   readonly dream: DreamStore;
   readonly dreamRuntime: DreamRuntime;
+  private backgroundExtension!: Extension;
   readonly contextHealth: ContextHealth;
   readonly knocks: KnockStore;
 
@@ -405,10 +406,17 @@ export class Assistant extends Agent<Env> {
       compact: async (session, marker) => { await (await this.harness.conversation(session)).compact(marker, BACKGROUND_CONTEXT); },
     });
     // The nightly run may look into the owner's open questions and read older digests; other reviews may not.
-    const dreamExtra = (session: string, tool: string) => ["web_search", "read_web_page", "search_history", "read_history"].includes(tool) && this.dream.ownsSession(session);
+    const dreamOnly = ["web_search", "read_web_page", "search_history", "read_history"];
+    const dreamExtra = (session: string, tool: string) => dreamOnly.includes(tool) && this.dream.ownsSession(session);
     const umpiExtension: Extension = { name: "umpi", hooks: contextHooks({ health: this.contextHealth, isForeground: id => !this.store.isBackgroundSession(id), summaryFor: instructions => this.dreamRuntime.summaryFor(instructions) }), tools: [...guardBackgroundTools(foregroundTools, this.proactive, dreamExtra), ...guardedProactiveTools, ...planningTools(this.planningRuntime), ...mailTools(this.mailRuntime), ...briefTools(briefSources), ...dreamTools(dreamSources)],
       sections: [{ key: "umpi", tag: false, render: () => `${ASSISTANT_INSTRUCTIONS}\n${COMPANION_INSTRUCTIONS}\n${PROACTIVE_INSTRUCTIONS}\n${PLANNING_INSTRUCTIONS}\n${MAIL_INSTRUCTIONS}\n${SITUATION_INSTRUCTIONS}\n${ACTIVITY_INSTRUCTIONS}\n${WEB_INSTRUCTIONS}\n${DECISION_INSTRUCTIONS}\n${JOURNAL_INSTRUCTIONS}\n${BRIEF_INSTRUCTIONS}\n${DREAM_INSTRUCTIONS}\n${CODING_OWNER_INSTRUCTIONS}\n${BROWSER_OWNER_INSTRUCTIONS}\n${SUBAGENT_INSTRUCTIONS}\nOwner timezone: ${this.timezone}.` }, coreContextSection, { key: "lessons", tag: false, render: () => this.dream.playbook() }, { key: "response-style", tag: false, render: () => RESPONSE_STYLE_INSTRUCTIONS }] };
-    registry.install(umpiExtension); registry.install(codingProfile); registry.install(browserProfile);
+    // Background reviews get only the tools they may use: every request carries its tool list, and a review
+    // pays for it in full on each cold start.
+    const reviewTools = [...guardBackgroundTools(foregroundTools, this.proactive, dreamExtra).filter(tool => backgroundTools.has(tool.name) || dreamOnly.includes(tool.name)),
+      ...guardedProactiveTools, ...planningTools(this.planningRuntime), ...mailTools(this.mailRuntime), ...briefTools(briefSources), ...dreamTools(dreamSources)];
+    this.backgroundExtension = { name: "umpi-background", hooks: umpiExtension.hooks, tools: reviewTools,
+      sections: [{ key: "umpi", tag: false, render: () => `${ASSISTANT_INSTRUCTIONS}\n${PROACTIVE_INSTRUCTIONS}\n${PLANNING_INSTRUCTIONS}\n${MAIL_INSTRUCTIONS}\n${SITUATION_INSTRUCTIONS}\n${DECISION_INSTRUCTIONS}\n${BRIEF_INSTRUCTIONS}\n${DREAM_INSTRUCTIONS}\nOwner timezone: ${this.timezone}.` }, coreContextSection, { key: "lessons", tag: false, render: () => this.dream.playbook() }, { key: "response-style", tag: false, render: () => RESPONSE_STYLE_INSTRUCTIONS }] };
+    registry.install(umpiExtension); registry.install(this.backgroundExtension); registry.install(codingProfile); registry.install(browserProfile);
     registry.install(delegation); registry.install(assistantChild); registry.install(codingChild);
     this.harness = new PiHarness({
       // Use HTTP/SSE, not a Node-style WebSocket constructor with custom headers.
@@ -583,7 +591,7 @@ export class Assistant extends Agent<Env> {
         let opening = this.openingSessions.get(key);
         if (!opening) {
           opening = this.harness.sessions.create().then(async session => {
-            await (await this.harness.conversation(session.id)).configure({ thinkingLevel: BACKGROUND_THINKING_LEVEL }, BACKGROUND_CONTEXT);
+            await (await this.harness.conversation(session.id)).configure({ thinkingLevel: BACKGROUND_THINKING_LEVEL, extensions: [this.backgroundExtension] }, BACKGROUND_CONTEXT);
             this.store.registerBackgroundSession(session.id, channel);
             return session.id;
           });
@@ -608,7 +616,10 @@ export class Assistant extends Agent<Env> {
       openJob: this.store.jobs().some(job => job.sessionId === session && ["pending_approval", "queued", "running"].includes(job.status)),
       pendingChoice: this.store.choices().some(choice => choice.sessionId === session && choice.status === "pending"),
     })) return;
-    await (await this.harness.conversation(session)).reset(undefined, BACKGROUND_CONTEXT);
+    const conversation = await this.harness.conversation(session);
+    await conversation.reset(undefined, BACKGROUND_CONTEXT);
+    // A reset already starts a cold cache, so this is when a session moves to the slim review tool list.
+    await conversation.configure({ extensions: [this.backgroundExtension] }, BACKGROUND_CONTEXT);
     this.contextHealth.wasReset(session);
   }
 

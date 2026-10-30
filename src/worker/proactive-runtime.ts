@@ -3,7 +3,8 @@ import { InputError } from "../shared/protocol.js";
 import { StateError } from "./store.js";
 import { ProactiveStore } from "./proactive-store.js";
 
-const backgroundTools = new Set([
+/** Foreground tools a background review may use; everything else is left out of its tool list. */
+export const backgroundTools = new Set([
   "current_time", "list_reminders", "job_status", "read_core_context", "read_core_context_history", "read_companion_state", "request_mac_command",
   "decide", "extract_fields",
 ]);
