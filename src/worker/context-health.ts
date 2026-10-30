@@ -101,13 +101,22 @@ export function mayResetBackground(health: ContextHealth, session: string, work:
   return health.usedSinceReset(session) && !work.activeRun && !work.pendingOperation && !work.openJob && !work.pendingChoice;
 }
 
-export interface ContextHooksOptions { health: ContextHealth; isForeground(conversationId: string): boolean }
+export interface ContextHooksOptions {
+  health: ContextHealth; isForeground(conversationId: string): boolean;
+  /** A prepared summary for a compaction started with these instructions, such as the nightly run's. */
+  summaryFor?(instructions: string | undefined): string | undefined;
+}
 
 /** Hooks on the main extension: size tracking, compaction records, and capped tool results in foreground conversations. */
 export function contextHooks(options: ContextHooksOptions): HookRegistration[] {
   return [
     hook(GenerationTask, { afterResponse(message, api) { options.health.responded(String(api.conversationId), message); } }),
-    hook(CompactionTask, { beforeCompact(compaction, api) { options.health.compacting(String(api.conversationId), compaction.reason, compaction.entries.length); return undefined; } }),
+    hook(CompactionTask, { beforeCompact(compaction, api) {
+      options.health.compacting(String(api.conversationId), compaction.reason, compaction.entries.length);
+      // The nightly run supplies its own anchored summary, so that compaction needs no summarizing model call.
+      const summary = options.summaryFor?.(compaction.instructions);
+      return summary === undefined ? undefined : { summary };
+    } }),
     hook(ToolTask, { afterTool(call: ToolCall, result, api) {
       const conversationId = String(api.conversationId);
       // Background reviews start fresh each run, so their results never accumulate.
