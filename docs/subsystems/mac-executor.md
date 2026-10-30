@@ -106,8 +106,8 @@ The knock lane shows due reminders on this Mac. It is always on, and it uses `/a
 
 - A coordinator wake, or a minute without one, starts a poll. Each poll claims at most three due knocks. They are shown one at a time in the background, so a prompt never delays other lanes.
 - Before a knock, the lane reads the keyboard and mouse idle time from `ioreg -c IOHIDSystem`. After more than 120 seconds without input, it reports `away` and shows nothing.
-- Otherwise it plays a soft 24-second chime with `afplay`: two bell-like notes every three seconds, starting quiet and swelling a little, never loud. It shows a "Umpi" prompt through `osascript`, with **Done** and **Snooze 10 min**. The reminder text is passed as an argument, never as script text. The sound stops when the owner answers; the prompt gives up after two minutes and reports `missed`.
-- The chime is generated on first use as `chime.wav` in the state directory, mode 0600. It needs no audio asset. A literal knocking sound was tried first and dropped as too startling.
+- Otherwise it plays the knock tone with `afplay`, repeated until about 24 seconds have passed, and shows a "Umpi" prompt through `osascript`, with **Done** and **Snooze 10 min**. The reminder text is passed as an argument, never as script text. The sound stops when the owner answers; the prompt gives up after two minutes and reports `missed`.
+- The tone is one of the Mac's own ringtones and alert sounds, by name; the default is Apple's gradual "Slow Rise". `knock-sound` lists the tones and the current one, `knock-sound --play NAME` previews one, and `knock-sound --tone NAME` sets `knock.tone` in the private config; a restart of the login item applies it. Without Apple's tone library, a quiet synthesized chime is used. A literal knocking sound, and then a synthesized chime, were tried first and set aside.
 - An answer that cannot be sent is kept in memory and resent on the next tick. A knock the executor never reports lapses on the coordinator after four minutes and counts as missed.
 
 The [reminder contract](assistant-runtime.md#reminders) owns retries and what Done and Snooze change.

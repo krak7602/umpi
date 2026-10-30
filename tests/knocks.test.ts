@@ -5,7 +5,9 @@ import { Store, type Database } from "../src/worker/store.js";
 import { KnockStore } from "../src/worker/knocks.js";
 import { authorize } from "../src/worker/transport.js";
 import { KNOCK_CLAIM_MS, KNOCK_RETRY_MS, KNOCK_SNOOZE_MINUTES, type KnockAssignment, type KnockReport } from "../src/shared/knock.js";
-import { KNOCK_POLL_MS, KnockLane, chimeSound, macPresenter } from "../src/mac/knock.js";
+import { tmpdir } from "node:os";
+import { DEFAULT_KNOCK_TONE, KNOCK_POLL_MS, KnockLane, chimeSound, knockTonePath, knockTones, macPresenter } from "../src/mac/knock.js";
+import { parseConfig } from "../src/mac/config.js";
 
 const NOW = Date.parse("2026-10-30T09:00:00Z");
 
@@ -125,7 +127,7 @@ test("the Mac lane polls on wake or each minute, shows knocks one at a time, and
   now += KNOCK_POLL_MS; await lane.tick(transport, signal); assert.equal(polls, 3);
 });
 
-test("the chime is a 24-second WAV that stays quiet, and an idle owner is not knocked", async () => {
+test("the fallback chime is a 24-second WAV that stays quiet, and an idle owner is not knocked", async () => {
   const wav = chimeSound();
   assert.equal(wav.toString("ascii", 0, 4), "RIFF"); assert.equal(wav.toString("ascii", 8, 12), "WAVE");
   const rate = wav.readUInt32LE(24), bytes = wav.readUInt32LE(40);
@@ -137,4 +139,18 @@ test("the chime is a 24-second WAV that stays quiet, and an idle owner is not kn
   assert.ok(peak(0, 24) < 0.45, "it never gets loud");
   const presenter = macPresenter("/nonexistent", { idle: async () => 600 });
   assert.equal(await presenter.present({ id: "a:1", attempt: 1, text: "A", intensity: "knock" }, new AbortController().signal), "away");
+});
+
+test("the knock tone is a named setting, and the Mac's tone library is listed by name", () => {
+  const base = { serverUrl: "https://coordinator.example", executorToken: "private-test-token-with-at-least-32-characters", executorId: "executor-test", workspaces: [tmpdir()] };
+  assert.equal(parseConfig(base).knock, undefined);
+  assert.deepEqual(parseConfig({ ...base, knock: { tone: "Slow Rise" } }).knock, { tone: "Slow Rise" });
+  for (const knock of [{ tone: "../etc/passwd" }, { tone: "" }, { tone: "Silk", volume: 1 }, "Silk"]) assert.throws(() => parseConfig({ ...base, knock }));
+  const tones = knockTones();
+  assert.equal(new Set(tones.map(tone => tone.name)).size, tones.length, "names are unique");
+  if (process.platform === "darwin" && tones.length) {
+    assert.ok(knockTonePath(DEFAULT_KNOCK_TONE), "the default tone ships with macOS");
+    assert.ok(tones.every(tone => tone.path.startsWith("/System/Library/")));
+  }
+  assert.equal(knockTonePath("Not a tone"), undefined);
 });
