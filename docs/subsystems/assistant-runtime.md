@@ -46,7 +46,7 @@ Conversation persistence and Pi's automatic compaction are separate from selecte
 `context-health.ts` holds the context policy for every Pi conversation of the coordinator:
 
 - **Compaction is a safety net.** Background compaction starts at 550,000 tokens of Opus 5.5's 1,000,000-token window (`reserveTokens` 32,768, `backgroundTokens` 417,232); a turn blocks to compact only near 967,000. The reserve leaves the summary about 26,000 tokens. A planned nightly compaction will keep the owner conversation far below the threshold; it is accepted design, not yet implemented.
-- **The prompt cache is kept for an hour.** Requests use Anthropic's 1-hour cache (`cacheRetention: "long"`), so replies more than five minutes apart still reuse the shared instructions and history. A 1-hour write costs more than a 5-minute one; one reuse within the hour repays it.
+- **The prompt cache stays at five minutes.** A 1-hour cache was tried on 2026-10-30. It worked with the subscription token, but its writes cost twice the base input price against 1.25 times for five minutes, and replies are often more than an hour apart. It is not used.
 - **Long tool results stay out of the owner conversation.** In foreground conversations, a result over 32,000 characters keeps its start inline. The full text is stored for 14 days behind a handle, and `read_tool_result` reads on from an offset. Earlier results are never cleared later, because a clear would break the cache.
 - **Background reviews start fresh.** Before a proactive drive, a background session that answered since its last reset is reset, but only when it has no admitted run, pending operation, open job, or pending choice. Its results already live in commitment, mail, planning, and brief records.
 - **Status.** `GET /api/status` → `conversations` lists the Telegram, control, and background conversations: context size from the last response, the last request's input, cache read, cache writes (and how much was written for an hour), output, response count and cache-hit rate, compactions with the last reason, and resets. It reports counts only, never content.
@@ -391,6 +391,6 @@ The [development and operation runbook](../runbooks/local-development.md) owns l
 - 2026-10-22: Added the Aside context: activity summaries for chat and the brief, and owner memory search through the Mac.
 - 2026-10-22: Added failure causes to run notes and a once-a-day Telegram notice when a retrying commitment gives up.
 - 2026-10-22: Added image input (photos, image files and albums). Other attachments are skipped with a short reply instead of a rejected webhook.
-- 2026-10-30: Set compaction to start at 550k tokens, moved to the 1-hour prompt cache, stored long tool results behind handles, reset background reviews between runs, and added conversation sizes to status.
+- 2026-10-30: Set compaction to start at 550k tokens, stored long tool results behind handles, reset background reviews between runs, and added conversation sizes to status.
 - 2026-10-29: Added web search and page reading through Parallel, within a monthly budget.
 - 2026-10-24: Added the executor wake socket, owned by a lifecycle capability, and protected `executor` status (online, last seen). After a day without the executor, one Telegram notice says Mac work is waiting.

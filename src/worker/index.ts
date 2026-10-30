@@ -374,7 +374,7 @@ export class Assistant extends Agent<Env> {
     registry.install(delegation); registry.install(assistantChild); registry.install(codingChild);
     this.harness = new PiHarness({
       // Use HTTP/SSE, not a Node-style WebSocket constructor with custom headers.
-      harness: ({ storage, context }) => Harness.open(storage, { models, registry, settings: { extensions: [umpiExtension], stream: { transport: "sse", cacheRetention: "long" }, compaction: CONTEXT_COMPACTION }, onReport: () => { this.modelIssue = "A model extension operation failed; check protected model and job status"; } }, context),
+      harness: ({ storage, context }) => Harness.open(storage, { models, registry, settings: { extensions: [umpiExtension], stream: { transport: "sse" }, compaction: CONTEXT_COMPACTION }, onReport: () => { this.modelIssue = "A model extension operation failed; check protected model and job status"; } }, context),
       defaults: { ...(model ? { model } : {}), thinkingLevel: MAIN_THINKING_LEVEL },
     });
     this.telegramInbox = new TelegramInbox({
