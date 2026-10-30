@@ -5,7 +5,7 @@ import { Store, type Database } from "../src/worker/store.js";
 import { KnockStore } from "../src/worker/knocks.js";
 import { authorize } from "../src/worker/transport.js";
 import { KNOCK_CLAIM_MS, KNOCK_RETRY_MS, KNOCK_SNOOZE_MINUTES, type KnockAssignment, type KnockReport } from "../src/shared/knock.js";
-import { KNOCK_POLL_MS, KnockLane, knockSound, macPresenter } from "../src/mac/knock.js";
+import { KNOCK_POLL_MS, KnockLane, chimeSound, macPresenter } from "../src/mac/knock.js";
 
 const NOW = Date.parse("2026-10-30T09:00:00Z");
 
@@ -125,12 +125,16 @@ test("the Mac lane polls on wake or each minute, shows knocks one at a time, and
   now += KNOCK_POLL_MS; await lane.tick(transport, signal); assert.equal(polls, 3);
 });
 
-test("the knock sound is a 25-second WAV, and an idle owner is not knocked", async () => {
-  const wav = knockSound();
+test("the chime is a 24-second WAV that stays quiet, and an idle owner is not knocked", async () => {
+  const wav = chimeSound();
   assert.equal(wav.toString("ascii", 0, 4), "RIFF"); assert.equal(wav.toString("ascii", 8, 12), "WAVE");
   const rate = wav.readUInt32LE(24), bytes = wav.readUInt32LE(40);
-  assert.equal(bytes / 2 / rate, 25);
-  assert.ok(wav.subarray(44).some(byte => byte !== 0), "it is not silent");
+  assert.equal(bytes / 2 / rate, 24);
+  const pcm = new Int16Array(wav.buffer.slice(wav.byteOffset + 44, wav.byteOffset + wav.length));
+  const peak = (from: number, to: number) => pcm.subarray(from * rate, to * rate).reduce((max, value) => Math.max(max, Math.abs(value)), 0) / 32_767;
+  assert.ok(peak(0, 3) > 0.05, "it is audible from the start");
+  assert.ok(peak(0, 3) < peak(18, 24), "it swells a little");
+  assert.ok(peak(0, 24) < 0.45, "it never gets loud");
   const presenter = macPresenter("/nonexistent", { idle: async () => 600 });
   assert.equal(await presenter.present({ id: "a:1", attempt: 1, text: "A", intensity: "knock" }, new AbortController().signal), "away");
 });

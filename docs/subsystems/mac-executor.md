@@ -106,8 +106,8 @@ The knock lane shows due reminders on this Mac. It is always on, and it uses `/a
 
 - A coordinator wake, or a minute without one, starts a poll. Each poll claims at most three due knocks. They are shown one at a time in the background, so a prompt never delays other lanes.
 - Before a knock, the lane reads the keyboard and mouse idle time from `ioreg -c IOHIDSystem`. After more than 120 seconds without input, it reports `away` and shows nothing.
-- Otherwise it plays a synthesized 25-second knock sound with `afplay` and shows a "Umpi" prompt through `osascript`, with **Done** and **Snooze 10 min**. The reminder text is passed as an argument, never as script text. The sound stops when the owner answers; the prompt gives up after two minutes and reports `missed`.
-- The sound is generated on first use as `knock.wav` in the state directory, mode 0600. It needs no audio asset.
+- Otherwise it plays a soft 24-second chime with `afplay`: two bell-like notes every three seconds, starting quiet and swelling a little, never loud. It shows a "Umpi" prompt through `osascript`, with **Done** and **Snooze 10 min**. The reminder text is passed as an argument, never as script text. The sound stops when the owner answers; the prompt gives up after two minutes and reports `missed`.
+- The chime is generated on first use as `chime.wav` in the state directory, mode 0600. It needs no audio asset. A literal knocking sound was tried first and dropped as too startling.
 - An answer that cannot be sent is kept in memory and resent on the next tick. A knock the executor never reports lapses on the coordinator after four minutes and counts as missed.
 
 The [reminder contract](assistant-runtime.md#reminders) owns retries and what Done and Snooze change.
@@ -124,5 +124,5 @@ The [reminder contract](assistant-runtime.md#reminders) owns retries and what Do
 - 2026-10-14: Replaced installed-executor rollout history with the reusable browser opt-in, ownership, and stop boundary.
 - 2026-10-22: Added the opt-in Aside context lane: activity summaries every 5 minutes and owner-requested memory searches, with raw activity kept on the Mac.
 - 2026-10-24: Added the wake socket and state-based polling, after one-second polling of every lane kept the coordinator awake. Added the launchd login item after an executor started from a terminal session stopped with that session and was not restarted for two days.
-- 2026-10-30: Added the knock lane: due reminders sound and prompt on the Mac when the owner is at it.
+- 2026-10-30: Added the knock lane: due reminders chime and prompt on the Mac when the owner is at it.
 - 2026-10-24: Moved the browser login exporter into the executor as a lane, so one login item runs everything and snapshot requests arrive by wake instead of minute polling.

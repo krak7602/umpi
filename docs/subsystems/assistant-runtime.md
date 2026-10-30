@@ -75,7 +75,7 @@ The model uses semantic tools: `current_time`, `list_reminders`, `create_reminde
 
 Reminder identity is stable. Corrections and cancellations require the current version. Due reminders transition to `fired` and create an outbox item atomically. Lifecycle wakeups recover pending and overdue reminders after restart. This is a text-notification contract, not an iPhone system alarm or a hard real-time deadline.
 
-When a reminder fires, the same transaction creates a **knock** in `knocks.ts` as well as the Telegram message. The knock is how the reminder gets the owner's attention; the message stays as the written record. The [Mac executor's knock lane](mac-executor.md#knocks) shows it with a sound and a Done/Snooze prompt when the owner is at the Mac.
+When a reminder fires, the same transaction creates a **knock** in `knocks.ts` as well as the Telegram message. The knock is how the reminder gets the owner's attention; the message stays as the written record. The [Mac executor's knock lane](mac-executor.md#knocks) shows it with a soft chime and a Done/Snooze prompt when the owner is at the Mac.
 
 - `intensity` is `knock` (default) or `gentle`. A knock is tried up to three times, three minutes apart, while it is missed or the owner is away; a gentle one is tried once. A knock not delivered within 30 minutes expires. Knocks are not alarms: waking the owner still uses a native phone alarm.
 - **Done** records `answer: { outcome: "done" }` on the fired reminder. **Snooze** reschedules the same reminder ten minutes later as a new version, which fires and knocks again.
@@ -399,7 +399,7 @@ The [development and operation runbook](../runbooks/local-development.md) owns l
 - 2026-10-22: Added the Aside context: activity summaries for chat and the brief, and owner memory search through the Mac.
 - 2026-10-22: Added failure causes to run notes and a once-a-day Telegram notice when a retrying commitment gives up.
 - 2026-10-22: Added image input (photos, image files and albums). Other attachments are skipped with a short reply instead of a rejected webhook.
-- 2026-10-30: Added knocks: due reminders sound and prompt on the Mac, with Done and Snooze.
+- 2026-10-30: Added knocks: due reminders chime and prompt on the Mac, with Done and Snooze.
 - 2026-10-30: Set compaction to start at 550k tokens, stored long tool results behind handles, reset background reviews between runs, and added conversation sizes to status.
 - 2026-10-29: Added web search and page reading through Parallel, within a monthly budget.
 - 2026-10-24: Added the executor wake socket, owned by a lifecycle capability, and protected `executor` status (online, last seen). After a day without the executor, one Telegram notice says Mac work is waiting.
