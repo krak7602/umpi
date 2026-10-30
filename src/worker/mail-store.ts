@@ -51,6 +51,8 @@ export interface MailThread {
   suggestedAction?: string;
   snoozeUntil?: string;
   handledAt?: string;
+  /** A reply the nightly run drafted for the owner to review; never sent. */
+  draft?: { text: string; at: string };
   notificationPending?: boolean;
   /** Extraction version already applied; absent means never read for situation facts. */
   factScan?: number;
@@ -608,6 +610,16 @@ export class MailStore {
       const next = { ...old, version: old.version + 1, status: "handled" as const, handledAt: iso(now), messages: old.factsPending ? old.messages : [], updatedAt: iso(now) };
       delete next.notificationPending;
       return this.writeThread(next);
+    });
+  }
+  /** Saves an overnight reply draft on an item that still waits for the owner. The version is unchanged, so owner actions stay valid. */
+  setDraft(id: string, text: string, now = Date.now()): boolean {
+    finiteNow(now);
+    return this.db.transaction(() => {
+      const thread = this.thread(id);
+      if (!thread || (thread.status !== "attention" && thread.status !== "snoozed")) return false;
+      this.writeThread({ ...thread, draft: { text: boundedText(text, 3_000, "draft").trim(), at: iso(now) } });
+      return true;
     });
   }
   snooze(id: string, expectedVersion: number, until: string, now = Date.now()): MailThread {
