@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import test, { type TestContext } from "node:test";
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { GMAIL_SCOPES, MAIL_SYNC_MESSAGE_BATCH_LIMIT, readGmailChanges, type GmailSyncContinuation, type GmailSyncResult, type GmailThreadSnapshot } from "../src/worker/gmail.js";
 import { MailStore } from "../src/worker/mail-store.js";
 import { MailRuntime } from "../src/worker/mail-runtime.js";
+import { MAIL_SCREEN_MODEL, workersAiScreen, type MailScreenInput, type MailScreenVerdict } from "../src/worker/mail-screen.js";
 import { enqueueMailControls, handleMailCallback } from "../src/worker/mail-telegram.js";
 import { ProactiveStore } from "../src/worker/proactive-store.js";
 import { StateError, Store, type Database } from "../src/worker/store.js";
@@ -265,6 +267,67 @@ test("triage is exact and version-bound; owner snooze and handled actions are re
   f.mail.commitReview("mail-review", [{ id: reopened.id, expectedVersion: reopened.version, outcome: "notify", summary: "Summary", reason: "Still due", suggestedAction: "Handle it" }]);
   const current = f.mail.attention()[0]!; assert.equal(f.mail.markHandled(current.id, current.version).status, "handled");
   assert.equal(f.mail.attention().length, 0);
+});
+
+test("a decision-model screen skips unlikely mail before the review, and a failed screen passes mail to it", async t => {
+  const f = fixture(t), settingsVersion = f.mail.settings().version;
+  const scores: Record<string, MailScreenVerdict | "fail"> = {
+    "Can you confirm the invoice?": { attention: 0.91, facts: 0.4 }, "Weekly digest": { attention: 0.03, facts: 0.05 },
+    "Flight booked": { attention: 0.05, facts: 0.82 }, "Starred note": { attention: 0.01, facts: 0.01 }, "Screen fails": "fail",
+  };
+  const seen: MailScreenInput[] = [];
+  const screen = async (input: MailScreenInput) => { seen.push(input); const score = scores[input.subject]!; if (score === "fail") throw new Error("Workers AI unavailable"); return score; };
+  const runtime = new MailRuntime(f.mail, undefined, async () => undefined, screen);
+  const threads = Object.keys(scores).map((subject, index) => snapshot({ id: `screen-${index}`, versionKey: `in-${index}:none`, subject, starred: subject === "Starred note",
+    messages: [{ ...snapshot().messages[0]!, id: `in-${index}`, subject, excerpt: "x".repeat(2_000) }] }));
+  assert.deepEqual(f.mail.applySync("primary", settingsVersion, { ...syncResult(threads[0]!), threads }, NOW), { changed: 5, pending: 0 }, "unscreened mail is not yet review work");
+  f.proactive.drive(NOW, false, { telegram: "mail-review" });
+  assert.equal(f.proactive.runForSession("mail-review"), undefined, "no review before the screen");
+  assert.ok(runtime.nextDue(NOW)! <= NOW + 60_000, "waiting mail wakes the runtime soon");
+
+  await runtime.drive(NOW);
+  assert.equal(seen.length, 5);
+  const skipped = f.mail.thread(`mail-${createHash("sha256").update("screen-1").digest("hex").slice(0, 32)}`)!;
+  const status = f.mail.status() as { screen: object; counts: Record<string, number> };
+  assert.deepEqual(status.screen, { enabled: true, waiting: 0, passed: 3, skipped: 1, unavailable: 1 });
+  assert.equal(status.counts.ignored, 1); assert.equal(status.counts.pending, 4);
+  assert.equal(skipped.status, "ignored"); assert.deepEqual(skipped.messages, [], "skipped mail keeps no excerpts");
+  assert.match(skipped.summary!, /screened as unlikely to need you \(3%\)/);
+  const { input } = openReview(f);
+  assert.deepEqual(input.threads.map(thread => thread.subject).sort(), ["Can you confirm the invoice?", "Flight booked", "Screen fails", "Starred note"]);
+
+  // New mail in a skipped thread is screened again on its own content.
+  const again = { ...threads[1]!, versionKey: "in-1b:none", messages: [{ ...threads[1]!.messages[0]!, id: "in-1b", excerpt: "Your account is locked." }] };
+  scores["Weekly digest"] = { attention: 0.7, facts: 0.1 };
+  f.mail.applySync("primary", settingsVersion, syncResult(again, "201"), NOW);
+  await runtime.drive(NOW);
+  assert.equal(seen.length, 6); assert.equal(seen.at(-1)!.messages.at(-1)!.excerpt, "Your account is locked.");
+  assert.equal(f.mail.thread(skipped.id)!.status, "pending"); assert.equal(f.mail.thread(skipped.id)!.screen!.passed, true);
+
+  // A thread the owner answered is only read for facts; a low facts score clears that read without a review.
+  const answered = { ...threads[0]!, versionKey: "in-0:sent-0", lastOutgoingAt: "2027-04-10T10:00:00.000Z", awaitingReply: false,
+    messages: [...threads[0]!.messages, { id: "sent-0", sentAt: "2027-04-10T10:00:00.000Z", direction: "outgoing" as const, from: "Owner", subject: "Re", excerpt: "Done." }] };
+  scores["Can you confirm the invoice?"] = { attention: 0.6, facts: 0.1 };
+  f.mail.applySync("primary", settingsVersion, syncResult(answered, "202"), NOW);
+  await runtime.drive(NOW);
+  const resolved = f.mail.thread(`mail-${createHash("sha256").update("screen-0").digest("hex").slice(0, 32)}`)!;
+  assert.equal(resolved.status, "resolved"); assert.equal(resolved.factsPending, undefined); assert.deepEqual(resolved.messages, []);
+});
+
+test("the Workers AI screen asks Clef-flash two yes/no questions with bounded mail and rejects malformed answers", async () => {
+  const calls: { model: string; input: { model: string; state: MailScreenInput; questions: Record<string, { type: string }> } }[] = [];
+  let answers: unknown = { attention: { type: "noul", noul: 0.12 }, facts: { type: "noul", noul: 0.7 } };
+  const screen = workersAiScreen({ async run(model, input) { calls.push({ model, input: input as never }); return { model: "clef-flash", answers, usage: { input_tokens: 500, output_tokens: 0 } }; } });
+  const input: MailScreenInput = { subject: "Order shipped", sender: "Shop <shop@example.test>", category: "updates", gmailImportant: false,
+    messages: Array.from({ length: 5 }, (_, index) => ({ direction: "incoming" as const, from: "Shop", excerpt: `${index}`.repeat(2_000) })) };
+  assert.deepEqual(await screen(input), { attention: 0.12, facts: 0.7 });
+  const [call] = calls;
+  assert.equal(call!.model, MAIL_SCREEN_MODEL); assert.equal(call!.input.model, "clef-flash");
+  assert.deepEqual(Object.entries(call!.input.questions).map(([id, question]) => [id, question.type]), [["attention", "noul"], ["facts", "noul"]]);
+  assert.equal(call!.input.state.messages.length, 3, "only the latest three messages");
+  assert.ok(call!.input.state.messages.every(message => message.excerpt.length === 600));
+  answers = { attention: { type: "noul", noul: 1.4 } };
+  await assert.rejects(screen(input), /no probability/);
 });
 
 test("Telegram mail controls bind the confirmed message and exact settings version", async t => {

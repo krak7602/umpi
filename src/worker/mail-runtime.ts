@@ -1,9 +1,14 @@
 import { parseGmailCredentials, readGmailChanges } from "./gmail.js";
 import { MAIL_PRIMARY_ACCOUNT, MailStore } from "./mail-store.js";
+import type { MailScreen } from "./mail-screen.js";
 
 export interface MailAccountCredentials { id: string; credentials: string }
 export const MAIL_ACCOUNT_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
 const MAX_MAIL_ACCOUNTS = 4;
+/** Screens per drive; the rest wait for the next wake a minute later. */
+const MAIL_SCREEN_PER_DRIVE = 120;
+const MAIL_SCREEN_PARALLEL = 6;
+const MAIL_SCREEN_RESUME_MS = 60_000;
 
 /**
  * `UMPI_GMAIL_CREDENTIALS` holds either one Gmail grant (the primary mailbox) or
@@ -30,19 +35,24 @@ export function parseMailAccounts(secret: string | undefined): MailAccountCreden
 export class MailRuntime {
   private syncing?: Promise<void>;
   readonly accounts: MailAccountCredentials[];
-  constructor(readonly store: MailStore, credentials: string | undefined, readonly wake: () => Promise<void>) {
+  constructor(readonly store: MailStore, credentials: string | undefined, readonly wake: () => Promise<void>, private readonly screen?: MailScreen) {
     this.accounts = parseMailAccounts(credentials);
+    store.screening = screen !== undefined;
   }
   available(): boolean { return this.accounts.length > 0; }
   private ids(): string[] {
     // Without any grant, the primary row still surfaces "authorization not configured" instead of silence.
     return this.accounts.length ? this.accounts.map(account => account.id) : [MAIL_PRIMARY_ACCOUNT];
   }
-  nextDue(now = Date.now()): number | undefined { return this.store.nextDue(this.ids(), now); }
+  private waitingScreen(): boolean { return this.screen !== undefined && this.store.settings().enabled && this.store.unscreened(1).length > 0; }
+  nextDue(now = Date.now()): number | undefined {
+    const due = this.store.nextDue(this.ids(), now);
+    return this.waitingScreen() ? Math.min(due ?? Infinity, now + MAIL_SCREEN_RESUME_MS) : due;
+  }
   async drive(now = Date.now()): Promise<void> {
     this.store.releaseSnoozes(now);
     this.store.ensureAccounts(this.ids(), now);
-    if (!this.store.dueAccounts(this.ids(), now).length) return;
+    if (!this.store.dueAccounts(this.ids(), now).length && !this.waitingScreen()) return;
     if (!this.syncing) this.syncing = this.sync(now).finally(() => { this.syncing = undefined; });
     await this.syncing;
   }
@@ -57,7 +67,24 @@ export class MailRuntime {
       const result = await readGmailChanges(account.credentials, request, now);
       this.store.applySync(accountId, request.settingsVersion, result, Date.now());
     }
+    await this.screenPending();
     await this.wake();
+  }
+  /** Screens new threads before any review sees them. A failed call passes the thread to the review. */
+  private async screenPending(): Promise<void> {
+    const screen = this.screen;
+    if (!screen || !this.store.settings().enabled) return;
+    let screened = 0;
+    while (screened < MAIL_SCREEN_PER_DRIVE) {
+      const batch = this.store.unscreened(MAIL_SCREEN_PARALLEL);
+      if (!batch.length) break;
+      await Promise.all(batch.map(async thread => {
+        const verdict = await screen(this.store.screenInput(thread)).catch(() => null);
+        this.store.applyScreen(thread.id, thread.providerVersion, verdict, Date.now());
+      }));
+      screened += batch.length;
+    }
+    if (screened) this.store.screened(Date.now());
   }
   async check(rebootstrap = false): Promise<void> {
     this.store.ensureAccounts(this.ids());
