@@ -2,6 +2,7 @@ import { nextPlanningTime, planningDay, planningDayBounds, shiftPlanningDay } fr
 import { InputError, boundedText, record } from "../shared/protocol.js";
 import { ProactiveStore, type Commitment, type ProactiveRun, type RetryPolicy } from "./proactive-store.js";
 import { StateError, type Database } from "./store.js";
+import type { HistoryIndex } from "./history-index.js";
 
 /**
  * The nightly run ("dream"). Once a night one background review reads the owner's day and writes a day digest, the
@@ -15,6 +16,12 @@ export const DREAM_RETRY: RetryPolicy = { everyMinutes: 60, maxAttempts: 3 };
 const MAX_ACTIVE_LESSONS = 30;
 const MAX_LESSON_EDITS = 5;
 const DIGEST_DAYS_KEPT = 400;
+/** A conversation part handed to the night at a time; the night reads every part. */
+export const DREAM_PART_CHARS = 60_000;
+const PASSAGE_CHARS = 2_000;
+/** A day this long is closed early with the anchored summary, before the 550k threshold. */
+export const LONG_DAY_TOKENS = 450_000;
+const LONG_DAY_GAP_MS = 3 * 3_600_000;
 
 /** `firstDay` is the first day a scheduled night closes, so enabling late in a day does not close the day before. */
 export interface DreamSettings { version: number; enabled: boolean; time: string; firstDay?: string }
@@ -40,11 +47,16 @@ export interface Night {
   probes: Probe[];
   overnight: { whileYouSlept: string[]; tomorrow: string[] } | null;
   lessonEdits: number;
+  /** Reply drafts saved on mail items overnight. */
+  drafts?: number;
   compaction: { at: string; sessions: number; failed: number; probesKept: number; probesRepaired: number; error?: string } | null;
 }
-export interface Digest { id: string; level: "day" | "week" | "month"; period: string; text: string; data: DayDigest | null; updatedAt: string }
+export interface Digest { id: string; level: "day" | "week" | "month" | "year"; period: string; text: string; data: DayDigest | null; updatedAt: string }
+export interface TranscriptLine { at: number; text: string }
 export interface Lesson {
   id: string; version: number; text: string; status: "active" | "retired";
+  /** Nights whose evidence confirmed the lesson; a well-supported lesson is kept over a newer one when merging. */
+  support?: number;
   history: { version: number; text: string; status: "active" | "retired"; at: string; by: "dream" | "owner"; evidence: string | null }[];
 }
 
@@ -76,6 +88,10 @@ export class DreamStore {
   readonly db: Database;
   /** Validates that an open-loop reference names a live record (commitment, reminder, mail item, choice). */
   refExists: (ref: string) => boolean = () => false;
+  /** Saves an overnight reply draft on a mail item that needs the owner; false when the item no longer waits. */
+  saveDraft: (mailId: string, text: string, now: number) => boolean = () => false;
+  /** Digests and conversation text go here for history search. */
+  index?: HistoryIndex;
   constructor(readonly proactive: ProactiveStore) {
     this.db = proactive.db;
     for (const sql of [
@@ -84,6 +100,7 @@ export class DreamStore {
       "CREATE TABLE IF NOT EXISTS umpi_digests (id TEXT PRIMARY KEY, level TEXT NOT NULL, period TEXT NOT NULL, search TEXT NOT NULL, data TEXT NOT NULL)",
       "CREATE INDEX IF NOT EXISTS umpi_digest_level ON umpi_digests(level,period)",
       "CREATE TABLE IF NOT EXISTS umpi_lessons (id TEXT PRIMARY KEY, status TEXT NOT NULL, data TEXT NOT NULL)",
+      "CREATE TABLE IF NOT EXISTS umpi_dream_parts (day TEXT NOT NULL, part INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (day, part))",
     ]) this.db.all(sql);
     this.db.all("INSERT OR IGNORE INTO umpi_dream_settings VALUES (1,?)", JSON.stringify({ version: 1, enabled: false, time: DREAM_DEFAULT_TIME } satisfies DreamSettings));
   }
@@ -157,6 +174,17 @@ export class DreamStore {
     if (!this.due(now)) return;
     this.db.transaction(() => { if (this.due(now)) this.request(shiftPlanningDay(planningDay(now, this.timezone), -1), false, now); });
   }
+  /**
+   * Closes a very long day early, so its compaction uses the anchored summary rather than the 550k threshold's
+   * generic one. At most once in three hours; the scheduled night still closes the whole day.
+   */
+  closeLongDay(contextTokens: number[], now = Date.now()): boolean {
+    if (!contextTokens.some(tokens => tokens >= LONG_DAY_TOKENS) || !this.settings().enabled || !this.commitment() || !this.proactive.settings().enabled) return false;
+    const latest = this.rows<Night>("SELECT data FROM umpi_dream_nights ORDER BY json_extract(data,'$.requestedAt') DESC LIMIT 1")[0];
+    if (latest && (latest.status === "requested" || latest.status === "committed" || now - Date.parse(latest.requestedAt) < LONG_DAY_GAP_MS)) return false;
+    this.requestNow(now);
+    return true;
+  }
   /** Runs the night for today so far, for a check or after a long day. */
   requestNow(now = Date.now()): Night {
     if (!this.proactive.settings().enabled) throw new StateError(409, "Follow-through is paused in /schedule; enable it first");
@@ -177,21 +205,50 @@ export class DreamStore {
   private saveDigest(digest: Digest): void {
     const search = `${digest.text}\n${JSON.stringify(digest.data ?? {})}`.toLowerCase();
     this.db.all("INSERT INTO umpi_digests VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET search=excluded.search,data=excluded.data", digest.id, digest.level, digest.period, search, JSON.stringify(digest));
+    const extra = digest.data ? [...digest.data.decisions.map(text => `Decision: ${text}`), ...digest.data.openLoops.map(loop => `Open: ${loop.text}`)].join("\n") : "";
+    this.index?.put([{ id: digest.id, source: "digest", period: digest.period, at: Date.parse(digest.updatedAt), text: `${digest.level} ${digest.period}: ${digest.text}${extra ? `\n${extra}` : ""}` }]);
   }
   dayDigests(from: string, to: string): Digest[] {
     return this.rows<Digest>("SELECT data FROM umpi_digests WHERE level='day' AND period>=? AND period<=? ORDER BY period", from, to);
   }
-  /** Ranks digests by how many query words they contain; newest first among equals. */
-  search(query: string, level?: Digest["level"], limit = 8): { id: string; level: string; period: string; excerpt: string; hits: number }[] {
-    const words = [...new Set(query.toLowerCase().split(/[^\p{L}\p{N}@#.+-]+/u).filter(word => word.length > 1))].slice(0, 8);
-    if (!words.length) throw new InputError("Search needs at least one word");
-    const rows = this.db.all<{ data: string; search: string }>(`SELECT data, search FROM umpi_digests WHERE (${words.map(() => "search LIKE ?").join(" OR ")})${level ? " AND level=?" : ""} ORDER BY period DESC LIMIT 200`,
-      ...words.map(word => `%${word}%`), ...(level ? [level] : []));
-    return rows.map(row => {
-      const digest = JSON.parse(row.data) as Digest, hits = words.filter(word => row.search.includes(word)).length;
-      const lower = digest.text.toLowerCase(), at = Math.max(0, Math.min(...words.map(word => { const index = lower.indexOf(word); return index < 0 ? Infinity : index; })) - 120);
-      return { id: digest.id, level: digest.level, period: digest.period, excerpt: (Number.isFinite(at) ? digest.text.slice(at, at + 400) : digest.text.slice(0, 400)).trim(), hits };
-    }).sort((a, b) => b.hits - a.hits || b.period.localeCompare(a.period)).slice(0, limit);
+  /** Puts digests written before the index existed into it; unchanged passages are skipped. */
+  backfillIndex(): void {
+    if (!this.index) return;
+    for (const digest of this.rows<Digest>("SELECT data FROM umpi_digests")) this.saveDigest(digest);
+  }
+  monthDigests(year: string): { month: string; summary: string }[] {
+    return this.rows<Digest>("SELECT data FROM umpi_digests WHERE level='month' AND period LIKE ? ORDER BY period", `${year}-%`).map(digest => ({ month: digest.period, summary: digest.text }));
+  }
+  /** The conversation since the last night, in parts the night reads one by one. */
+  saveParts(day: string, lines: TranscriptLine[]): number {
+    const parts: TranscriptLine[][] = [[]]; let size = 0;
+    for (const line of lines) {
+      if (size + line.text.length > DREAM_PART_CHARS && parts.at(-1)!.length) { parts.push([]); size = 0; }
+      parts.at(-1)!.push(line); size += line.text.length + 1;
+    }
+    this.db.transaction(() => {
+      this.db.all("DELETE FROM umpi_dream_parts WHERE day=?", day);
+      parts.forEach((part, index) => this.db.all("INSERT INTO umpi_dream_parts VALUES (?,?,?)", day, index + 1, JSON.stringify(part)));
+      this.db.all("DELETE FROM umpi_dream_parts WHERE day < ?", shiftPlanningDay(day, -7));
+    });
+    return parts.length;
+  }
+  partCount(day: string): number { return this.db.all<{ n: number }>("SELECT count(*) AS n FROM umpi_dream_parts WHERE day=?", day)[0]!.n; }
+  part(day: string, part: number): TranscriptLine[] {
+    const row = this.db.all<{ data: string }>("SELECT data FROM umpi_dream_parts WHERE day=? AND part=?", day, part)[0];
+    if (!row) throw new StateError(404, `There is no conversation part ${part}`);
+    return JSON.parse(row.data) as TranscriptLine[];
+  }
+  /** The day's conversation text becomes searchable passages of about 2,000 characters. */
+  private indexConversation(day: string): void {
+    if (!this.index) return;
+    const passages: { at: number; lines: string[]; size: number }[] = [];
+    for (let part = 1; part <= this.partCount(day); part++) for (const line of this.part(day, part)) {
+      const last = passages.at(-1);
+      if (!last || last.size + line.text.length > PASSAGE_CHARS) passages.push({ at: line.at, lines: [line.text], size: line.text.length });
+      else { last.lines.push(line.text); last.size += line.text.length + 1; }
+    }
+    this.index.put(passages.map((passage, index) => ({ id: `conv:${day}:${passage.at}:${index}`, source: "conversation", period: day, at: passage.at, text: passage.lines.join("\n") })));
   }
 
   // Lessons ------------------------------------------------------------------------------------------------------
@@ -212,9 +269,11 @@ export class DreamStore {
       this.saveLesson({ id, version: 1, text, status: "active", history: [{ version: 1, text, status: "active", at: iso(now), by, evidence }] });
       return;
     }
-    if (body.op !== "update" && body.op !== "retire") throw new InputError("Lesson op must be add, update, or retire");
+    if (body.op !== "update" && body.op !== "retire" && body.op !== "reinforce") throw new InputError("Lesson op must be add, update, reinforce, or retire");
     const old = typeof body.id === "string" ? this.rows<Lesson>("SELECT data FROM umpi_lessons WHERE id=?", body.id)[0] : undefined;
     if (!old) throw new InputError("Unknown lesson id");
+    // Reinforcing counts the evidence without changing the rule, so the history stays a list of real edits.
+    if (body.op === "reinforce") { if (old.status === "active") this.saveLesson({ ...old, support: (old.support ?? 0) + 1 }); return; }
     const text = body.op === "update" ? boundedText(body.text, 300, "lesson text").trim() : old.text, status = body.op === "retire" ? "retired" as const : "active" as const;
     this.saveLesson({ ...old, version: old.version + 1, text, status, history: [...old.history, { version: old.version + 1, text, status, at: iso(now), by, evidence }].slice(-12) });
   }
@@ -242,7 +301,7 @@ export class DreamStore {
 
   // Commit -------------------------------------------------------------------------------------------------------
   commit(sessionId: string, value: unknown, now = Date.now()): Night {
-    const body = record(value); keys(body, ["digest", "week", "month", "probes", "lessons", "overnight"], "nightly result");
+    const body = record(value); keys(body, ["digest", "week", "month", "year", "probes", "lessons", "overnight", "drafts"], "nightly result");
     const raw = record(body.digest); keys(raw, ["summary", "decisions", "standingInstructions", "openLoops", "people", "topics"], "digest");
     const digest: DayDigest = {
       summary: boundedText(raw.summary, 6_000, "digest summary").trim(),
@@ -259,6 +318,9 @@ export class DreamStore {
     digest.openLoops = digest.openLoops.filter(loop => loop.ref === null || this.refExists(loop.ref));
     const week = body.week === undefined || body.week === null ? null : boundedText(body.week, 4_000, "week summary").trim() || null;
     const month = body.month === undefined || body.month === null ? null : boundedText(body.month, 6_000, "month summary").trim() || null;
+    const year = body.year === undefined || body.year === null ? null : boundedText(body.year, 8_000, "year summary").trim() || null;
+    const drafts = (body.drafts === undefined ? [] : Array.isArray(body.drafts) && body.drafts.length <= 10 ? body.drafts : (() => { throw new InputError("At most 10 drafts a night"); })())
+      .map(item => { const draft = record(item); keys(draft, ["mailId", "text"], "draft"); return { mailId: boundedText(draft.mailId, 80, "mail id"), text: boundedText(draft.text, 3_000, "draft text").trim() }; });
     const probes = (Array.isArray(body.probes) ? body.probes : []).slice(0, 8).map(item => { const probe = record(item); keys(probe, ["question", "answer"], "probe");
       return { question: boundedText(probe.question, 300, "probe question").trim(), answer: boundedText(probe.answer, 300, "probe answer").trim() }; });
     const edits = body.lessons === undefined ? [] : Array.isArray(body.lessons) && body.lessons.length <= MAX_LESSON_EDITS ? body.lessons : (() => { throw new InputError(`At most ${MAX_LESSON_EDITS} lesson edits a night`); })();
@@ -273,10 +335,14 @@ export class DreamStore {
       this.saveDigest({ id: `day:${night.day}`, level: "day", period: night.day, text: digest.summary, data: digest, updatedAt });
       if (week) this.saveDigest({ id: `week:${weekOf(night.day)}`, level: "week", period: weekOf(night.day), text: week, data: null, updatedAt });
       if (month) this.saveDigest({ id: `month:${night.day.slice(0, 7)}`, level: "month", period: night.day.slice(0, 7), text: month, data: null, updatedAt });
+      if (year) this.saveDigest({ id: `year:${night.day.slice(0, 4)}`, level: "year", period: night.day.slice(0, 4), text: year, data: null, updatedAt });
+      this.indexConversation(night.day);
+      this.index?.prune("conversation", Date.parse(planningDayBounds(shiftPlanningDay(night.day, -DIGEST_DAYS_KEPT), this.timezone).start));
+      const drafted = drafts.filter(draft => draft.text && this.saveDraft(draft.mailId, draft.text, now)).length;
       let applied = 0;
       for (const edit of edits) { try { this.editLesson(edit, "dream", now); applied++; } catch (error) { if (!(error instanceof InputError)) throw error; } }
       this.db.all("DELETE FROM umpi_digests WHERE level='day' AND period < ?", shiftPlanningDay(night.day, -DIGEST_DAYS_KEPT));
-      return this.saveNight({ ...night, version: night.version + 1, status: "committed", runId: run.id, committedAt: updatedAt, probes, overnight, lessonEdits: applied });
+      return this.saveNight({ ...night, version: night.version + 1, status: "committed", runId: run.id, committedAt: updatedAt, probes, overnight, lessonEdits: applied, drafts: drafted });
     });
   }
   finishInput(sessionId: string, original: unknown, now = Date.now()): Record<string, unknown> {
@@ -327,8 +393,8 @@ export class DreamStore {
     const settings = this.settings(), last = this.lastNight();
     const counts = this.db.all<{ level: string; n: number }>("SELECT level, count(*) AS n FROM umpi_digests GROUP BY level");
     return { settings, nextAt: this.nextDue(now) === undefined ? null : iso(this.nextDue(now)!),
-      lastNight: last ? { day: last.day, status: last.status, manual: last.manual, committedAt: last.committedAt, probes: last.probes.length, lessonEdits: last.lessonEdits, compaction: last.compaction } : null,
-      digests: Object.fromEntries(counts.map(row => [row.level, row.n])), lessons: this.lessons().length };
+      lastNight: last ? { day: last.day, status: last.status, manual: last.manual, committedAt: last.committedAt, probes: last.probes.length, lessonEdits: last.lessonEdits, drafts: last.drafts ?? 0, compaction: last.compaction } : null,
+      digests: Object.fromEntries(counts.map(row => [row.level, row.n])), lessons: this.lessons().length, history: this.index?.status() ?? null };
   }
 }
 

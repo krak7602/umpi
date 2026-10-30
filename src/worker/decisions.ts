@@ -13,8 +13,12 @@ import { StateError, type Database } from "./store.js";
 export const DECISION_MODELS = { fast: "clef-flash", careful: "clef" } as const;
 export type DecisionModel = keyof typeof DECISION_MODELS;
 const EXTRACTION_MODEL = "clairic";
+/** Qwen3 embeddings are trained to be truncated (Matryoshka); 256 dimensions keep a full scan small. */
+export const EMBEDDING_MODEL = "@cf/qwen/qwen3-embedding-0.6b";
+export const EMBEDDING_DIMENSIONS = 256;
+const EMBEDDING_BATCH = 32;
 /** US dollars per million input tokens. Clef-flash uses the higher of the published figures, so the count does not undershoot. */
-const PRICE_PER_MILLION: Record<DecisionModel | typeof EXTRACTION_MODEL, number> = { fast: 0.09, careful: 0.24, clairic: 0.10 };
+const PRICE_PER_MILLION: Record<DecisionModel | typeof EXTRACTION_MODEL | "embedding", number> = { fast: 0.09, careful: 0.24, clairic: 0.10, embedding: 0.0118 };
 /** In thousandths of a US dollar, like the web budget. */
 export const DEFAULT_DECISION_MONTHLY_BUDGET = 1_000;
 const MAX_STATE_CHARS = 60_000;
@@ -142,6 +146,38 @@ export class Decisions {
         answers[name] = { value: answer.value, confidence };
       }
       return answers as ExtractAnswers<F>;
+    });
+  }
+
+  /**
+   * Embeds texts for search: `query` texts get the retrieval instruction, `document` texts are embedded as they are.
+   * Vectors are truncated to 256 dimensions and normalized. Up to 32 texts per call.
+   */
+  async embed(purpose: string, texts: string[], kind: "query" | "document"): Promise<number[][]> {
+    if (!this.ai) throw new DecisionUnavailable("Decision models are not configured");
+    if (this.state().spent >= this.budget()) throw new DecisionUnavailable("This month's decision budget is used");
+    if (!texts.length || texts.length > EMBEDDING_BATCH) throw new StateError(400, `Embed 1 to ${EMBEDDING_BATCH} texts at a time`);
+    const input = texts.map(text => text.slice(0, 8_000));
+    let result: { data?: unknown };
+    try {
+      result = await this.ai.run(EMBEDDING_MODEL, kind === "query"
+        ? { queries: input, instruction: "Given a question about the owner's past conversations and days, retrieve the passages that answer it" }
+        : { documents: input }) as { data?: unknown };
+    } catch (error) {
+      this.record(purpose, 0, 0, `embedding failed (${error instanceof Error ? error.name : "unknown"})`);
+      throw new DecisionUnavailable("The embedding call failed");
+    }
+    // Workers AI does not report embedding tokens; four characters per token is close for this text.
+    const tokens = Math.round(input.reduce((sum, text) => sum + text.length, 0) / 4), cost = tokens * PRICE_PER_MILLION.embedding / 1000;
+    const rows = Array.isArray(result?.data) ? result.data as unknown[] : [];
+    if (rows.length !== input.length || rows.some(row => !Array.isArray(row) || row.length < EMBEDDING_DIMENSIONS || row.some(value => typeof value !== "number" || !Number.isFinite(value)))) {
+      this.record(purpose, tokens, cost, "malformed embeddings");
+      throw new DecisionUnavailable("The embedding model returned malformed vectors");
+    }
+    this.record(purpose, tokens, cost, null);
+    return (rows as number[][]).map(row => {
+      const vector = row.slice(0, EMBEDDING_DIMENSIONS), norm = Math.hypot(...vector) || 1;
+      return vector.map(value => value / norm);
     });
   }
 

@@ -9,8 +9,8 @@ function fields(value: unknown, allowed: string[]): Record<string, unknown> {
   return body;
 }
 function publicItem(item: ReturnType<MailRuntime["store"]["attention"]>[number]): object {
-  const { id, version, status, subject, sender, receivedAt, summary, reason, suggestedAction, snoozeUntil, webUrl } = item;
-  return { id, version, status, subject, sender, receivedAt, summary, reason, suggestedAction, snoozeUntil: snoozeUntil ?? null, webUrl };
+  const { id, version, status, subject, sender, receivedAt, summary, reason, suggestedAction, snoozeUntil, webUrl, draft } = item;
+  return { id, version, status, subject, sender, receivedAt, summary, reason, suggestedAction, snoozeUntil: snoozeUntil ?? null, webUrl, draft: draft ?? null };
 }
 
 /** The parent router authenticates the owner control credential before calling this. */

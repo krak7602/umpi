@@ -37,6 +37,7 @@ import { mailScreen } from "./mail-screen.js";
 import { DECISION_INSTRUCTIONS, DEFAULT_DECISION_MONTHLY_BUDGET, Decisions, chooseEffort, decisionTools, type Effort, type WorkersAi } from "./decisions.js";
 import { mailFact } from "./mail-facts.js";
 import { DreamStore } from "./dream-store.js";
+import { HistoryIndex } from "./history-index.js";
 import { DREAM_INSTRUCTIONS, DreamRuntime, dreamRequest, dreamTools, guardDreamReviewTools, historyTools, refExists } from "./dream-tools.js";
 import { mailTools, guardMailReviewTools, MAIL_INSTRUCTIONS } from "./mail-tools.js";
 import { mailRequest } from "./mail-http.js";
@@ -150,6 +151,7 @@ class Coordinator extends LifecycleCapability {
       this.assistant.situation.purge();
       this.assistant.brief.drive();
       this.assistant.dream.drive();
+      this.assistant.dream.closeLongDay((['telegram', 'control'] as const).flatMap(channel => { const session = store.session(channel); return session ? [this.assistant.contextHealth.read(session).contextTokens] : []; }));
       await this.assistant.alerts.drive();
       this.assistant.journal.drive();
       await this.assistant.driveProactive();
@@ -275,6 +277,7 @@ export class Assistant extends Agent<Env> {
   readonly webUsage: WebUsageStore;
   readonly decisions: Decisions;
   readonly dream: DreamStore;
+  readonly history: HistoryIndex;
   readonly dreamRuntime: DreamRuntime;
   private backgroundExtension!: Extension;
   readonly contextHealth: ContextHealth;
@@ -333,6 +336,10 @@ export class Assistant extends Agent<Env> {
       const budget = Number(env.UMPI_DECISION_MONTHLY_BUDGET);
       return Number.isInteger(budget) && budget >= 0 ? budget : DEFAULT_DECISION_MONTHLY_BUDGET;
     });
+    this.history = new HistoryIndex(this.store.db, this.decisions);
+    this.dream.index = this.history;
+    this.dream.backfillIndex();
+    this.dream.saveDraft = (mailId, text, now) => this.mail.setDraft(mailId, text, now);
     this.proactive.onRetryExhausted = (commitment, reason, now) => {
       const day = new Intl.DateTimeFormat("en-CA", { timeZone: fallbackZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
       const label = commitment.id === "morning-brief" ? "Today's morning brief" : commitment.id.startsWith("daily-") ? "Today's daily-note preparation" : `"${commitment.purpose.slice(0, 80)}"`;
@@ -395,13 +402,17 @@ export class Assistant extends Agent<Env> {
       track: work => this.lifecycle.trackAlarmWork(work),
     });
     const browserProfile = browserExtension(this.browserRuntime);
-    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...activityTools(this.store, this.activity, this.timezone, () => this.notifyExecutor()), ...journalTools(this.journal, id => this.store.isBackgroundSession(id)), ...web, ...decision, ...historyTools(this.dream, id => this.store.isBackgroundSession(id)), ...contextTools(this.contextHealth, id => !this.store.isBackgroundSession(id)), ...delegation.tools ?? []];
+    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...activityTools(this.store, this.activity, this.timezone, () => this.notifyExecutor()), ...journalTools(this.journal, id => this.store.isBackgroundSession(id)), ...web, ...decision, ...historyTools(this.dream, this.history, id => this.store.isBackgroundSession(id)), ...contextTools(this.contextHealth, id => !this.store.isBackgroundSession(id)), ...delegation.tools ?? []];
     const guardedProactiveTools = guardDreamReviewTools(guardBriefReviewTools(guardMailReviewTools(guardPlanningReviewTools(proactiveTools(this.proactive, () => this.coordinator.wake()), this.planningRuntime), this.mailRuntime), this.brief), this.dream);
     const briefSources = { brief: this.brief, situation: this.situation, mail: this.mail, planning: this.planningRuntime, calendarCredentials: () => this.config.UMPI_CALENDAR_CREDENTIALS, activity: this.activity, dream: this.dream };
     const ownerSessions = () => (["telegram", "control"] as const).flatMap(channel => { const session = this.store.session(channel); return session ? [{ channel, session }] : []; });
     const dreamSources = { dream: this.dream, mail: this.mail, situation: this.situation, activity: this.activity,
+      tasks: () => [
+        ...this.coding.tasks().map(task => ({ kind: "coding" as const, id: task.taskId, status: task.status, prompt: task.prompt.slice(0, 300), result: task.result?.summary?.slice(0, 400) ?? null, updatedAt: task.updatedAt })),
+        ...this.browser.tasks().map(task => ({ kind: "browser" as const, id: task.taskId, status: task.status, prompt: task.prompt.slice(0, 300), result: (task.result as { summary?: string } | undefined)?.summary?.slice(0, 400) ?? task.issue ?? null, updatedAt: task.updatedAt })),
+      ],
       conversations: async () => Promise.all(ownerSessions().map(async ({ channel, session }) => ({ channel, entries: await this.harness.messages({ session }) as never }))) };
-    this.dreamRuntime = new DreamRuntime(this.dream, this.decisions, {
+    this.dreamRuntime = new DreamRuntime(this.dream, this.decisions, this.history, {
       sessions: () => ownerSessions().map(item => item.session),
       compact: async (session, marker) => { await (await this.harness.conversation(session)).compact(marker, BACKGROUND_CONTEXT); },
     });

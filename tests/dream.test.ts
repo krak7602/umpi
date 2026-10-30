@@ -12,6 +12,8 @@ import { ContextHealth, contextHooks } from "../src/worker/context-health.js";
 import { Decisions, type WorkersAi } from "../src/worker/decisions.js";
 import { DreamStore, weekOf } from "../src/worker/dream-store.js";
 import { DreamRuntime, dreamInputs, historyTools, refExists, transcript } from "../src/worker/dream-tools.js";
+import { HistoryIndex } from "../src/worker/history-index.js";
+import { DREAM_PART_CHARS, LONG_DAY_TOKENS } from "../src/worker/dream-store.js";
 import { MailStore } from "../src/worker/mail-store.js";
 import { ProactiveStore } from "../src/worker/proactive-store.js";
 import { SituationStore } from "../src/worker/situation-store.js";
@@ -105,7 +107,7 @@ test("the anchored summary keeps instructions word for word, loop IDs, and the w
     asked.push(...Object.values(input.questions).map(question => question.instructions));
     return { answers: { p0: { type: "noul", noul: 0.95 }, p1: { type: "noul", noul: 0.1 } }, usage: { input_tokens: 900 } }; } };
   const compacted: [string, string][] = [];
-  const runtime = new DreamRuntime(f.dream, new Decisions(f.db, ai, () => 1_000), { sessions: () => ["owner", "control-session"], async compact(session, marker) { compacted.push([session, marker]); } });
+  const runtime = new DreamRuntime(f.dream, new Decisions(f.db, ai, () => 1_000), undefined, { sessions: () => ["owner", "control-session"], async compact(session: string, marker: string) { compacted.push([session, marker]); } });
   await runtime.drive();
   assert.equal(asked.length, 2);
   assert.deepEqual(compacted.map(([session]) => session), ["owner", "control-session"]);
@@ -117,15 +119,31 @@ test("the anchored summary keeps instructions word for word, loop IDs, and the w
   assert.equal(runtime.nextDue(), undefined, "compacted once");
 });
 
-test("history search ranks digests, read_history returns one, and the owner can revert or retire a lesson", async t => {
+/** Embeddings for tests: each text maps to a vector by which topic words it contains. */
+const TOPICS = [["mail", "email", "screening", "clef"], ["budget", "dollar", "cap", "cost"], ["knock", "reminder", "chime"], ["deploy", "release", "ship"]];
+const topicAi: WorkersAi = { async run(model, raw) {
+  const input = raw as { queries?: string[]; documents?: string[] };
+  if (!model.includes("embedding")) throw new Error("unexpected model");
+  const texts = input.queries ?? input.documents ?? [];
+  return { data: texts.map(text => { const lower = text.toLowerCase(); return Array.from({ length: 1024 }, (_, i) => i < TOPICS.length ? TOPICS[i]!.filter(word => lower.includes(word)).length + 0.01 : 0); }), shape: [texts.length, 1024] };
+} };
+
+test("history search finds digests and past conversation by words and by meaning; the owner can revert or retire a lesson", async t => {
   const f = fixture(t);
+  const index = new HistoryIndex(f.db, new Decisions(f.db, topicAi, () => 1_000));
+  f.dream.index = index;
   f.dream.configure({ expectedVersion: 1, enabled: true }, "owner", EVENING);
   f.time(NIGHT); f.dream.drive(NIGHT); openNight(f, NIGHT);
+  const day = Date.parse("2026-10-30T08:00:00Z");
+  f.dream.saveParts("2026-10-30", [{ at: day, text: "owner: which email screening model should we use?" }, { at: day + 1, text: "assistant: Clef-flash, it is the cheapest." }]);
   f.dream.commit("dream-review", RESULT(), NIGHT);
-  assert.deepEqual(f.dream.search("clairic deployed").map(match => match.id), ["day:2026-10-30"]);
-  const [search, read, list, revert] = historyTools(f.dream, id => id === "dream-review");
+  assert.equal(await index.embedPending(), 3, "the day digest, the week summary, and one conversation passage");
+  const [search, read, list, revert] = historyTools(f.dream, index, id => id === "dream-review");
   const run = async (tool: typeof search, input: unknown, conversationId = "owner") => JSON.parse(((await tool!.execute(input as never, { conversationId } as never, {} as never)) as { content: { text: string }[] }).content[0]!.text);
-  assert.equal((await run(search, { query: "Clef-flash price" })).matches[0].period, "2026-10-30");
+  const byWords = (await run(search, { query: "Clef-flash cheapest", source: "conversation" })).matches;
+  assert.match(byWords[0].text, /Clef-flash, it is the cheapest/); assert.equal(byWords[0].keyword, true);
+  const byMeaning = (await run(search, { query: "what did we choose for mail?" })).matches;
+  assert.ok(byMeaning.some((match: { meaning: boolean; source: string }) => match.meaning && match.source === "conversation"), "a rephrased question finds the passage by meaning");
   assert.match((await run(read, { period: "2026-10-30" })).text, /decision service/);
   assert.match((await run(read, { period: "2026-W44" })).text, /This week/);
   assert.equal((await run(list, {})).lessons[0].id, "L1");
@@ -134,6 +152,44 @@ test("history search ranks digests, read_history returns one, and the owner can 
   assert.equal(f.dream.playbook(), "");
   assert.equal((await run(revert, { id: "L1", version: 1 })).lesson.status, "active");
   assert.equal(f.dream.lessons()[0]!.history.length, 3);
+  // Without embeddings, keyword search still works.
+  assert.equal((await new HistoryIndex(f.db).search("Clef-flash")).length > 0, true);
+});
+
+test("a long day is read in parts, stuck work and delegated tasks reach the night, and drafts and reinforcement are saved", async t => {
+  const f = fixture(t);
+  f.dream.configure({ expectedVersion: 1, enabled: true }, "owner", EVENING);
+  const drafts: [string, string][] = [];
+  f.dream.saveDraft = (mailId, text) => { drafts.push([mailId, text]); return mailId === "mail-1"; };
+  f.owner.createReminder("missed", "Call the bank", new Date(EVENING + 60_000).toISOString(), "telegram");
+  f.time(EVENING + 60_000); f.owner.fireReminders(EVENING + 60_000);
+  f.time(NIGHT); f.dream.drive(NIGHT); const first = openNight(f, NIGHT);
+  const start = Date.parse("2026-10-30T02:00:00Z");
+  const entries = Array.from({ length: 80 }, (_, i) => message(i % 2 ? "assistant" : "user", `${i === 0 ? "MORNING FACT " : ""}message ${i} ${"y".repeat(2_000)}`, start + i * 60_000));
+  const inputs = await dreamInputs({ dream: f.dream, mail: f.mail, situation: f.situation, conversations: async () => [{ channel: "telegram", entries }],
+    tasks: () => [{ kind: "coding", id: "c1", status: "failed", prompt: "Fix the build", result: "tsc failed", updatedAt: new Date(NIGHT - 3_600_000).toISOString() }] }, "dream-review", NIGHT) as Record<string, any>;
+  assert.ok(inputs.conversationParts >= 3, "160k characters span several parts");
+  assert.match(inputs.conversation, /MORNING FACT/, "the morning is not cut");
+  assert.ok(inputs.conversation.length <= DREAM_PART_CHARS + 2_100);
+  assert.match(f.dream.part("2026-10-30", inputs.conversationParts).map(line => line.text).join("\n"), /message 79/);
+  assert.deepEqual(inputs.stuckWork.unansweredReminders.map((item: { id: string }) => item.id), ["missed"]);
+  assert.deepEqual(inputs.tasks.map((task: { id: string }) => task.id), ["c1"]);
+  const night = f.dream.commit("dream-review", RESULT({ drafts: [{ mailId: "mail-1", text: "Thanks, confirmed." }, { mailId: "gone", text: "x" }] }), NIGHT);
+  assert.equal(night.drafts, 1); assert.equal(drafts.length, 2);
+  f.proactive.report("dream-review", f.dream.finishInput("dream-review", { outcome: "advanced", note: "x" }, NIGHT), NIGHT); f.owner.settle(first.operationId, "");
+  f.time(NIGHT + 86_400_000);
+  f.dream.drive(NIGHT + 86_400_000); openNight(f, NIGHT + 86_400_000);
+  f.dream.commit("dream-review", RESULT({ lessons: [{ op: "reinforce", id: "L1", evidence: "Again today" }] }), NIGHT + 86_400_000);
+  assert.equal(f.dream.lessons()[0]!.support, 1); assert.equal(f.dream.lessons()[0]!.version, 1, "reinforcing does not change the rule");
+});
+
+test("a very long day closes early with the anchored summary, at most once in three hours", async t => {
+  const f = fixture(t);
+  f.dream.configure({ expectedVersion: 1, enabled: true }, "owner", EVENING);
+  assert.equal(f.dream.closeLongDay([LONG_DAY_TOKENS - 1], EVENING), false);
+  assert.equal(f.dream.closeLongDay([100_000, LONG_DAY_TOKENS], EVENING), true);
+  assert.equal(f.dream.night("2026-10-30")!.manual, true);
+  assert.equal(f.dream.closeLongDay([LONG_DAY_TOKENS], EVENING + 60_000), false, "the requested night is still running");
 });
 
 test("a manual run covers the day so far, and the scheduled night still closes the whole day", async t => {
