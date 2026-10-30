@@ -39,7 +39,17 @@ Every new or edited Mac command starts as `pending_approval`. Approval binds to 
 
 Completion and its follow-up model operation are committed together. The agent interprets the recorded outcome in a later turn. It need not wait inside the original conversation for the command to finish. This keeps conversation available during Mac execution; it does not guarantee a latency bound for model inference.
 
-Conversation persistence and Pi's automatic compaction are separate from selected core context. Jobs, reminders, and clarification records remain authoritative operational state, not personal memory. Full-vault search and a general retrieval index are not implemented.
+Conversation persistence and Pi's automatic compaction are separate from selected core context. Jobs, reminders, and clarification records remain authoritative operational state, not personal memory. Full-vault search and a general retrieval index are not implemented. [Context management](#context-management) owns compaction, caching, and long tool results.
+
+### Context management
+
+`context-health.ts` holds the context policy for every Pi conversation of the coordinator:
+
+- **Compaction is a safety net.** Background compaction starts at 550,000 tokens of Opus 5.5's 1,000,000-token window (`reserveTokens` 32,768, `backgroundTokens` 417,232); a turn blocks to compact only near 967,000. The reserve leaves the summary about 26,000 tokens. A planned nightly compaction will keep the owner conversation far below the threshold; it is accepted design, not yet implemented.
+- **The prompt cache is kept for an hour.** Requests use Anthropic's 1-hour cache (`cacheRetention: "long"`), so replies more than five minutes apart still reuse the shared instructions and history. A 1-hour write costs more than a 5-minute one; one reuse within the hour repays it.
+- **Long tool results stay out of the owner conversation.** In foreground conversations, a result over 32,000 characters keeps its start inline. The full text is stored for 14 days behind a handle, and `read_tool_result` reads on from an offset. Earlier results are never cleared later, because a clear would break the cache.
+- **Background reviews start fresh.** Before a proactive drive, a background session that answered since its last reset is reset, but only when it has no admitted run, pending operation, open job, or pending choice. Its results already live in commitment, mail, planning, and brief records.
+- **Status.** `GET /api/status` → `conversations` lists the Telegram, control, and background conversations: context size from the last response, the last request's input, cache read, cache writes (and how much was written for an hour), output, response count and cache-hit rate, compactions with the last reason, and resets. It reports counts only, never content.
 
 ### Native core context
 
@@ -290,7 +300,7 @@ Exact `GET` and `HEAD` requests to `/`, `/privacy`, and `/terms` serve public st
 
 | Method and path | Role | Contract |
 | --- | --- | --- |
-| `GET /api/status` | Control | Model configuration, non-secret credential metadata, recent operations, jobs, reminders, choices, deliveries, executors |
+| `GET /api/status` | Control | Model configuration, non-secret credential metadata, recent operations, jobs, reminders, choices, deliveries, executors, conversation sizes and cache use |
 | `POST /api/model/fallback/check` | Control | Whether Anthropic accepts the [fallback API key](model-auth.md#limit-only-api-key-fallback), as an HTTP status only |
 | `POST /api/messages` | Control | `{id, text}`; durable admission, HTTP 202 |
 | `GET /api/messages/:id` | Control | Operation status, result or error, and its answer deliveries |
@@ -381,5 +391,6 @@ The [development and operation runbook](../runbooks/local-development.md) owns l
 - 2026-10-22: Added the Aside context: activity summaries for chat and the brief, and owner memory search through the Mac.
 - 2026-10-22: Added failure causes to run notes and a once-a-day Telegram notice when a retrying commitment gives up.
 - 2026-10-22: Added image input (photos, image files and albums). Other attachments are skipped with a short reply instead of a rejected webhook.
+- 2026-10-30: Set compaction to start at 550k tokens, moved to the 1-hour prompt cache, stored long tool results behind handles, reset background reviews between runs, and added conversation sizes to status.
 - 2026-10-29: Added web search and page reading through Parallel, within a monthly budget.
 - 2026-10-24: Added the executor wake socket, owned by a lifecycle capability, and protected `executor` status (online, last seen). After a day without the executor, one Telegram notice says Mac work is waiting.
