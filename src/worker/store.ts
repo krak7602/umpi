@@ -1,6 +1,7 @@
 import { InputError, identifier, boundedText, timestamp, parseAssignment, parsePoll, parseCompletion, type JobCompletion, type JobStatus, type ExecutorPollResult, record } from "../shared/protocol.js";
 import { formatTelegramApproval } from "./telegram-view.js";
 import { renderTelegramMarkdown } from "./telegram-markdown.js";
+import { parseReminderIntensity, type ReminderIntensity } from "../shared/knock.js";
 import { IMAGE_TYPES, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE, type TelegramImage } from "../shared/voice-note.js";
 
 export interface Database {
@@ -39,6 +40,10 @@ export interface Job {
 export interface Reminder {
   id: string; version: number; text: string; dueAt: string; channel: Channel;
   status: "scheduled" | "fired" | "cancelled"; createdAt: string;
+  /** How the reminder knocks when due; absent means a full knock. */
+  intensity?: ReminderIntensity;
+  /** How the owner answered the knock, when they did. */
+  answer?: { outcome: "done" | "snoozed"; at: string };
 }
 export interface Choice {
   id: string; question: string; options: string[]; channel: Channel; sessionId: string;
@@ -451,20 +456,20 @@ export class Store {
   }
   reminder(id: string): Reminder | undefined { return this.rows<Reminder>("SELECT data FROM umpi_reminders WHERE id=?", identifier(id, "reminder ID"))[0]; }
   reminders(): Reminder[] { return this.rows("SELECT data FROM umpi_reminders ORDER BY CASE WHEN status='scheduled' THEN 0 ELSE 1 END, CASE WHEN status='scheduled' THEN due END ASC, due DESC LIMIT 100"); }
-  createReminder(id: string, text: string, dueAt: string, channel: Channel): Reminder {
+  createReminder(id: string, text: string, dueAt: string, channel: Channel, intensity?: ReminderIntensity): Reminder {
     identifier(id, "reminder ID"); boundedText(text, 4_096, "reminder text"); timestamp(dueAt, "reminder time");
     if (Date.parse(dueAt) <= Date.now()) throw new InputError("Reminder must be in the future");
     if (this.reminder(id)) throw new StateError(409, "Reminder ID exists; update the existing version");
-    const reminder: Reminder = { id, text, dueAt, channel, version: 1, status: "scheduled", createdAt: iso() };
+    const reminder: Reminder = { id, text, dueAt, channel, version: 1, status: "scheduled", createdAt: iso(), intensity: parseReminderIntensity(intensity) };
     this.reminderWrite(reminder); return reminder;
   }
-  updateReminder(id: string, expectedVersion: number, text: string, dueAt: string): Reminder {
+  updateReminder(id: string, expectedVersion: number, text: string, dueAt: string, intensity?: ReminderIntensity): Reminder {
     const old = this.reminder(id); if (!old) throw new StateError(404, "Reminder not found");
     this.requireVersion(old.version, expectedVersion);
     if (old.status !== "scheduled") throw new StateError(409, "Only scheduled reminders can be edited");
     boundedText(text, 4_096, "reminder text"); timestamp(dueAt, "reminder time");
     if (Date.parse(dueAt) <= Date.now()) throw new InputError("Reminder must be in the future");
-    const next = { ...old, text, dueAt, version: old.version + 1 }; this.reminderWrite(next); return next;
+    const next = { ...old, text, dueAt, version: old.version + 1, ...(intensity === undefined ? {} : { intensity: parseReminderIntensity(intensity) }) }; this.reminderWrite(next); return next;
   }
   cancelReminder(id: string, expectedVersion: number): Reminder {
     const old = this.reminder(id); if (!old) throw new StateError(404, "Reminder not found");
@@ -477,8 +482,21 @@ export class Store {
       for (const reminder of this.rows<Reminder>("SELECT data FROM umpi_reminders WHERE status='scheduled' AND due<=?", now)) {
         this.reminderWrite({ ...reminder, status: "fired" });
         this.enqueue(`reminder:${reminder.id}:${reminder.version}`, reminder.channel, `Reminder: ${reminder.text}`);
+        this.reminderFired?.(reminder);
       }
     });
+  }
+  /** Set by the coordinator: runs in the firing transaction, so a fired reminder always has its knock. */
+  reminderFired: ((reminder: Reminder) => void) | undefined;
+  /** The owner answered a knock. Snoozing schedules the same reminder again as a new version. */
+  answerReminder(id: string, action: "done" | "snooze", snoozeMinutes: number, now = Date.now()): Reminder | undefined {
+    const old = this.reminder(id);
+    if (!old || old.status !== "fired") return undefined;
+    const answer = { outcome: action === "done" ? "done" as const : "snoozed" as const, at: new Date(now).toISOString() };
+    const next: Reminder = action === "done" ? { ...old, answer }
+      : { ...old, answer, status: "scheduled", dueAt: new Date(now + snoozeMinutes * 60_000).toISOString(), version: old.version + 1 };
+    this.reminderWrite(next);
+    return next;
   }
   nextReminder(): number | undefined { return this.db.all<{ due: number }>("SELECT due FROM umpi_reminders WHERE status='scheduled' ORDER BY due LIMIT 1")[0]?.due; }
   enqueue(groupId: string, channel: Channel, text: string, replyMarkup?: TelegramMarkup, entities?: TelegramEntity[], maximumCharacters = 65_536): void {

@@ -12,6 +12,7 @@ import { browserSitePolicyJson } from "../shared/browser.js";
 import { coordinatorUrl } from "../shared/coordinator-url.ts";
 import { WakeChannel } from "./wake.js";
 import { BrowserExportLane } from "./browser-export-lane.js";
+import { KnockLane, macPresenter } from "./knock.js";
 import { loadBrowserExportConfig } from "./browser-export.js";
 import { installService, restartService, servicePaths, serviceState, uninstallService } from "./service.js";
 import { execFileSync } from "node:child_process";
@@ -320,6 +321,7 @@ async function main(): Promise<void> {
         onWake: () => executor.requestPoll(), onState: connected => log(connected ? "wake_connected" : "wake_disconnected") });
       executor.useWake(wake);
       if (config.browserExport) executor.useBrowserExport(new BrowserExportLane(loadBrowserExportConfig(config.browserExport.configPath), { emit: log }));
+      executor.useKnocks(new KnockLane(config.executorId, macPresenter(directory), { emit: log }));
       wake.start();
       try { await executor.run(stop.signal); } finally { wake.stop(); }
     } finally {

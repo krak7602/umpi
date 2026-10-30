@@ -100,6 +100,18 @@ The context lane is an opt-in, read-only bridge to Aside's own derived data. `co
 
 A failed Aside read is skipped until the next tick and never stops shell, coding or browser work. The Aside ledger is an internal Aside file, so a future Aside update can change it; the reader then sends nothing. The lane runs on every poll; idle, that is every 5 minutes, and a lookup wakes the executor at once. The [runtime contract](assistant-runtime.md#aside-context) owns how the coordinator stores and uses the data.
 
+### Knocks
+
+The knock lane shows due reminders on this Mac. It is always on, and it uses `/api/executor/knock/poll` and `/api/executor/knock/report` with the executor credential.
+
+- A coordinator wake, or a minute without one, starts a poll. Each poll claims at most three due knocks. They are shown one at a time in the background, so a prompt never delays other lanes.
+- Before a knock, the lane reads the keyboard and mouse idle time from `ioreg -c IOHIDSystem`. After more than 120 seconds without input, it reports `away` and shows nothing.
+- Otherwise it plays a synthesized 25-second knock sound with `afplay` and shows a "Umpi" prompt through `osascript`, with **Done** and **Snooze 10 min**. The reminder text is passed as an argument, never as script text. The sound stops when the owner answers; the prompt gives up after two minutes and reports `missed`.
+- The sound is generated on first use as `knock.wav` in the state directory, mode 0600. It needs no audio asset.
+- An answer that cannot be sent is kept in memory and resent on the next tick. A knock the executor never reports lapses on the coordinator after four minutes and counts as missed.
+
+The [reminder contract](assistant-runtime.md#reminders) owns retries and what Done and Snooze change.
+
 ### Evidence
 
 [Core verification](../learning/assistant-core-verification.md) includes a real command that finished during local Worker downtime, later delivered its saved result, and did not repeat its file write after reconnect. Hosted verification also exercised pending approval, stale-version rejection, a real Mac command, a model completion reply, and executor restart with the same acknowledged completion. Regression tests cover real process groups, deadline handling, crash recovery, conflicting assignments, and private storage boundaries. These checks do not establish a sandbox or prove every external command is idempotent.
@@ -112,4 +124,5 @@ A failed Aside read is skipped until the next tick and never stops shell, coding
 - 2026-10-14: Replaced installed-executor rollout history with the reusable browser opt-in, ownership, and stop boundary.
 - 2026-10-22: Added the opt-in Aside context lane: activity summaries every 5 minutes and owner-requested memory searches, with raw activity kept on the Mac.
 - 2026-10-24: Added the wake socket and state-based polling, after one-second polling of every lane kept the coordinator awake. Added the launchd login item after an executor started from a terminal session stopped with that session and was not restarted for two days.
+- 2026-10-30: Added the knock lane: due reminders sound and prompt on the Mac when the owner is at it.
 - 2026-10-24: Moved the browser login exporter into the executor as a lane, so one login item runs everything and snapshot requests arrive by wake instead of minute polling.

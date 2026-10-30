@@ -42,6 +42,8 @@ import { ActivityStore } from "./activity-store.js";
 import { ExecutorPresence } from "./executor-presence.js";
 import { ExecutorWake } from "./executor-wake.js";
 import { activityTools, ACTIVITY_INSTRUCTIONS } from "./activity-tools.js";
+import { KnockStore } from "./knocks.js";
+import { KNOCK_SNOOZE_MINUTES } from "../shared/knock.js";
 import { CONTEXT_COMPACTION, ContextHealth, contextHooks, contextTools, mayResetBackground } from "./context-health.js";
 import { DEFAULT_WEB_MONTHLY_BUDGET, WEB_INSTRUCTIONS, WebUsageStore, webForeground, webTools } from "./web-search.js";
 import { BriefStore } from "./brief-store.js";
@@ -125,7 +127,7 @@ class Coordinator extends LifecycleCapability {
     this.assistant.telegramInbox.recover();
     // Recover both new proposals and decisions committed before their SQL delivery projection.
     await reconcileMemoryTelegram(await this.assistant.harness.pi(), BACKGROUND_CONTEXT, this.assistant.store);
-    if (this.assistant.telegramInbox.hasPending() || this.assistant.store.pendingOperations().length || this.assistant.store.nextReminder() !== undefined || this.assistant.store.readyDeliveries().length || this.assistant.companion.nextPush() || this.assistant.proactive.settings().enabled || this.assistant.planning.settings().enabled || this.assistant.brief.settings().enabled || this.assistant.mailRuntime.nextDue() !== undefined || this.assistant.coding.active().length || this.assistant.browserRuntime.nextDue() !== undefined || this.assistant.browser.active().length || await this.assistant.subagents.nextDue() !== undefined) await this.wake();
+    if (this.assistant.telegramInbox.hasPending() || this.assistant.store.pendingOperations().length || this.assistant.store.nextReminder() !== undefined || this.assistant.knocks.nextDue() !== undefined || this.assistant.store.readyDeliveries().length || this.assistant.companion.nextPush() || this.assistant.proactive.settings().enabled || this.assistant.planning.settings().enabled || this.assistant.brief.settings().enabled || this.assistant.mailRuntime.nextDue() !== undefined || this.assistant.coding.active().length || this.assistant.browserRuntime.nextDue() !== undefined || this.assistant.browser.active().length || await this.assistant.subagents.nextDue() !== undefined) await this.wake();
   }
 
   async onJob({ job }: LifecycleJobContext): Promise<LifecycleJobOutcome> {
@@ -211,7 +213,7 @@ class Coordinator extends LifecycleCapability {
       // Missing credentials do not justify a two-second polling loop; auth updates wake the queue.
       const pending = store.pendingOperations().some(op => op.status === "submitted");
       const outbox = store.readyDeliveries().length > 0;
-      const wakeAt = Math.min(due ?? Infinity, proactive.nextDue(Date.now(), store.hasForegroundInput()) ?? Infinity, this.assistant.planning.nextDue() ?? Infinity, this.assistant.brief.nextDue() ?? Infinity, this.assistant.alerts.nextDue() ?? Infinity, this.assistant.journal.nextDue() ?? Infinity, this.assistant.mailRuntime.nextDue() ?? Infinity, this.assistant.codingRuntime.nextDue() ?? Infinity, this.assistant.browserRuntime.nextDue() ?? Infinity, await this.assistant.subagents.nextDue() ?? Infinity, this.assistant.telegramInbox.nextDue() ?? Infinity, pending ? Date.now() + 2_000 : Infinity, outbox || this.assistant.companion.nextPush() ? Date.now() + 100 : Infinity);
+      const wakeAt = Math.min(due ?? Infinity, proactive.nextDue(Date.now(), store.hasForegroundInput()) ?? Infinity, this.assistant.planning.nextDue() ?? Infinity, this.assistant.brief.nextDue() ?? Infinity, this.assistant.alerts.nextDue() ?? Infinity, this.assistant.journal.nextDue() ?? Infinity, this.assistant.mailRuntime.nextDue() ?? Infinity, this.assistant.codingRuntime.nextDue() ?? Infinity, this.assistant.browserRuntime.nextDue() ?? Infinity, await this.assistant.subagents.nextDue() ?? Infinity, this.assistant.telegramInbox.nextDue() ?? Infinity, this.assistant.knocks.nextDue() ?? Infinity, pending ? Date.now() + 2_000 : Infinity, outbox || this.assistant.companion.nextPush() ? Date.now() + 100 : Infinity);
       if (Number.isFinite(wakeAt)) return { rescheduleAt: wakeAt };
     } catch {
       this.assistant.modelIssue = "Coordinator reconciliation failed; work is retained and retry is scheduled. Check configuration and protected status.";
@@ -258,6 +260,7 @@ export class Assistant extends Agent<Env> {
   readonly modelFallback: ModelFallback;
   readonly webUsage: WebUsageStore;
   readonly contextHealth: ContextHealth;
+  readonly knocks: KnockStore;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -300,6 +303,8 @@ export class Assistant extends Agent<Env> {
     try { new Intl.DateTimeFormat("en-US", { timeZone: fallbackZone }).format(); } catch { fallbackZone = "UTC"; }
     this.modelFallback = new ModelFallback(this.store.db, () => env.UMPI_ANTHROPIC_FALLBACK_KEY, fallbackZone, (groupId, text) => this.store.enqueue(groupId, "telegram", text));
     this.contextHealth = new ContextHealth(this.store.db);
+    this.knocks = new KnockStore(this.store.db);
+    this.store.reminderFired = reminder => this.knocks.add(reminder);
     this.webUsage = new WebUsageStore(this.store.db, () => {
       const budget = Number(env.UMPI_WEB_MONTHLY_BUDGET);
       return Number.isInteger(budget) && budget >= 0 ? budget : DEFAULT_WEB_MONTHLY_BUDGET;
@@ -594,6 +599,7 @@ export class Assistant extends Agent<Env> {
     for (const id of this.activity.pendingRequestIds()) items.push(`memory:${id}`);
     // The Mac's browser login exporter collects newly approved snapshot requests.
     for (const mark of this.browser.snapshotRequestMarks()) items.push(`snapshot:${mark}`);
+    items.push(...this.knocks.demand());
     return items;
   }
   notifyExecutor(): void { this.executorWake.wake(this.executorDemand()); }
@@ -616,6 +622,7 @@ export class Assistant extends Agent<Env> {
     return {
       model: { providerId: this.providerId, modelId: this.modelId, configured, issue: this.modelIssue ?? null, lastFailure: this.lastModelFailure ?? null, fallback: this.modelFallback.status() },
       web: this.webUsage.status(Boolean(this.config.UMPI_PARALLEL_API_KEY)),
+      knocks: this.knocks.status(),
       conversations: this.contextHealth.status([
         { label: "telegram", id: this.store.session("telegram") }, { label: "control", id: this.store.session("control") },
         { label: "background:telegram", id: this.store.backgroundSession("telegram") }, { label: "background:control", id: this.store.backgroundSession("control") },
@@ -753,6 +760,12 @@ export class Assistant extends Agent<Env> {
         await this.coordinator.wake();
         const job = jobAction[2] === "approve" ? this.store.approveJob(jobAction[1]!, expectedVersion) : this.store.cancelJob(jobAction[1]!, expectedVersion);
         return Response.json(job);
+      }
+      if (path === "/api/executor/knock/poll" && request.method === "POST") return Response.json(this.knocks.poll(await readJson(request)));
+      if (path === "/api/executor/knock/report" && request.method === "POST") {
+        const answer = this.knocks.report(await readJson(request));
+        if (answer) { this.store.answerReminder(answer.reminderId, answer.action, KNOCK_SNOOZE_MINUTES); await this.coordinator.wake(); }
+        return Response.json({ ok: true });
       }
       if (path === "/api/executor/context/poll" && request.method === "POST") return Response.json(this.activity.poll(await readJson(request)));
       if (path === "/api/executor/context/report" && request.method === "POST") return Response.json(this.activity.report(await readJson(request, 262_144)));
