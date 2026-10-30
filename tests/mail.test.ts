@@ -290,7 +290,7 @@ test("a decision-model screen skips unlikely mail before the review, and a faile
   assert.equal(seen.length, 5);
   const skipped = f.mail.thread(`mail-${createHash("sha256").update("screen-1").digest("hex").slice(0, 32)}`)!;
   const status = f.mail.status() as { screen: object; counts: Record<string, number> };
-  assert.deepEqual(status.screen, { enabled: true, waiting: 0, passed: 3, skipped: 1, unavailable: 1 });
+  assert.deepEqual(status.screen, { enabled: true, waiting: 0, passed: 3, recorded: 0, skipped: 1, unavailable: 1 });
   assert.equal(status.counts.ignored, 1); assert.equal(status.counts.pending, 4);
   assert.equal(skipped.status, "ignored"); assert.deepEqual(skipped.messages, [], "skipped mail keeps no excerpts");
   assert.match(skipped.summary!, /screened as unlikely to need you \(3%\)/);

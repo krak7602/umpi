@@ -36,6 +36,19 @@ function localInstant(local: Temporal.PlainDateTime, timezone: string): Temporal
   return transition;
 }
 
+/**
+ * An ISO timestamp with an explicit offset from a date ("2026-11-14"), a wall time without a zone
+ * ("2026-11-14T06:10"), or a timestamp that already has one. A value without a zone is read in `timezone`.
+ */
+export function zonedTimestamp(value: string, timezone: string): string | undefined {
+  validateTimezone(timezone);
+  try {
+    if (/(?:Z|[+-]\d{2}:\d{2})$/.test(value)) return Temporal.Instant.from(value).toString();
+    const local = /^\d{4}-\d{2}-\d{2}$/.test(value) ? Temporal.PlainDate.from(value).toPlainDateTime() : Temporal.PlainDateTime.from(value);
+    return localInstant(local, timezone).toString({ timeZoneName: "never" });
+  } catch { return undefined; }
+}
+
 export function planningDay(now: number, timezone: string): string {
   validateTimezone(timezone);
   return Temporal.Instant.fromEpochMilliseconds(now).toZonedDateTimeISO(timezone).toPlainDate().toString();

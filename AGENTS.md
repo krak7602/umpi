@@ -16,7 +16,7 @@
 - Delegate substantial independent work with clear ownership, constraints, and acceptance checks. Handle small or tightly coupled changes directly.
 - Use clear, direct English inspired by ASD-STE100, with roughly 80% adherence. Prefer short sentences, consistent terms, and explicit actions. Keep exact technical names.
 - Reuse existing patterns. Check the affected callers and contracts before changing behavior.
-- When code would start a model turn only to get a yes/no, a choice, or a score, ask the [decision service](docs/subsystems/assistant-runtime.md#decision-models) first and state the fallback. Keep Claude for reasoning, writing, and tool use.
+- When code would start a model turn only to get a yes/no, a choice, a score, or typed fields from text, ask the [decision service](docs/subsystems/assistant-runtime.md#decision-models) first and state the fallback. Keep Claude for reasoning, writing, and tool use.
 - Verify the changed behavior with an appropriate real command or scenario. For documentation-only work, exercise navigation and check structure and links. Report only checks that ran.
 - Update affected documentation with the change. Keep temporary probes and work transcripts out of maintained documentation.
 - Use Node 24 or later. Run `npm run typecheck`, `npm test`, and `npm run build` after integration, plus a real changed-path smoke. The build command is a dry run, not a deployment.
