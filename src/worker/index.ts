@@ -172,9 +172,11 @@ class Coordinator extends LifecycleCapability {
             try { proactive.assertRunCurrent(op.sessionId); }
             catch { store.settle(op.id, "Background review is no longer actionable.", true); continue; }
           }
-          if (!op.background) await this.assistant.prepareOwnerTurn(op);
-          await harness.submit(store.modelContent(op), { session: op.sessionId, operationId: op.id });
-          store.submitted(op.id);
+          if (!op.background) { if (!(await this.assistant.submitOwnerTurn(op))) continue; }
+          else {
+            await harness.submit(store.modelContent(op), { session: op.sessionId, operationId: op.id });
+            store.submitted(op.id);
+          }
         }
         if (this.waits.has(op.id)) continue;
         const controller = new AbortController();
@@ -498,8 +500,28 @@ export class Assistant extends Agent<Env> {
   }
   /** Effort chosen for recent owner turns, since this instance started. */
   private readonly efforts: Record<Effort, number> = { low: 0, medium: 0, high: 0 };
+  private readonly submitting = new Set<string>();
+  /**
+   * Submits one admitted owner turn after setting its reasoning effort. The direct path and the coordinator drive
+   * can both reach the same turn while the effort decision is pending; only the first submits it. Returns whether
+   * the turn is submitted now.
+   */
+  async submitOwnerTurn(op: Operation): Promise<boolean> {
+    if (this.submitting.has(op.id)) return false;
+    this.submitting.add(op.id);
+    try {
+      if (this.store.operation(op.id)?.status === "admitted") {
+        await this.prepareOwnerTurn(op);
+        if (this.store.operation(op.id)?.status === "admitted") {
+          await this.harness.submit(this.store.modelContent(op), { session: op.sessionId, operationId: op.id });
+          this.store.submitted(op.id);
+        }
+      }
+      return this.store.operation(op.id)?.status === "submitted";
+    } finally { this.submitting.delete(op.id); }
+  }
   /** Sets this owner turn's reasoning effort from a decision on the message; anything unclear keeps high. */
-  async prepareOwnerTurn(op: Operation): Promise<void> {
+  private async prepareOwnerTurn(op: Operation): Promise<void> {
     if (this.store.isBackgroundSession(op.sessionId)) return;
     const previous = this.store.recentOperations(false).find(other => other.id !== op.id && other.channel === op.channel && other.status === "done" && other.result)?.result;
     const effort = await chooseEffort(this.decisions, op.modelInput ?? op.text, previous);
@@ -585,11 +607,7 @@ export class Assistant extends Agent<Env> {
       if (admitted.status === "admitted" || admitted.status === "submitted") this.proactive.deferForForeground();
       return admitted;
     });
-    if (op.status === "admitted") {
-      await this.prepareOwnerTurn(op);
-      await this.harness.submit(this.store.modelContent(op), { session: op.sessionId, operationId: op.id });
-      this.store.submitted(op.id);
-    }
+    if (op.status === "admitted") await this.submitOwnerTurn(op);
     return this.store.operation(op.id)!;
   }
 
