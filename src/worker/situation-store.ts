@@ -118,6 +118,13 @@ export class SituationStore {
       fact.id, fact.kind, Date.parse(fact.relevantUntil), Date.parse(fact.observedAt), JSON.stringify(fact));
     return fact;
   }
+  /** The key of an active fact of this kind whose key carries the reference, so a new source joins it. */
+  keyWithReference(kind: SituationKind, reference: string, now = Date.now()): string | undefined {
+    const needle = reference.toLowerCase().replace(/[^a-z0-9@#.+-]+/g, " ").trim();
+    if (needle.length < 4) return undefined;
+    return this.rows("SELECT data FROM umpi_situation_facts WHERE kind=? AND relevant_until >= ? ORDER BY observed DESC LIMIT 500", kind, now)
+      .find(fact => fact.key.split(/\s+/).includes(needle) || fact.key.endsWith(` ${needle}`))?.key.slice(kind.length + 1);
+  }
   fact(id: string): SituationFact | undefined { return this.rows("SELECT data FROM umpi_situation_facts WHERE id=?", id)[0]; }
 
   /** Validate and merge one observation. Older evidence fills gaps but never regresses a newer state. Call inside a transaction. */

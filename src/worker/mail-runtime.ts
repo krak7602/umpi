@@ -1,6 +1,7 @@
 import { parseGmailCredentials, readGmailChanges } from "./gmail.js";
 import { MAIL_PRIMARY_ACCOUNT, MailStore } from "./mail-store.js";
 import type { MailScreen } from "./mail-screen.js";
+import type { MailFact } from "./mail-facts.js";
 
 export interface MailAccountCredentials { id: string; credentials: string }
 export const MAIL_ACCOUNT_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
@@ -35,7 +36,7 @@ export function parseMailAccounts(secret: string | undefined): MailAccountCreden
 export class MailRuntime {
   private syncing?: Promise<void>;
   readonly accounts: MailAccountCredentials[];
-  constructor(readonly store: MailStore, credentials: string | undefined, readonly wake: () => Promise<void>, private readonly screen?: MailScreen) {
+  constructor(readonly store: MailStore, credentials: string | undefined, readonly wake: () => Promise<void>, private readonly screen?: MailScreen, private readonly fact?: MailFact) {
     this.accounts = parseMailAccounts(credentials);
     store.screening = screen !== undefined;
   }
@@ -79,8 +80,14 @@ export class MailRuntime {
       const batch = this.store.unscreened(MAIL_SCREEN_PARALLEL);
       if (!batch.length) break;
       await Promise.all(batch.map(async thread => {
-        const verdict = await screen(this.store.screenInput(thread)).catch(() => null);
+        const input = this.store.screenInput(thread);
+        const verdict = await screen(input).catch(() => null);
         this.store.applyScreen(thread.id, thread.providerVersion, verdict, Date.now());
+        // A fact without anything for the owner is recorded by the decision models; an unsure one goes to the review.
+        if (this.fact && this.store.factOnly(thread.id)) {
+          const extracted = await this.fact({ ...input, receivedAt: thread.receivedAt }).catch(() => null);
+          if (extracted) this.store.recordFact(thread.id, thread.providerVersion, extracted, Date.now());
+        }
       }));
       screened += batch.length;
     }

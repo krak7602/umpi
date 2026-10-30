@@ -34,7 +34,8 @@ import { enqueuePlanningControls, handlePlanningCallback, formatPlanningStatus }
 import { MailStore } from "./mail-store.js";
 import { MailRuntime } from "./mail-runtime.js";
 import { mailScreen } from "./mail-screen.js";
-import { DEFAULT_DECISION_MONTHLY_BUDGET, Decisions, type WorkersAi } from "./decisions.js";
+import { DECISION_INSTRUCTIONS, DEFAULT_DECISION_MONTHLY_BUDGET, Decisions, chooseEffort, decisionTools, type Effort, type WorkersAi } from "./decisions.js";
+import { mailFact } from "./mail-facts.js";
 import { mailTools, guardMailReviewTools, MAIL_INSTRUCTIONS } from "./mail-tools.js";
 import { mailRequest } from "./mail-http.js";
 import { enqueueMailControls, handleMailCallback, formatMailStatus } from "./mail-telegram.js";
@@ -171,6 +172,7 @@ class Coordinator extends LifecycleCapability {
             try { proactive.assertRunCurrent(op.sessionId); }
             catch { store.settle(op.id, "Background review is no longer actionable.", true); continue; }
           }
+          if (!op.background) await this.assistant.prepareOwnerTurn(op);
           await harness.submit(store.modelContent(op), { session: op.sessionId, operationId: op.id });
           store.submitted(op.id);
         }
@@ -342,7 +344,7 @@ export class Assistant extends Agent<Env> {
     this.planningRuntime = new PlanningRuntime(this.planning, () => this.vaultClient(),
       async () => (await readCoreContext(await this.harness.pi(), BACKGROUND_CONTEXT)).revision,
       () => this.config.UMPI_CALENDAR_CREDENTIALS, () => this.coordinator.wake());
-    this.mailRuntime = new MailRuntime(this.mail, this.config.UMPI_GMAIL_CREDENTIALS, () => this.coordinator.wake(), this.decisions.available() ? mailScreen(this.decisions) : undefined);
+    this.mailRuntime = new MailRuntime(this.mail, this.config.UMPI_GMAIL_CREDENTIALS, () => this.coordinator.wake(), this.decisions.available() ? mailScreen(this.decisions) : undefined, this.decisions.available() ? mailFact(this.decisions, this.timezone) : undefined);
     this.codingRuntime = new CodingRuntime(this.coding, {
       harness: () => this.harness, extension: () => codingProfile, archive: () => this.config.CODING_ARCHIVE,
       cloudAvailable: () => Boolean(this.config.CODING_WORKER),
@@ -356,7 +358,8 @@ export class Assistant extends Agent<Env> {
       },
     });
     const web = webTools({ key: () => this.config.UMPI_PARALLEL_API_KEY, usage: this.webUsage, foreground: webForeground(id => this.store.isBackgroundSession(id)) });
-    const assistantChild = assistantSubagentExtension(this.store, this.timezone, () => this.coordinator.wake(), (api, context) => this.subagents.childScope(api, context), web);
+    const decision = decisionTools(this.decisions);
+    const assistantChild = assistantSubagentExtension(this.store, this.timezone, () => this.coordinator.wake(), (api, context) => this.subagents.childScope(api, context), web, decision);
     const codingChild = codingSubagentExtension(this.codingRuntime, (api, context) => this.subagents.childScope(api, context));
     this.subagents = new SubagentRuntime({
       harness: () => this.harness.pi(),
@@ -381,11 +384,11 @@ export class Assistant extends Agent<Env> {
       track: work => this.lifecycle.trackAlarmWork(work),
     });
     const browserProfile = browserExtension(this.browserRuntime);
-    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...activityTools(this.store, this.activity, this.timezone, () => this.notifyExecutor()), ...journalTools(this.journal, id => this.store.isBackgroundSession(id)), ...web, ...contextTools(this.contextHealth, id => !this.store.isBackgroundSession(id)), ...delegation.tools ?? []];
+    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...activityTools(this.store, this.activity, this.timezone, () => this.notifyExecutor()), ...journalTools(this.journal, id => this.store.isBackgroundSession(id)), ...web, ...decision, ...contextTools(this.contextHealth, id => !this.store.isBackgroundSession(id)), ...delegation.tools ?? []];
     const guardedProactiveTools = guardBriefReviewTools(guardMailReviewTools(guardPlanningReviewTools(proactiveTools(this.proactive, () => this.coordinator.wake()), this.planningRuntime), this.mailRuntime), this.brief);
     const briefSources = { brief: this.brief, situation: this.situation, mail: this.mail, planning: this.planningRuntime, calendarCredentials: () => this.config.UMPI_CALENDAR_CREDENTIALS, activity: this.activity };
     const umpiExtension: Extension = { name: "umpi", hooks: contextHooks({ health: this.contextHealth, isForeground: id => !this.store.isBackgroundSession(id) }), tools: [...guardBackgroundTools(foregroundTools, this.proactive), ...guardedProactiveTools, ...planningTools(this.planningRuntime), ...mailTools(this.mailRuntime), ...briefTools(briefSources)],
-      sections: [{ key: "umpi", tag: false, render: () => `${ASSISTANT_INSTRUCTIONS}\n${COMPANION_INSTRUCTIONS}\n${PROACTIVE_INSTRUCTIONS}\n${PLANNING_INSTRUCTIONS}\n${MAIL_INSTRUCTIONS}\n${SITUATION_INSTRUCTIONS}\n${ACTIVITY_INSTRUCTIONS}\n${WEB_INSTRUCTIONS}\n${JOURNAL_INSTRUCTIONS}\n${BRIEF_INSTRUCTIONS}\n${CODING_OWNER_INSTRUCTIONS}\n${BROWSER_OWNER_INSTRUCTIONS}\n${SUBAGENT_INSTRUCTIONS}\nOwner timezone: ${this.timezone}.` }, coreContextSection, { key: "response-style", tag: false, render: () => RESPONSE_STYLE_INSTRUCTIONS }] };
+      sections: [{ key: "umpi", tag: false, render: () => `${ASSISTANT_INSTRUCTIONS}\n${COMPANION_INSTRUCTIONS}\n${PROACTIVE_INSTRUCTIONS}\n${PLANNING_INSTRUCTIONS}\n${MAIL_INSTRUCTIONS}\n${SITUATION_INSTRUCTIONS}\n${ACTIVITY_INSTRUCTIONS}\n${WEB_INSTRUCTIONS}\n${DECISION_INSTRUCTIONS}\n${JOURNAL_INSTRUCTIONS}\n${BRIEF_INSTRUCTIONS}\n${CODING_OWNER_INSTRUCTIONS}\n${BROWSER_OWNER_INSTRUCTIONS}\n${SUBAGENT_INSTRUCTIONS}\nOwner timezone: ${this.timezone}.` }, coreContextSection, { key: "response-style", tag: false, render: () => RESPONSE_STYLE_INSTRUCTIONS }] };
     registry.install(umpiExtension); registry.install(codingProfile); registry.install(browserProfile);
     registry.install(delegation); registry.install(assistantChild); registry.install(codingChild);
     this.harness = new PiHarness({
@@ -493,6 +496,17 @@ export class Assistant extends Agent<Env> {
     this.lastModelFailure = { ...failure, at: new Date().toISOString() };
     this.modelIssue = `The last model request failed. ${describeModelFailure(failure)}`;
   }
+  /** Effort chosen for recent owner turns, since this instance started. */
+  private readonly efforts: Record<Effort, number> = { low: 0, medium: 0, high: 0 };
+  /** Sets this owner turn's reasoning effort from a decision on the message; anything unclear keeps high. */
+  async prepareOwnerTurn(op: Operation): Promise<void> {
+    if (this.store.isBackgroundSession(op.sessionId)) return;
+    const previous = this.store.recentOperations(false).find(other => other.id !== op.id && other.channel === op.channel && other.status === "done" && other.result)?.result;
+    const effort = await chooseEffort(this.decisions, op.modelInput ?? op.text, previous);
+    this.efforts[effort]++;
+    await (await this.harness.conversation(op.sessionId)).configure({ thinkingLevel: effort }, BACKGROUND_CONTEXT);
+  }
+
   async modelReady(): Promise<boolean> {
     if (this.configurationIssue) { this.modelIssue = this.configurationIssue; return false; }
     const credential = await this.credentials.read(this.providerId);
@@ -572,6 +586,7 @@ export class Assistant extends Agent<Env> {
       return admitted;
     });
     if (op.status === "admitted") {
+      await this.prepareOwnerTurn(op);
       await this.harness.submit(this.store.modelContent(op), { session: op.sessionId, operationId: op.id });
       this.store.submitted(op.id);
     }
@@ -633,7 +648,7 @@ export class Assistant extends Agent<Env> {
     return {
       model: { providerId: this.providerId, modelId: this.modelId, configured, issue: this.modelIssue ?? null, lastFailure: this.lastModelFailure ?? null, fallback: this.modelFallback.status() },
       web: this.webUsage.status(Boolean(this.config.UMPI_PARALLEL_API_KEY)),
-      decisions: this.decisions.status(),
+      decisions: { ...this.decisions.status(), ownerEffort: this.efforts },
       knocks: this.knocks.status(),
       conversations: this.contextHealth.status([
         { label: "telegram", id: this.store.session("telegram") }, { label: "control", id: this.store.session("control") },
