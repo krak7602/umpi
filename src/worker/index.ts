@@ -33,7 +33,8 @@ import { planningRequest } from "./planning-http.js";
 import { enqueuePlanningControls, handlePlanningCallback, formatPlanningStatus } from "./planning-telegram.js";
 import { MailStore } from "./mail-store.js";
 import { MailRuntime } from "./mail-runtime.js";
-import { workersAiScreen, type WorkersAi } from "./mail-screen.js";
+import { mailScreen } from "./mail-screen.js";
+import { DEFAULT_DECISION_MONTHLY_BUDGET, Decisions, type WorkersAi } from "./decisions.js";
 import { mailTools, guardMailReviewTools, MAIL_INSTRUCTIONS } from "./mail-tools.js";
 import { mailRequest } from "./mail-http.js";
 import { enqueueMailControls, handleMailCallback, formatMailStatus } from "./mail-telegram.js";
@@ -111,8 +112,10 @@ export interface Env extends TelegramConfig, CompanionPushConfig {
   UMPI_PARALLEL_API_KEY?: string;
   /** Monthly web search budget in thousandths of a US dollar; default 4500. */
   UMPI_WEB_MONTHLY_BUDGET?: string;
-  /** Workers AI. When bound, Clef-flash screens new mail before the Claude review. */
+  /** Workers AI, for decision models: yes/no, choice, and score answers without a Claude turn. */
   AI?: WorkersAi;
+  /** Monthly decision-model budget in thousandths of a US dollar; default 1000. */
+  UMPI_DECISION_MONTHLY_BUDGET?: string;
 }
 
 class Coordinator extends LifecycleCapability {
@@ -262,6 +265,7 @@ export class Assistant extends Agent<Env> {
   lastModelFailure?: ModelFailure & { at: string };
   readonly modelFallback: ModelFallback;
   readonly webUsage: WebUsageStore;
+  readonly decisions: Decisions;
   readonly contextHealth: ContextHealth;
   readonly knocks: KnockStore;
 
@@ -312,6 +316,10 @@ export class Assistant extends Agent<Env> {
       const budget = Number(env.UMPI_WEB_MONTHLY_BUDGET);
       return Number.isInteger(budget) && budget >= 0 ? budget : DEFAULT_WEB_MONTHLY_BUDGET;
     });
+    this.decisions = new Decisions(this.store.db, env.AI, () => {
+      const budget = Number(env.UMPI_DECISION_MONTHLY_BUDGET);
+      return Number.isInteger(budget) && budget >= 0 ? budget : DEFAULT_DECISION_MONTHLY_BUDGET;
+    });
     this.proactive.onRetryExhausted = (commitment, reason, now) => {
       const day = new Intl.DateTimeFormat("en-CA", { timeZone: fallbackZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
       const label = commitment.id === "morning-brief" ? "Today's morning brief" : commitment.id.startsWith("daily-") ? "Today's daily-note preparation" : `"${commitment.purpose.slice(0, 80)}"`;
@@ -334,7 +342,7 @@ export class Assistant extends Agent<Env> {
     this.planningRuntime = new PlanningRuntime(this.planning, () => this.vaultClient(),
       async () => (await readCoreContext(await this.harness.pi(), BACKGROUND_CONTEXT)).revision,
       () => this.config.UMPI_CALENDAR_CREDENTIALS, () => this.coordinator.wake());
-    this.mailRuntime = new MailRuntime(this.mail, this.config.UMPI_GMAIL_CREDENTIALS, () => this.coordinator.wake(), this.config.AI ? workersAiScreen(this.config.AI) : undefined);
+    this.mailRuntime = new MailRuntime(this.mail, this.config.UMPI_GMAIL_CREDENTIALS, () => this.coordinator.wake(), this.decisions.available() ? mailScreen(this.decisions) : undefined);
     this.codingRuntime = new CodingRuntime(this.coding, {
       harness: () => this.harness, extension: () => codingProfile, archive: () => this.config.CODING_ARCHIVE,
       cloudAvailable: () => Boolean(this.config.CODING_WORKER),
@@ -625,6 +633,7 @@ export class Assistant extends Agent<Env> {
     return {
       model: { providerId: this.providerId, modelId: this.modelId, configured, issue: this.modelIssue ?? null, lastFailure: this.lastModelFailure ?? null, fallback: this.modelFallback.status() },
       web: this.webUsage.status(Boolean(this.config.UMPI_PARALLEL_API_KEY)),
+      decisions: this.decisions.status(),
       knocks: this.knocks.status(),
       conversations: this.contextHealth.status([
         { label: "telegram", id: this.store.session("telegram") }, { label: "control", id: this.store.session("control") },
