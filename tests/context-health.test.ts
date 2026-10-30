@@ -35,7 +35,8 @@ test("context health records size, cache use, compactions and resets, and gates 
   const [status] = health.status([{ label: "telegram", id: "c1" }, { label: "control", id: undefined }]) as Record<string, unknown>[];
   assert.deepEqual(status, { label: "telegram", contextTokens: 43_500, lastResponseAt: "2026-10-30T10:01:00.000Z",
     lastRequest: { input: 1_000, cacheRead: 40_000, cacheWrite: 2_000, cacheWrite1h: 2_000, output: 500 }, responses: 2, cacheHitRate: 0.5,
-    compactions: 1, lastCompaction: { at: "2026-10-30T10:01:00.000Z", reason: "threshold", entries: 120 }, resets: 0, lastResetAt: null });
+    compactions: 1, lastCompaction: { at: "2026-10-30T10:01:00.000Z", reason: "threshold", entries: 120 }, resets: 0, lastResetAt: null,
+    today: { requests: 2, coldStarts: 1, cacheRead: 40_000, cacheWritten: 42_000, uncachedInput: 3_000, output: 1_000, inputEquivalent: 59_500, coldWriteShare: 0.88 }, last7Days: { requests: 2, coldStarts: 1, cacheRead: 40_000, cacheWritten: 42_000, uncachedInput: 3_000, output: 1_000, inputEquivalent: 59_500, coldWriteShare: 0.88 } }, "the first request wrote its prompt cold; the second read it");
 
   const idle = { activeRun: false, pendingOperation: false, openJob: false, pendingChoice: false };
   assert.equal(mayResetBackground(health, "c1", idle), true);
