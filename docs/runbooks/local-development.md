@@ -428,6 +428,17 @@ For private verification, use controlled synthetic or disposable threads around 
 
 For an expired cursor or unexplained silence, inspect `lastStatus`, `issue`, `scanInProgress`, `bootstrapAfter`, `nextSyncAt`, scheduler state, model status, and Telegram delivery state. Do not repeatedly widen or rerun bootstrap. Revoking Google access stops future reads but does not erase existing Umpi operational records, model-provider processing, or Telegram messages. Pause first, revoke through Google account controls, remove the Worker secret only under separate deployment authorization, and remove retained private state through owner-controlled storage administration when required.
 
+### Operate the nightly run
+
+The [nightly run](../subsystems/assistant-runtime.md#nightly-run) closes the owner's day and replaces its conversation history with a summary. It starts disabled, and the `/schedule` follow-through setting must be enabled. Enable it through the protected route with the current version from `GET /api/dream`:
+
+```sh
+# Body example: {"expectedVersion": 1, "enabled": true, "time": "02:00"}
+PUT /api/dream/settings
+```
+
+`POST /api/dream/run` closes the day so far and compacts the owner conversations at once. Use it for a check or after a long day; it costs one background turn. Afterwards, check `GET /api/dream` for the night's status, probe results, and compaction result, and `GET /api/status` → `conversations` for the smaller context size. A compaction failure appears in `lastNight.compaction.error`; the 550,000-token threshold still protects the conversation.
+
 ### Operate the morning brief
 
 Open `/brief` and choose **Enable at 03:30**. The existing `/schedule` follow-through setting must also be enabled. Enabling after that day's time starts the next morning; **Brief now** writes one immediately. Change the time through `PUT /api/brief/settings` with the current `expectedVersion`. A morning with nothing worth saying stays silent. Check `GET /api/brief` and the schedule run history when a brief is missing; the brief is a normal proactive notification, so quiet hours and pause also apply.

@@ -36,6 +36,8 @@ import { MailRuntime } from "./mail-runtime.js";
 import { mailScreen } from "./mail-screen.js";
 import { DECISION_INSTRUCTIONS, DEFAULT_DECISION_MONTHLY_BUDGET, Decisions, chooseEffort, decisionTools, type Effort, type WorkersAi } from "./decisions.js";
 import { mailFact } from "./mail-facts.js";
+import { DreamStore } from "./dream-store.js";
+import { DREAM_INSTRUCTIONS, DreamRuntime, dreamRequest, dreamTools, guardDreamReviewTools, historyTools, refExists } from "./dream-tools.js";
 import { mailTools, guardMailReviewTools, MAIL_INSTRUCTIONS } from "./mail-tools.js";
 import { mailRequest } from "./mail-http.js";
 import { enqueueMailControls, handleMailCallback, formatMailStatus } from "./mail-telegram.js";
@@ -134,7 +136,7 @@ class Coordinator extends LifecycleCapability {
     this.assistant.telegramInbox.recover();
     // Recover both new proposals and decisions committed before their SQL delivery projection.
     await reconcileMemoryTelegram(await this.assistant.harness.pi(), BACKGROUND_CONTEXT, this.assistant.store);
-    if (this.assistant.telegramInbox.hasPending() || this.assistant.store.pendingOperations().length || this.assistant.store.nextReminder() !== undefined || this.assistant.knocks.nextDue() !== undefined || this.assistant.store.readyDeliveries().length || this.assistant.companion.nextPush() || this.assistant.proactive.settings().enabled || this.assistant.planning.settings().enabled || this.assistant.brief.settings().enabled || this.assistant.mailRuntime.nextDue() !== undefined || this.assistant.coding.active().length || this.assistant.browserRuntime.nextDue() !== undefined || this.assistant.browser.active().length || await this.assistant.subagents.nextDue() !== undefined) await this.wake();
+    if (this.assistant.telegramInbox.hasPending() || this.assistant.store.pendingOperations().length || this.assistant.store.nextReminder() !== undefined || this.assistant.knocks.nextDue() !== undefined || this.assistant.store.readyDeliveries().length || this.assistant.companion.nextPush() || this.assistant.proactive.settings().enabled || this.assistant.planning.settings().enabled || this.assistant.brief.settings().enabled || this.assistant.dream.settings().enabled || this.assistant.mailRuntime.nextDue() !== undefined || this.assistant.coding.active().length || this.assistant.browserRuntime.nextDue() !== undefined || this.assistant.browser.active().length || await this.assistant.subagents.nextDue() !== undefined) await this.wake();
   }
 
   async onJob({ job }: LifecycleJobContext): Promise<LifecycleJobOutcome> {
@@ -147,9 +149,11 @@ class Coordinator extends LifecycleCapability {
       await this.assistant.mailRuntime.drive();
       this.assistant.situation.purge();
       this.assistant.brief.drive();
+      this.assistant.dream.drive();
       await this.assistant.alerts.drive();
       this.assistant.journal.drive();
       await this.assistant.driveProactive();
+      await this.assistant.dreamRuntime.drive();
       this.assistant.planning.reconcile();
       await this.assistant.subagents.drive();
       await this.assistant.codingRuntime.drive();
@@ -223,7 +227,7 @@ class Coordinator extends LifecycleCapability {
       // Missing credentials do not justify a two-second polling loop; auth updates wake the queue.
       const pending = store.pendingOperations().some(op => op.status === "submitted");
       const outbox = store.readyDeliveries().length > 0;
-      const wakeAt = Math.min(due ?? Infinity, proactive.nextDue(Date.now(), store.hasForegroundInput()) ?? Infinity, this.assistant.planning.nextDue() ?? Infinity, this.assistant.brief.nextDue() ?? Infinity, this.assistant.alerts.nextDue() ?? Infinity, this.assistant.journal.nextDue() ?? Infinity, this.assistant.mailRuntime.nextDue() ?? Infinity, this.assistant.codingRuntime.nextDue() ?? Infinity, this.assistant.browserRuntime.nextDue() ?? Infinity, await this.assistant.subagents.nextDue() ?? Infinity, this.assistant.telegramInbox.nextDue() ?? Infinity, this.assistant.knocks.nextDue() ?? Infinity, pending ? Date.now() + 2_000 : Infinity, outbox || this.assistant.companion.nextPush() ? Date.now() + 100 : Infinity);
+      const wakeAt = Math.min(due ?? Infinity, proactive.nextDue(Date.now(), store.hasForegroundInput()) ?? Infinity, this.assistant.planning.nextDue() ?? Infinity, this.assistant.brief.nextDue() ?? Infinity, this.assistant.dream.nextDue() ?? Infinity, this.assistant.dreamRuntime.nextDue() ?? Infinity, this.assistant.alerts.nextDue() ?? Infinity, this.assistant.journal.nextDue() ?? Infinity, this.assistant.mailRuntime.nextDue() ?? Infinity, this.assistant.codingRuntime.nextDue() ?? Infinity, this.assistant.browserRuntime.nextDue() ?? Infinity, await this.assistant.subagents.nextDue() ?? Infinity, this.assistant.telegramInbox.nextDue() ?? Infinity, this.assistant.knocks.nextDue() ?? Infinity, pending ? Date.now() + 2_000 : Infinity, outbox || this.assistant.companion.nextPush() ? Date.now() + 100 : Infinity);
       if (Number.isFinite(wakeAt)) return { rescheduleAt: wakeAt };
     } catch {
       this.assistant.modelIssue = "Coordinator reconciliation failed; work is retained and retry is scheduled. Check configuration and protected status.";
@@ -270,6 +274,8 @@ export class Assistant extends Agent<Env> {
   readonly modelFallback: ModelFallback;
   readonly webUsage: WebUsageStore;
   readonly decisions: Decisions;
+  readonly dream: DreamStore;
+  readonly dreamRuntime: DreamRuntime;
   readonly contextHealth: ContextHealth;
   readonly knocks: KnockStore;
 
@@ -300,7 +306,9 @@ export class Assistant extends Agent<Env> {
     this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     this.mail = new MailStore(this.proactive, this.situation);
     this.brief = new BriefStore(this.proactive);
-    const systemOwned = (id: string) => this.mail.ownsCommitment(id) || this.brief.ownsCommitment(id) || this.planning.ownsCommitment(id);
+    this.dream = new DreamStore(this.proactive);
+    this.dream.refExists = ref => refExists({ dream: this.dream, mail: this.mail }, ref);
+    const systemOwned = (id: string) => this.mail.ownsCommitment(id) || this.brief.ownsCommitment(id) || this.planning.ownsCommitment(id) || this.dream.ownsCommitment(id);
     this.journal = new JournalRuntime(new JournalStore(this.store.db), this.proactive, {
       vault: () => this.vaultClient(), planning: this.planning, situation: this.situation, mail: this.mail,
       calendarCredentials: () => this.config.UMPI_CALENDAR_CREDENTIALS, ownedCommitment: systemOwned,
@@ -359,7 +367,7 @@ export class Assistant extends Agent<Env> {
         correct: (session, run, input, text) => this.subagents.correct(session, run, input, text),
       },
     });
-    const web = webTools({ key: () => this.config.UMPI_PARALLEL_API_KEY, usage: this.webUsage, foreground: webForeground(id => this.store.isBackgroundSession(id)) });
+    const web = webTools({ key: () => this.config.UMPI_PARALLEL_API_KEY, usage: this.webUsage, foreground: webForeground(id => this.store.isBackgroundSession(id) && !this.dream.ownsSession(id)) });
     const decision = decisionTools(this.decisions);
     const assistantChild = assistantSubagentExtension(this.store, this.timezone, () => this.coordinator.wake(), (api, context) => this.subagents.childScope(api, context), web, decision);
     const codingChild = codingSubagentExtension(this.codingRuntime, (api, context) => this.subagents.childScope(api, context));
@@ -386,11 +394,20 @@ export class Assistant extends Agent<Env> {
       track: work => this.lifecycle.trackAlarmWork(work),
     });
     const browserProfile = browserExtension(this.browserRuntime);
-    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...activityTools(this.store, this.activity, this.timezone, () => this.notifyExecutor()), ...journalTools(this.journal, id => this.store.isBackgroundSession(id)), ...web, ...decision, ...contextTools(this.contextHealth, id => !this.store.isBackgroundSession(id)), ...delegation.tools ?? []];
-    const guardedProactiveTools = guardBriefReviewTools(guardMailReviewTools(guardPlanningReviewTools(proactiveTools(this.proactive, () => this.coordinator.wake()), this.planningRuntime), this.mailRuntime), this.brief);
-    const briefSources = { brief: this.brief, situation: this.situation, mail: this.mail, planning: this.planningRuntime, calendarCredentials: () => this.config.UMPI_CALENDAR_CREDENTIALS, activity: this.activity };
-    const umpiExtension: Extension = { name: "umpi", hooks: contextHooks({ health: this.contextHealth, isForeground: id => !this.store.isBackgroundSession(id) }), tools: [...guardBackgroundTools(foregroundTools, this.proactive), ...guardedProactiveTools, ...planningTools(this.planningRuntime), ...mailTools(this.mailRuntime), ...briefTools(briefSources)],
-      sections: [{ key: "umpi", tag: false, render: () => `${ASSISTANT_INSTRUCTIONS}\n${COMPANION_INSTRUCTIONS}\n${PROACTIVE_INSTRUCTIONS}\n${PLANNING_INSTRUCTIONS}\n${MAIL_INSTRUCTIONS}\n${SITUATION_INSTRUCTIONS}\n${ACTIVITY_INSTRUCTIONS}\n${WEB_INSTRUCTIONS}\n${DECISION_INSTRUCTIONS}\n${JOURNAL_INSTRUCTIONS}\n${BRIEF_INSTRUCTIONS}\n${CODING_OWNER_INSTRUCTIONS}\n${BROWSER_OWNER_INSTRUCTIONS}\n${SUBAGENT_INSTRUCTIONS}\nOwner timezone: ${this.timezone}.` }, coreContextSection, { key: "response-style", tag: false, render: () => RESPONSE_STYLE_INSTRUCTIONS }] };
+    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...activityTools(this.store, this.activity, this.timezone, () => this.notifyExecutor()), ...journalTools(this.journal, id => this.store.isBackgroundSession(id)), ...web, ...decision, ...historyTools(this.dream, id => this.store.isBackgroundSession(id)), ...contextTools(this.contextHealth, id => !this.store.isBackgroundSession(id)), ...delegation.tools ?? []];
+    const guardedProactiveTools = guardDreamReviewTools(guardBriefReviewTools(guardMailReviewTools(guardPlanningReviewTools(proactiveTools(this.proactive, () => this.coordinator.wake()), this.planningRuntime), this.mailRuntime), this.brief), this.dream);
+    const briefSources = { brief: this.brief, situation: this.situation, mail: this.mail, planning: this.planningRuntime, calendarCredentials: () => this.config.UMPI_CALENDAR_CREDENTIALS, activity: this.activity, dream: this.dream };
+    const ownerSessions = () => (["telegram", "control"] as const).flatMap(channel => { const session = this.store.session(channel); return session ? [{ channel, session }] : []; });
+    const dreamSources = { dream: this.dream, mail: this.mail, situation: this.situation, activity: this.activity,
+      conversations: async () => Promise.all(ownerSessions().map(async ({ channel, session }) => ({ channel, entries: await this.harness.messages({ session }) as never }))) };
+    this.dreamRuntime = new DreamRuntime(this.dream, this.decisions, {
+      sessions: () => ownerSessions().map(item => item.session),
+      compact: async (session, marker) => { await (await this.harness.conversation(session)).compact(marker, BACKGROUND_CONTEXT); },
+    });
+    // The nightly run may look into the owner's open questions and read older digests; other reviews may not.
+    const dreamExtra = (session: string, tool: string) => ["web_search", "read_web_page", "search_history", "read_history"].includes(tool) && this.dream.ownsSession(session);
+    const umpiExtension: Extension = { name: "umpi", hooks: contextHooks({ health: this.contextHealth, isForeground: id => !this.store.isBackgroundSession(id), summaryFor: instructions => this.dreamRuntime.summaryFor(instructions) }), tools: [...guardBackgroundTools(foregroundTools, this.proactive, dreamExtra), ...guardedProactiveTools, ...planningTools(this.planningRuntime), ...mailTools(this.mailRuntime), ...briefTools(briefSources), ...dreamTools(dreamSources)],
+      sections: [{ key: "umpi", tag: false, render: () => `${ASSISTANT_INSTRUCTIONS}\n${COMPANION_INSTRUCTIONS}\n${PROACTIVE_INSTRUCTIONS}\n${PLANNING_INSTRUCTIONS}\n${MAIL_INSTRUCTIONS}\n${SITUATION_INSTRUCTIONS}\n${ACTIVITY_INSTRUCTIONS}\n${WEB_INSTRUCTIONS}\n${DECISION_INSTRUCTIONS}\n${JOURNAL_INSTRUCTIONS}\n${BRIEF_INSTRUCTIONS}\n${DREAM_INSTRUCTIONS}\n${CODING_OWNER_INSTRUCTIONS}\n${BROWSER_OWNER_INSTRUCTIONS}\n${SUBAGENT_INSTRUCTIONS}\nOwner timezone: ${this.timezone}.` }, coreContextSection, { key: "lessons", tag: false, render: () => this.dream.playbook() }, { key: "response-style", tag: false, render: () => RESPONSE_STYLE_INSTRUCTIONS }] };
     registry.install(umpiExtension); registry.install(codingProfile); registry.install(browserProfile);
     registry.install(delegation); registry.install(assistantChild); registry.install(codingChild);
     this.harness = new PiHarness({
@@ -681,6 +698,7 @@ export class Assistant extends Agent<Env> {
       activity: this.activity.status(),
       executor: this.executorPresence.status(this.executorWake.live().length > 0, this.executorWake.live().length, this.executorPollSeenAt()),
       brief: this.brief.status(),
+      dream: this.dream.status(),
       alerts: this.alerts.status(),
       journal: this.journal.status(),
       coding: this.codingRuntime.status(),
@@ -719,11 +737,13 @@ export class Assistant extends Agent<Env> {
       if (mail) { mail.headers.set("cache-control", "no-store"); return mail; }
       const brief = await briefRequest(request, this.brief, this.situation, () => this.store.session("telegram"), () => this.coordinator.wake());
       if (brief) { brief.headers.set("cache-control", "no-store"); return brief; }
+      const dream = await dreamRequest(request, this.dream, () => this.store.session("telegram"), () => this.coordinator.wake());
+      if (dream) { dream.headers.set("cache-control", "no-store"); return dream; }
       const alerts = await alertRequest(request, this.alerts, () => this.coordinator.wake());
       if (alerts) { alerts.headers.set("cache-control", "no-store"); return alerts; }
       const journal = await journalRequest(request, this.journal, () => this.coordinator.wake());
       if (journal) { journal.headers.set("cache-control", "no-store"); return journal; }
-      const schedule = await scheduleRequest(request, this.proactive, () => this.coordinator.wake(), () => this.session("control"), id => this.planning.ownsCommitment(id) || this.mail.ownsCommitment(id) || this.brief.ownsCommitment(id));
+      const schedule = await scheduleRequest(request, this.proactive, () => this.coordinator.wake(), () => this.session("control"), id => this.planning.ownsCommitment(id) || this.mail.ownsCommitment(id) || this.brief.ownsCommitment(id) || this.dream.ownsCommitment(id));
       if (schedule) return schedule;
       if (path === "/api/status" && request.method === "GET") return Response.json(await this.status());
       if (path === "/api/model/fallback/check" && request.method === "POST") return Response.json(await this.modelFallback.check());

@@ -91,4 +91,5 @@ Browser Run is the browser-only cloud provider. Bounded hosted-model public-page
 - 2026-10-19: Moved primary reasoning from the ChatGPT subscription to Claude subscription OAuth without adding a runtime or container.
 - 2026-10-19: Added the mail-derived situation record, multiple mailboxes, and the morning brief without new runtimes or containers.
 - 2026-10-21: Moved daily notes from the VaultSync container to the obsy vault over an R2 binding, then removed the container.
+- 2026-10-30: Added the nightly run: daily digests and a code-built anchored summary replace each day's conversation history without a summarizing model call.
 - 2026-10-30: Added decision models on Workers AI to the harness for yes/no, choice, and score answers without a Claude turn; mail is the first caller.

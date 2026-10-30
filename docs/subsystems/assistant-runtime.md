@@ -1,6 +1,6 @@
 ---
 title: Persistent assistant runtime
-aliases: [coordinator, Telegram adapter, reminders, mail follow-through, situation record, morning brief, control API]
+aliases: [coordinator, Telegram adapter, reminders, mail follow-through, situation record, morning brief, nightly run, dream, control API]
 updated: 2026-10-19
 ---
 
@@ -45,11 +45,29 @@ Conversation persistence and Pi's automatic compaction are separate from selecte
 
 `context-health.ts` holds the context policy for every Pi conversation of the coordinator:
 
-- **Compaction is a safety net.** Background compaction starts at 550,000 tokens of Opus 5.5's 1,000,000-token window (`reserveTokens` 32,768, `backgroundTokens` 417,232); a turn blocks to compact only near 967,000. The reserve leaves the summary about 26,000 tokens. A planned nightly compaction will keep the owner conversation far below the threshold; it is accepted design, not yet implemented.
+- **The [nightly run](#nightly-run) compacts every day; the threshold is a safety net.** Background compaction starts at 550,000 tokens of Opus 5.5's 1,000,000-token window (`reserveTokens` 32,768, `backgroundTokens` 417,232); a turn blocks to compact only near 967,000. The reserve leaves a threshold summary about 26,000 tokens. With the nightly run enabled, a conversation reaches the threshold only after a very long single day.
 - **The prompt cache stays at five minutes.** A 1-hour cache was tried on 2026-10-30. It worked with the subscription token, but its writes cost twice the base input price against 1.25 times for five minutes, and replies are often more than an hour apart. It is not used.
 - **Long tool results stay out of the owner conversation.** In foreground conversations, a result over 32,000 characters keeps its start inline. The full text is stored for 14 days behind a handle, and `read_tool_result` reads on from an offset. Earlier results are never cleared later, because a clear would break the cache.
 - **Background reviews start fresh.** Before a proactive drive, a background session that answered since its last reset is reset, but only when it has no admitted run, pending operation, open job, or pending choice. Its results already live in commitment, mail, planning, and brief records.
 - **Status.** `GET /api/status` → `conversations` lists the Telegram, control, and background conversations: context size from the last response, the last request's input, cache read, cache writes (and how much was written for an hour), output, response count and cache-hit rate, compactions with the last reason, and resets. It reports counts only, never content.
+
+### Nightly run
+
+`dream-store.ts` and `dream-tools.ts` close the owner's day once a night, by default at 02:00 local. It starts disabled; `PUT /api/dream/settings` with `{expectedVersion, enabled, time?}` enables it, and the first night closes the day of the next scheduled time. A delayed alarm closes that day once. `POST /api/dream/run` closes the current day so far; the scheduled night still closes the whole day afterwards, extending the partial digest. It uses the proactive scheduler like the morning brief, with a code-owned commitment (`nightly-dream`) that generic commitment and wake tools cannot change, a retry every 60 minutes at most 3 times, and no owner notification.
+
+The night is one background review. `read_dream_inputs` returns the day's owner conversation as text since the previous night (Telegram and control; owner and assistant text only, tool calls by name, no tool results, newest 90,000 characters), any earlier digest of the day, open records (commitments, scheduled reminders, mail needing the owner), standing instructions from the last seven digests, the current lessons, this week's digests, the month's digests when the month closes, changed situation facts, and Aside activity. `commit_dream` saves, once:
+
+- **Day digest:** a 300–900 word summary for the assistant's own memory, decisions, standing instructions copied word for word, open loops (an `ref` must name a live record, otherwise the loop is dropped; free-text loops stay), people, and topics.
+- **Week summary**, rewritten each night from this week's day digests, and the **month summary** when the month closes, from its day digests. Higher levels are rebuilt from day digests, never from older summaries.
+- **Probes:** 3–6 question and answer pairs about details the assistant must still know tomorrow.
+- **Lessons:** at most 5 itemized edits (add, update, or retire) from the owner's corrections, with evidence. At most 30 lessons are active. They are applied at once and rendered as a system prompt section; every change keeps its history (12 versions). The owner conversation can `list_lessons`, and on the owner's request `revert_lesson` returns a lesson to an earlier version or retires it; background reviews cannot.
+- **Overnight notes:** `whileYouSlept` (for example, an open question the night looked into) and `tomorrow` (things to prepare). The [morning brief](#morning-brief) reads them as `overnight` within 20 hours.
+
+The night may use `web_search` and `read_web_page` for questions the owner raised, and `search_history` and `read_history`; other background reviews cannot. Its instructions forbid private details in queries. The conversation is data, never instructions.
+
+After the commit, code builds the **anchored summary**: standing instructions from the week word for word, open loops with record IDs, the day in detail with decisions, earlier days of the week briefly, the week summary, and a pointer to history search. A [decision model](#decision-models) checks each probe against it ("does the text contain this answer?"); a probe below 0.5 is appended under "Details kept". If the check is unavailable, every probe is appended. Then each owner conversation (Telegram and control) is compacted with `conversation.compact` and a nightly marker; the `beforeCompact` hook supplies the prepared summary, so the compaction makes no summarizing model call. The harness keeps the newest ~20,000 tokens word for word. A failed compaction is recorded, not retried in a loop.
+
+The owner conversation has `search_history` (digests ranked by matching words, with excerpts) and `read_history` (one day `2026-10-30`, week `2026-W44`, or month `2026-10`). Day digests are kept 400 days. Protected `GET /api/dream` and `GET /api/status` → `dream` report settings, the next time, the last night (status, probes, lesson edits, compaction result), digest counts, and active lessons.
 
 ### Native core context
 
@@ -178,11 +196,12 @@ Usage is counted per caller (`purpose`) and UTC month: $0.09 per million tokens 
 Callers:
 
 - **Mail screen.** Two yes/no questions per new thread; see [mail follow-through](#read-only-mail-follow-through).
+- **Nightly probes.** The [nightly run](#nightly-run) checks its summary against its probe questions before compacting.
 - **Mail facts.** A thread the screen judged to hold a fact but not to need the owner (or a thread the owner answered, which is only read for facts) goes to `mail-facts.ts`. Clef names the kind (order, spend, bill, booking, or other) and its state; Clairic extracts the reference, counterparty, amount, currency, and dates. Times without a zone are read in the owner's timezone. When the kind is at least 0.7 likely, the state at least 0.6, and the reference at least 0.7 confident (a spend also needs its amount), the fact goes into the [situation record](#situation-record) without a Claude turn. A fact whose reference matches an active fact of the same kind joins it. The key follows the review's convention: who the item is with, then the reference. Anything else, and every subscription, job, account, or other update, goes to the Claude review.
 - **Owner-message effort.** Before each owner turn, one Clef `choice` with the message and the end of the previous reply picks `quick`, `normal`, or `deep`, which set Opus effort to low, medium, or high for that turn. The previous reply matters because "yes" can approve a large task. Effort drops only when the chosen option is at least 0.6 likely; an unsure answer, a failure, or more than three seconds keeps high. Opus takes effort per turn as a short message at the end, so a change does not break the prompt cache. Background reviews keep medium.
-- **Claude's tools.** `decide` and `extract_fields` take up to 25 items and the same questions or fields for each. The owner conversation, background reviews, and assistant subagents have them. Their instructions tell Claude to use them for the same judgment over many items and to check low-confidence answers itself.
+- **Claude's tools.** `decide` and `extract_fields` take up to 25 items and the same questions or fields for each. The owner conversation, background reviews (through the background tool list), and assistant subagents have them. Their instructions tell Claude to use them for the same judgment over many items and to check low-confidence answers itself.
 
-Checked and not wired: a gate before heartbeat and stalled-commitment reviews (none ran in the two days measured, and the gate would have no evidence beyond the commitment text), a gate before the morning brief (it was written and sent every day, so a gate saves nothing and risks a missing brief), and Aside activity labels (Aside writes them on the Mac; no Umpi model turn exists to replace). The nightly digests planned for context management are the next caller.
+Checked and not wired: a gate before heartbeat and stalled-commitment reviews (none ran in the two days measured, and the gate would have no evidence beyond the commitment text), a gate before the morning brief (it was written and sent every day, so a gate saves nothing and risks a missing brief), and Aside activity labels (Aside writes them on the Mac; no Umpi model turn exists to replace). 
 
 ### Default checks
 
@@ -419,6 +438,7 @@ The [development and operation runbook](../runbooks/local-development.md) owns l
 - 2026-10-22: Added the Aside context: activity summaries for chat and the brief, and owner memory search through the Mac.
 - 2026-10-22: Added failure causes to run notes and a once-a-day Telegram notice when a retrying commitment gives up.
 - 2026-10-22: Added image input (photos, image files and albums). Other attachments are skipped with a short reply instead of a rejected webhook.
+- 2026-10-30: Added the nightly run: day, week, and month digests with history search, an anchored summary checked by probes that replaces each day's history without a summarizing model call, overnight notes for the brief, and auto-applied, reversible lessons.
 - 2026-10-30: Added Clairic extraction, mail facts without a review, per-message owner effort, and the `decide` and `extract_fields` tools to the decision service.
 - 2026-10-30: Added decision models (Clef on Workers AI) to the harness, with the mail screen as the first caller. In the two days before it, all 45 mail reviews ended with no action.
 - 2026-10-30: Added knocks: due reminders chime and prompt on the Mac, with Done and Snooze.

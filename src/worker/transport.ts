@@ -297,7 +297,10 @@ export async function authorize(request: Request, env: TelegramConfig & { UMPI_C
     || (request.method === "GET" && path === "/api/journal")
     || (request.method === "PUT" && path === "/api/journal/settings")
     || (request.method === "PUT" && path === "/api/brief/settings")
-    || (request.method === "POST" && path === "/api/brief/run");
+    || (request.method === "POST" && path === "/api/brief/run")
+    || (request.method === "GET" && path === "/api/dream")
+    || (request.method === "PUT" && path === "/api/dream/settings")
+    || (request.method === "POST" && path === "/api/dream/run");
   const coding = (request.method === "GET" && (/^\/api\/coding(?:\/(?:sources|tasks))?$/.test(path) || /^\/api\/coding\/tasks\/[A-Za-z0-9_.:-]+(?:\/(?:patch|checkpoint))?$/.test(path)))
     || (request.method === "POST" && (path === "/api/coding/tasks" || /^\/api\/coding\/sources\/[A-Za-z0-9_.:-]+$/.test(path) || /^\/api\/coding\/tasks\/[A-Za-z0-9_.:-]+\/(?:approve|cancel|correct|cloud|reconcile)$/.test(path)))
     || (request.method === "GET" && /^\/api\/coding\/tasks\/[A-Za-z0-9_.:-]+\/runs(?:\/[A-Za-z0-9_.:-]+\/(?:patch|checkpoint))?$/.test(path));

@@ -6,6 +6,7 @@ import { activityDay } from "./activity-tools.js";
 import { InputError, record } from "../shared/protocol.js";
 import { BriefStore } from "./brief-store.js";
 import type { MailStore } from "./mail-store.js";
+import type { DreamStore } from "./dream-store.js";
 import type { PlanningRuntime } from "./planning-runtime.js";
 import type { SituationStore } from "./situation-store.js";
 import { readCalendarRange } from "./situation-tools.js";
@@ -19,6 +20,8 @@ export interface BriefSources {
   calendarCredentials: () => string | undefined;
   /** Aside activity summaries, when the Mac context lane is on. */
   activity?: ActivityStore;
+  /** The nightly run's notes for this morning. */
+  dream?: DreamStore;
 }
 
 /** Returned with the owned inputs, so ordinary conversations do not carry the writing rules. */
@@ -29,6 +32,7 @@ export const BRIEF_GUIDE = `Write the owner's morning brief for Telegram. They r
 - Coming up: the next two or three days, only concrete items.
 - Money: yesterday's spending total and anything unusual. Skip it when there were no spend alerts.
 - Yesterday's work: one or two lines on what they mainly worked on, from yesterdayActivity, only when it is present and useful for today.
+- While you slept: the items in overnight.whileYouSlept, briefly; put overnight.tomorrow items under Today when they matter today.
 Leave out empty sections. Use short bullet lines, local times, and the owner's own wording for plan items. No greeting filler, praise, or sign-off, and no em or en dashes. Never invent events or facts; say when a source was unavailable. If nothing matters today and nothing changed, commit null and stay quiet.`;
 
 async function result(run: () => unknown | Promise<unknown>): Promise<ToolExecutionResult> {
@@ -63,6 +67,7 @@ export async function briefInputs(sources: BriefSources, sessionId: string, now 
     changedSinceLastBrief: sources.situation.changedIds(since, 100),
     situation: sources.situation.read({ budgetBytes: 20_000 }, now),
     yesterdayActivity: sources.activity ? activityDay(sources.activity, shiftPlanningDay(day, -1), sources.brief.timezone, false, 6_000) : null,
+    overnight: sources.dream?.overnightFor(now) ?? null,
   };
 }
 
