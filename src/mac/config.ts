@@ -20,6 +20,8 @@ export interface MacConfig {
   context?: { enabled: boolean };
   /** The browser login exporter's own private config; its separate browser-sync credential stays there. */
   browserExport?: { configPath: string };
+  /** The tone a knock plays; absent means the default. */
+  knock?: { tone: string };
 }
 
 export const DEFAULT_CONFIG_PATH = join(homedir(), ".config", "umpi", "mac", "config.json");
@@ -111,6 +113,12 @@ export function parseConfig(value: unknown): MacConfig {
     if (Object.keys(value).some(key => key !== "configPath") || typeof value.configPath !== "string" || !isAbsolute(value.configPath)) throw new Error("browserExport.configPath must be an absolute path");
     browserExport = { configPath: value.configPath };
   }
+  let knock: MacConfig["knock"];
+  if (input.knock !== undefined) {
+    const value = record(input.knock);
+    if (Object.keys(value).some(key => key !== "tone") || typeof value.tone !== "string" || !/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$/.test(value.tone)) throw new Error("knock.tone must be a tone name");
+    knock = { tone: value.tone };
+  }
   const local = ["localhost", "127.0.0.1", "[::1]"].includes(new URL(coordinatorUrl(input.serverUrl)).hostname);
   const browserSites = browser.sites.map(site => parseBrowserSite(site, local));
   if (new Set(browserSites.map(site => site.siteId)).size !== browserSites.length || browser.enabled && !allSites && browserSites.length === 0) throw new Error("Enabled restricted browser execution needs distinct approved site policies");
@@ -124,6 +132,7 @@ export function parseConfig(value: unknown): MacConfig {
     browser: { enabled: browser.enabled, allSites, sites: browserSites },
     context: { enabled: context.enabled },
     ...(browserExport ? { browserExport } : {}),
+    ...(knock ? { knock } : {}),
   };
 }
 
@@ -198,6 +207,11 @@ export function setBrowserExport(path: string, configPath: string | null): MacCo
     if (configPath === null) delete document.browserExport;
     else document.browserExport = { configPath: resolve(configPath) };
   });
+}
+
+/** The tone a knock plays. The caller checks that the tone exists. */
+export function setKnockTone(path: string, tone: string): MacConfig {
+  return updateConfig(path, document => { document.knock = { tone }; });
 }
 
 /** Local opt-in never replaces the separately approved coordinator task grant. */

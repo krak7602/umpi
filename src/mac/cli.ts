@@ -2,7 +2,7 @@ import { parseArgs } from "node:util";
 import { resolve } from "node:path";
 import { closeSync, fstatSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { DEFAULT_CONFIG_PATH, setBrowserExport, grantBrowserSite, initializeConfig, loadConfig, privateFile, revokeBrowserSite, setBrowserEnabled, setCodingEnabled, setContextEnabled, stateDirectory } from "./config.js";
+import { DEFAULT_CONFIG_PATH, setBrowserExport, setKnockTone, grantBrowserSite, initializeConfig, loadConfig, privateFile, revokeBrowserSite, setBrowserEnabled, setCodingEnabled, setContextEnabled, stateDirectory } from "./config.js";
 import { AsideContextLane } from "./aside-context.js";
 import { ExecutionJournal, readJournalStatus } from "./journal.js";
 import { MacExecutor } from "./daemon.js";
@@ -12,7 +12,7 @@ import { browserSitePolicyJson } from "../shared/browser.js";
 import { coordinatorUrl } from "../shared/coordinator-url.ts";
 import { WakeChannel } from "./wake.js";
 import { BrowserExportLane } from "./browser-export-lane.js";
-import { KnockLane, macPresenter } from "./knock.js";
+import { DEFAULT_KNOCK_TONE, KNOCK_SOUND_MS, KnockLane, knockTonePath, knockTones, macPresenter, playKnock } from "./knock.js";
 import { loadBrowserExportConfig } from "./browser-export.js";
 import { installService, restartService, servicePaths, serviceState, uninstallService } from "./service.js";
 import { execFileSync } from "node:child_process";
@@ -37,6 +37,7 @@ const HELP = `umpi Mac executor (Node 24)
   npm run mac -- context-disable
   npm run mac -- browser-export-enable --export-config PATH
   npm run mac -- browser-export-disable
+  npm run mac -- knock-sound [--tone NAME | --play NAME]
 
 Common options:
   --config PATH             Private config (default ~/.config/umpi/mac/config.json)
@@ -179,6 +180,8 @@ async function main(): Promise<void> {
         site: { type: "string" },
         "all-sites": { type: "boolean" },
         "export-config": { type: "string" },
+        tone: { type: "string" },
+        play: { type: "string" },
         help: { type: "boolean", short: "h" },
       },
     });
@@ -187,7 +190,9 @@ async function main(): Promise<void> {
   if (values.help || positionals.length === 0) { process.stdout.write(HELP); return; }
   if (positionals.length !== 1) throw new UsageError("Specify exactly one command. Use --help.");
   const command = positionals[0];
-  if (!["init", "run", "status", "resume", "browser-export-enable", "browser-export-disable", "service-install", "service-status", "service-restart", "service-uninstall", "coding-enable", "coding-disable", "browser-enable", "browser-disable", "browser-grant", "browser-revoke", "context-enable", "context-disable"].includes(command!)) throw new UsageError("Unknown command. Use --help.");
+  if (!["init", "run", "status", "resume", "browser-export-enable", "browser-export-disable", "service-install", "service-status", "service-restart", "service-uninstall", "coding-enable", "coding-disable", "browser-enable", "browser-disable", "browser-grant", "browser-revoke", "context-enable", "context-disable", "knock-sound"].includes(command!)) throw new UsageError("Unknown command. Use --help.");
+  if ((values.tone !== undefined || values.play !== undefined) && command !== "knock-sound") throw new UsageError("--tone and --play are only accepted by knock-sound");
+  if (values.tone !== undefined && values.play !== undefined) throw new UsageError("Use either --tone NAME or --play NAME");
   if (values["all-sites"] !== undefined && command !== "browser-enable") throw new UsageError("--all-sites is only accepted by browser-enable");
   if ((values["export-config"] !== undefined) !== (command === "browser-export-enable")) throw new UsageError("browser-export-enable requires --export-config PATH, and only it accepts that option");
   if (command === "browser-grant") {
@@ -241,6 +246,24 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "resume" && !values["confirm-stopped"]) throw new UsageError("Verify all prior shell, coding and browser work has stopped, then explicitly pass --confirm-stopped");
+  // Tone changes need no journal, so they work while the login item runs; the tone applies after a restart.
+  if (command === "knock-sound") {
+    if (values.play !== undefined) {
+      const path = knockTonePath(values.play);
+      if (!path) throw new UsageError(`Unknown tone "${values.play}". Run knock-sound without options to list tones.`);
+      await new Promise<void>(done => { const sound = playKnock(path); setTimeout(() => { sound.stop(); done(); }, KNOCK_SOUND_MS); });
+      return;
+    }
+    if (values.tone !== undefined) {
+      if (!knockTonePath(values.tone)) throw new UsageError(`Unknown tone "${values.tone}". Run knock-sound without options to list tones.`);
+      setKnockTone(configPath, values.tone);
+      process.stdout.write(`Knocks now play "${values.tone}". Restart the login item to use it: npm run mac -- service-restart\n`);
+      return;
+    }
+    const current = config.knock?.tone ?? DEFAULT_KNOCK_TONE;
+    process.stdout.write(`Current tone: ${current}\nAvailable tones:\n${knockTones().map(tone => `  ${tone.name}`).join("\n")}\n`);
+    return;
+  }
   const journal = new ExecutionJournal(directory, config);
   let codingJournal: CodingJournal | undefined;
   let browserJournal: BrowserJournal | undefined;
@@ -321,7 +344,7 @@ async function main(): Promise<void> {
         onWake: () => executor.requestPoll(), onState: connected => log(connected ? "wake_connected" : "wake_disconnected") });
       executor.useWake(wake);
       if (config.browserExport) executor.useBrowserExport(new BrowserExportLane(loadBrowserExportConfig(config.browserExport.configPath), { emit: log }));
-      executor.useKnocks(new KnockLane(config.executorId, macPresenter(directory), { emit: log }));
+      executor.useKnocks(new KnockLane(config.executorId, macPresenter(directory, { tone: config.knock?.tone }), { emit: log }));
       wake.start();
       try { await executor.run(stop.signal); } finally { wake.stop(); }
     } finally {

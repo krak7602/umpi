@@ -1,5 +1,5 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { KNOCK_PROMPT_MS, KNOCK_SNOOZE_MINUTES, type KnockAssignment, type KnockOutcome, type KnockPollResult, type KnockReport } from "../shared/knock.js";
 
@@ -10,7 +10,7 @@ export const KNOCK_AWAY_SECONDS = 120;
 const SAMPLE_RATE = 22_050;
 
 /**
- * The attention sound, about 24 seconds: a soft two-note chime every three seconds that starts quiet and swells
+ * The fallback attention sound, about 24 seconds: a soft two-note chime every three seconds that starts quiet and swells
  * a little, never loud. Synthesized, so no audio asset or licence is involved. 16-bit mono PCM WAV.
  */
 export function chimeSound(seconds = 24): Buffer {
@@ -50,6 +50,42 @@ export function idleSeconds(): Promise<number | null> {
   });
 }
 
+const TONE_LIBRARY = "/System/Library/PrivateFrameworks/ToneLibrary.framework/Versions/A/Resources";
+const TONE_DIRECTORIES = [`${TONE_LIBRARY}/Ringtones`, `${TONE_LIBRARY}/AlertTones/Modern`, "/System/Library/Sounds"];
+/** Apple's gradual ringtone: it starts very soft and rises, which suits a call for attention. */
+export const DEFAULT_KNOCK_TONE = "Slow Rise";
+/** A tone shorter than this repeats; the knock sounds for about this long unless answered first. */
+export const KNOCK_SOUND_MS = 24_000;
+
+/** The Mac's built-in ringtones and alert sounds, by name. */
+export function knockTones(): { name: string; path: string }[] {
+  const tones: { name: string; path: string }[] = [];
+  for (const directory of TONE_DIRECTORIES) {
+    let files: string[] = [];
+    try { files = readdirSync(directory); } catch { continue; }
+    for (const file of files.sort()) {
+      const match = /^(.+)\.(m4r|aiff|caf)$/.exec(file);
+      if (match && !tones.some(tone => tone.name === match[1])) tones.push({ name: match[1]!, path: join(directory, file) });
+    }
+  }
+  return tones;
+}
+export function knockTonePath(name: string): string | undefined { return knockTones().find(tone => tone.name === name)?.path; }
+
+/** Plays a sound file, repeating it until the knock's sound time is over, until stopped. */
+export function playKnock(path: string, duration = KNOCK_SOUND_MS): { stop(): void } {
+  const until = Date.now() + duration;
+  let player: ChildProcess | undefined, stopped = false;
+  const next = () => {
+    if (stopped || Date.now() > until - 1_500) return;
+    player = spawn("/usr/bin/afplay", ["-t", String(Math.max(1, Math.round((until - Date.now()) / 1000))), path], { stdio: "ignore" });
+    player.on("error", () => undefined);
+    player.on("exit", next);
+  };
+  next();
+  return { stop() { stopped = true; player?.kill("SIGTERM"); } };
+}
+
 /** The prompt's text goes in as an argument, never into the script, so reminder text cannot become AppleScript. */
 const PROMPT_SCRIPT = [
   "on run argv",
@@ -63,15 +99,16 @@ const PROMPT_SCRIPT = [
 export interface KnockPresenter { present(knock: KnockAssignment, signal: AbortSignal): Promise<KnockOutcome> }
 
 /** Knocks on this Mac: the chime plays while the prompt waits, and stops when the owner answers. */
-export function macPresenter(stateDir: string, options: { idle?: () => Promise<number | null> } = {}): KnockPresenter {
-  const sound = join(stateDir, "chime.wav");
+export function macPresenter(stateDir: string, options: { tone?: string; idle?: () => Promise<number | null> } = {}): KnockPresenter {
+  const chime = join(stateDir, "chime.wav");
   return {
     async present(knock, signal) {
       const idle = await (options.idle ?? idleSeconds)();
       if (idle !== null && idle > KNOCK_AWAY_SECONDS) return "away";
-      if (!existsSync(sound)) writeFileSync(sound, chimeSound(), { mode: 0o600 });
-      const player: ChildProcess = spawn("/usr/bin/afplay", [sound], { stdio: "ignore" });
-      player.on("error", () => undefined);
+      // Without Apple's tone library (an older or trimmed system), a quiet synthesized chime stands in.
+      let sound = knockTonePath(options.tone ?? DEFAULT_KNOCK_TONE);
+      if (!sound) { if (!existsSync(chime)) writeFileSync(chime, chimeSound(), { mode: 0o600 }); sound = chime; }
+      const player = playKnock(sound);
       try {
         return await new Promise<KnockOutcome>(resolve => {
           const text = `${knock.attempt > 1 ? "Knock again: " : ""}${knock.text}`;
@@ -81,7 +118,7 @@ export function macPresenter(stateDir: string, options: { idle?: () => Promise<n
             resolve(!error && (value === "done" || value === "snoozed") ? value : "missed");
           });
         });
-      } finally { player.kill("SIGTERM"); }
+      } finally { player.stop(); }
     },
   };
 }
