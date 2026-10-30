@@ -10,29 +10,28 @@ export const KNOCK_AWAY_SECONDS = 120;
 const SAMPLE_RATE = 22_050;
 
 /**
- * A knock sound of about 25 seconds: groups of knocks on wood with pauses, a little firmer towards the end.
- * Synthesized, so no audio asset or licence is involved. 16-bit mono PCM WAV.
+ * The attention sound, about 24 seconds: a soft two-note chime every three seconds that starts quiet and swells
+ * a little, never loud. Synthesized, so no audio asset or licence is involved. 16-bit mono PCM WAV.
  */
-export function knockSound(seconds = 25): Buffer {
-  const samples = new Int16Array(Math.round(seconds * SAMPLE_RATE));
-  let seed = 7;
-  const noise = () => { seed = (seed * 1_103_515_245 + 12_345) & 0x7fffffff; return seed / 0x3fffffff - 1; };
-  const hit = (at: number, gain: number) => {
-    const start = Math.round(at * SAMPLE_RATE), length = Math.round(0.09 * SAMPLE_RATE);
+export function chimeSound(seconds = 24): Buffer {
+  const samples = new Float32Array(Math.round(seconds * SAMPLE_RATE));
+  const note = (at: number, frequency: number, gain: number) => {
+    const start = Math.round(at * SAMPLE_RATE), length = Math.round(2.4 * SAMPLE_RATE);
     for (let i = 0; i < length && start + i < samples.length; i++) {
-      const t = i / SAMPLE_RATE, envelope = Math.exp(-t * 55);
-      // A low body resonance plus a short noisy attack reads as a knuckle on a door or table.
-      const value = (Math.sin(2 * Math.PI * 180 * t) * 0.7 + Math.sin(2 * Math.PI * 410 * t) * 0.25 + noise() * Math.exp(-t * 300) * 0.5) * envelope * gain;
-      samples[start + i] = Math.max(-32_767, Math.min(32_767, samples[start + i]! + value * 32_767));
+      const t = i / SAMPLE_RATE;
+      // A soft attack and a long decay, with a quiet octave partial, reads as a small bell rather than a beep.
+      const envelope = Math.min(1, t / 0.03) * Math.exp(-t * 2.2);
+      samples[start + i]! += (Math.sin(2 * Math.PI * frequency * t) + 0.18 * Math.sin(2 * Math.PI * frequency * 2 * t) * Math.exp(-t * 4)) * envelope * gain;
     }
   };
-  for (let group = 0, at = 0.2; at < seconds - 1; group++) {
-    const gain = Math.min(0.95, 0.45 + group * 0.06);
-    const pattern = group % 2 === 0 ? [0, 0.22] : [0, 0.2, 0.4];
-    for (const offset of pattern) hit(at + offset, gain);
-    at += 2.6;
+  for (let at = 0.1, round = 0; at < seconds - 2.4; at += 3, round++) {
+    const gain = Math.min(0.32, 0.1 + round * 0.03);
+    note(at, 659.25, gain);
+    note(at + 0.38, 493.88, gain * 0.9);
   }
-  const data = Buffer.from(samples.buffer);
+  const pcm = new Int16Array(samples.length);
+  for (let i = 0; i < samples.length; i++) pcm[i] = Math.round(Math.max(-1, Math.min(1, samples[i]!)) * 32_767);
+  const data = Buffer.from(pcm.buffer);
   const header = Buffer.alloc(44);
   header.write("RIFF", 0); header.writeUInt32LE(36 + data.length, 4); header.write("WAVE", 8);
   header.write("fmt ", 12); header.writeUInt32LE(16, 16); header.writeUInt16LE(1, 20); header.writeUInt16LE(1, 22);
@@ -63,14 +62,14 @@ const PROMPT_SCRIPT = [
 
 export interface KnockPresenter { present(knock: KnockAssignment, signal: AbortSignal): Promise<KnockOutcome> }
 
-/** Knocks on this Mac: the sound plays while the prompt waits, and stops when the owner answers. */
+/** Knocks on this Mac: the chime plays while the prompt waits, and stops when the owner answers. */
 export function macPresenter(stateDir: string, options: { idle?: () => Promise<number | null> } = {}): KnockPresenter {
-  const sound = join(stateDir, "knock.wav");
+  const sound = join(stateDir, "chime.wav");
   return {
     async present(knock, signal) {
       const idle = await (options.idle ?? idleSeconds)();
       if (idle !== null && idle > KNOCK_AWAY_SECONDS) return "away";
-      if (!existsSync(sound)) writeFileSync(sound, knockSound(), { mode: 0o600 });
+      if (!existsSync(sound)) writeFileSync(sound, chimeSound(), { mode: 0o600 });
       const player: ChildProcess = spawn("/usr/bin/afplay", [sound], { stdio: "ignore" });
       player.on("error", () => undefined);
       try {
