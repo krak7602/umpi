@@ -33,6 +33,7 @@ import { planningRequest } from "./planning-http.js";
 import { enqueuePlanningControls, handlePlanningCallback, formatPlanningStatus } from "./planning-telegram.js";
 import { MailStore } from "./mail-store.js";
 import { MailRuntime } from "./mail-runtime.js";
+import { workersAiScreen, type WorkersAi } from "./mail-screen.js";
 import { mailTools, guardMailReviewTools, MAIL_INSTRUCTIONS } from "./mail-tools.js";
 import { mailRequest } from "./mail-http.js";
 import { enqueueMailControls, handleMailCallback, formatMailStatus } from "./mail-telegram.js";
@@ -110,6 +111,8 @@ export interface Env extends TelegramConfig, CompanionPushConfig {
   UMPI_PARALLEL_API_KEY?: string;
   /** Monthly web search budget in thousandths of a US dollar; default 4500. */
   UMPI_WEB_MONTHLY_BUDGET?: string;
+  /** Workers AI. When bound, Clef-flash screens new mail before the Claude review. */
+  AI?: WorkersAi;
 }
 
 class Coordinator extends LifecycleCapability {
@@ -331,7 +334,7 @@ export class Assistant extends Agent<Env> {
     this.planningRuntime = new PlanningRuntime(this.planning, () => this.vaultClient(),
       async () => (await readCoreContext(await this.harness.pi(), BACKGROUND_CONTEXT)).revision,
       () => this.config.UMPI_CALENDAR_CREDENTIALS, () => this.coordinator.wake());
-    this.mailRuntime = new MailRuntime(this.mail, this.config.UMPI_GMAIL_CREDENTIALS, () => this.coordinator.wake());
+    this.mailRuntime = new MailRuntime(this.mail, this.config.UMPI_GMAIL_CREDENTIALS, () => this.coordinator.wake(), this.config.AI ? workersAiScreen(this.config.AI) : undefined);
     this.codingRuntime = new CodingRuntime(this.coding, {
       harness: () => this.harness, extension: () => codingProfile, archive: () => this.config.CODING_ARCHIVE,
       cloudAvailable: () => Boolean(this.config.CODING_WORKER),

@@ -39,5 +39,6 @@
     { "binding": "BROWSER_ARCHIVE", "bucket_name": "replace-with-umpi-browser-state" },
     { "binding": "OBSY_LIBRARY", "bucket_name": "replace-with-obsy-vault" }
   ],
+  "ai": { "binding": "AI" },
   "browser": { "binding": "BROWSER" }
 }

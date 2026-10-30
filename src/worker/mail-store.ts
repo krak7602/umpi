@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { InputError, boundedText, record, timestamp } from "../shared/protocol.js";
+import { MAIL_SCREEN_ATTENTION, MAIL_SCREEN_FACTS, type MailScreenInput, type MailScreenVerdict } from "./mail-screen.js";
 import type { GmailCategory, GmailSyncContinuation, GmailSyncRequest, GmailSyncResult, GmailThreadSnapshot } from "./gmail.js";
 import { ProactiveStore, type Commitment, type ProactiveRun } from "./proactive-store.js";
 import type { SituationStore } from "./situation-store.js";
@@ -54,6 +55,8 @@ export interface MailThread {
   factScan?: number;
   /** Already triaged, but its retained messages still need a facts-only read. */
   factsPending?: boolean;
+  /** The decision-model screen of this content; removed when new mail arrives. Absent while screening is waiting. */
+  screen?: { at: string; passed: boolean; attention?: number; facts?: number; unavailable?: true };
   updatedAt: string;
 }
 export interface MailAccountSync {
@@ -141,6 +144,8 @@ function emptyAccount(id: string): MailAccountSync {
 /** Gmail identifiers and bounded message excerpts remain private Durable Object state, never standing memory. */
 export class MailStore {
   readonly db: Database;
+  /** With a screen configured, a thread becomes review work only after it is screened. */
+  screening = false;
   constructor(readonly proactive: ProactiveStore, readonly situation?: SituationStore) {
     this.db = proactive.db;
     for (const sql of [
@@ -347,7 +352,7 @@ export class MailStore {
           starred: snapshot.starred, category: snapshot.category, awaitingReply: snapshot.awaitingReply, webUrl: snapshot.webUrl,
           messages: low ? [] : snapshot.messages, updatedAt: result.checkedAt,
         };
-        delete next.summary; delete next.reason; delete next.suggestedAction; delete next.snoozeUntil; delete next.notificationPending; delete next.factScan; delete next.factsPending;
+        delete next.summary; delete next.reason; delete next.suggestedAction; delete next.snoozeUntil; delete next.notificationPending; delete next.factScan; delete next.factsPending; delete next.screen;
         if (!resolved) delete next.handledAt;
         if (low) { next.summary = `Skipped without review: Gmail ${snapshot.category} tab.`; next.factScan = MAIL_FACT_SCAN_VERSION; }
         else if (resolved) next.factsPending = true;
@@ -374,16 +379,54 @@ export class MailStore {
       return released;
     });
   }
+  private ready(): string { return this.screening ? " AND json_extract(data,'$.screen') IS NOT NULL" : ""; }
   private pending(limit = 200): MailThread[] {
-    return this.rows("SELECT data FROM umpi_mail_threads WHERE status='pending' ORDER BY json_extract(data,'$.unread') DESC,json_extract(data,'$.important') DESC,received DESC LIMIT ?", limit);
+    return this.rows(`SELECT data FROM umpi_mail_threads WHERE status='pending'${this.ready()} ORDER BY json_extract(data,'$.unread') DESC,json_extract(data,'$.important') DESC,received DESC LIMIT ?`, limit);
   }
   private factsPending(limit = 200): MailThread[] {
-    return this.rows("SELECT data FROM umpi_mail_threads WHERE status<>'pending' AND json_extract(data,'$.factsPending')=1 ORDER BY received DESC LIMIT ?", limit);
+    return this.rows(`SELECT data FROM umpi_mail_threads WHERE status<>'pending' AND json_extract(data,'$.factsPending')=1${this.ready()} ORDER BY received DESC LIMIT ?`, limit);
   }
   private workCount(): number {
-    return this.db.all<{ count: number }>("SELECT count(*) AS count FROM umpi_mail_threads WHERE status='pending' OR json_extract(data,'$.factsPending')=1")[0]?.count ?? 0;
+    return this.db.all<{ count: number }>(`SELECT count(*) AS count FROM umpi_mail_threads WHERE (status='pending' OR json_extract(data,'$.factsPending')=1)${this.ready()}`)[0]?.count ?? 0;
   }
   private hasWork(): boolean { return this.workCount() > 0; }
+  /** Threads waiting for the decision-model screen, newest first. */
+  unscreened(limit = 8): MailThread[] {
+    return this.rows("SELECT data FROM umpi_mail_threads WHERE (status='pending' OR json_extract(data,'$.factsPending')=1) AND json_extract(data,'$.screen') IS NULL ORDER BY received DESC LIMIT ?", limit);
+  }
+  screenInput(thread: MailThread): MailScreenInput {
+    return { subject: thread.subject, sender: thread.sender, category: thread.category ?? "primary", gmailImportant: thread.important,
+      messages: thread.messages.map(message => ({ direction: message.direction, from: message.from, excerpt: message.excerpt })) };
+  }
+  /**
+   * Records a screen for the exact content it read. A low score skips triage or the facts read without a model turn;
+   * a starred thread and a failed screen (null) go to the review as before.
+   */
+  applyScreen(id: string, providerVersion: string, verdict: MailScreenVerdict | null, now = Date.now()): boolean | undefined {
+    finiteNow(now);
+    return this.db.transaction(() => {
+      const old = this.thread(id);
+      if (!old || old.providerVersion !== providerVersion || old.screen || (old.status !== "pending" && !old.factsPending)) return undefined;
+      const triage = old.status === "pending", at = iso(now);
+      const passed = verdict === null || (triage ? old.starred === true || verdict.attention >= MAIL_SCREEN_ATTENTION || verdict.facts >= MAIL_SCREEN_FACTS : verdict.facts >= MAIL_SCREEN_FACTS);
+      const screen: NonNullable<MailThread["screen"]> = verdict === null ? { at, passed, unavailable: true } : { at, passed, attention: verdict.attention, facts: verdict.facts };
+      let next: MailThread = { ...old, version: old.version + 1, screen, updatedAt: at };
+      if (!passed && triage) {
+        next = { ...next, status: "ignored", messages: [], summary: `Skipped without review: screened as unlikely to need you (${Math.round(verdict!.attention * 100)}%).`, factScan: MAIL_FACT_SCAN_VERSION };
+        delete next.factsPending; delete next.notificationPending;
+      } else if (!passed) {
+        next = { ...next, factScan: MAIL_FACT_SCAN_VERSION, messages: old.status === "attention" || old.status === "snoozed" ? old.messages : [] };
+        delete next.factsPending;
+      }
+      this.writeThread(next);
+      return passed;
+    });
+  }
+  /** After a screening pass, start one review for whatever passed. */
+  screened(now = Date.now()): void {
+    finiteNow(now);
+    this.db.transaction(() => { if (this.settings().enabled && !this.scanning() && this.hasWork()) this.triggerReview(now); });
+  }
   private reviewView(thread: MailThread, mode: ReviewMode): object {
     const { id, version, account, subject, sender, receivedAt, category, unread, important, awaitingReply } = thread;
     const messages = (mode === "facts" ? thread.messages.slice(-3) : thread.messages)
@@ -560,6 +603,12 @@ export class MailStore {
     const primary = accounts.find(account => account.id === MAIL_PRIMARY_ACCOUNT);
     return { enabled: settings.enabled, settings, bootstrapAfter: primary?.bootstrapAfter ?? null, bootstrapped: accounts.length > 0 && accounts.every(account => account.bootstrapped),
       scanInProgress: accounts.some(account => account.scanInProgress), lastStatus: primary?.lastStatus ?? null, issue: accounts.find(account => account.issue)?.issue ?? null,
-      accounts, counts: Object.fromEntries(counts.map(row => [row.status, row.count])), factsPending };
+      accounts, counts: Object.fromEntries(counts.map(row => [row.status, row.count])), factsPending, screen: this.screenStatus() };
+  }
+  /** Screen outcomes among retained threads: passed to review, skipped, or passed because the screen failed. */
+  private screenStatus(): object {
+    const rows = this.db.all<{ passed: number | null; unavailable: number | null; count: number }>("SELECT json_extract(data,'$.screen.passed') AS passed, json_extract(data,'$.screen.unavailable') AS unavailable, count(*) AS count FROM umpi_mail_threads WHERE json_extract(data,'$.screen') IS NOT NULL GROUP BY 1,2");
+    const sum = (match: (row: typeof rows[number]) => boolean) => rows.filter(match).reduce((total, row) => total + row.count, 0);
+    return { enabled: this.screening, waiting: this.screening ? this.db.all<{ count: number }>("SELECT count(*) AS count FROM umpi_mail_threads WHERE (status='pending' OR json_extract(data,'$.factsPending')=1) AND json_extract(data,'$.screen') IS NULL")[0]?.count ?? 0 : 0, passed: sum(row => row.passed === 1 && !row.unavailable), skipped: sum(row => row.passed === 0), unavailable: sum(row => row.unavailable === 1) };
   }
 }
