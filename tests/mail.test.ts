@@ -6,7 +6,8 @@ import { createHash } from "node:crypto";
 import { GMAIL_SCOPES, MAIL_SYNC_MESSAGE_BATCH_LIMIT, readGmailChanges, type GmailSyncContinuation, type GmailSyncResult, type GmailThreadSnapshot } from "../src/worker/gmail.js";
 import { MailStore } from "../src/worker/mail-store.js";
 import { MailRuntime } from "../src/worker/mail-runtime.js";
-import { MAIL_SCREEN_MODEL, workersAiScreen, type MailScreenInput, type MailScreenVerdict } from "../src/worker/mail-screen.js";
+import { mailScreen, type MailScreenInput, type MailScreenVerdict } from "../src/worker/mail-screen.js";
+import { Decisions } from "../src/worker/decisions.js";
 import { enqueueMailControls, handleMailCallback } from "../src/worker/mail-telegram.js";
 import { ProactiveStore } from "../src/worker/proactive-store.js";
 import { StateError, Store, type Database } from "../src/worker/store.js";
@@ -314,20 +315,19 @@ test("a decision-model screen skips unlikely mail before the review, and a faile
   assert.equal(resolved.status, "resolved"); assert.equal(resolved.factsPending, undefined); assert.deepEqual(resolved.messages, []);
 });
 
-test("the Workers AI screen asks Clef-flash two yes/no questions with bounded mail and rejects malformed answers", async () => {
-  const calls: { model: string; input: { model: string; state: MailScreenInput; questions: Record<string, { type: string }> } }[] = [];
-  let answers: unknown = { attention: { type: "noul", noul: 0.12 }, facts: { type: "noul", noul: 0.7 } };
-  const screen = workersAiScreen({ async run(model, input) { calls.push({ model, input: input as never }); return { model: "clef-flash", answers, usage: { input_tokens: 500, output_tokens: 0 } }; } });
+test("the mail screen asks the decision service two yes/no questions about bounded mail", async t => {
+  const sqlite = new DatabaseSync(":memory:"); t.after(() => sqlite.close());
+  const db: Database = { all: <T extends object>(query: string, ...bindings: (string | number | null)[]) => sqlite.prepare(query).all(...bindings) as T[], transaction: <T>(run: () => T) => run() };
+  const calls: { model: string; input: { state: MailScreenInput; questions: Record<string, { type: string }> } }[] = [];
+  const decisions = new Decisions(db, { async run(model: string, input: unknown) { calls.push({ model, input: input as never }); return { answers: { attention: { type: "noul", noul: 0.12 }, facts: { type: "noul", noul: 0.7 } }, usage: { input_tokens: 600, output_tokens: 0 } }; } }, () => 1_000);
   const input: MailScreenInput = { subject: "Order shipped", sender: "Shop <shop@example.test>", category: "updates", gmailImportant: false,
     messages: Array.from({ length: 5 }, (_, index) => ({ direction: "incoming" as const, from: "Shop", excerpt: `${index}`.repeat(2_000) })) };
-  assert.deepEqual(await screen(input), { attention: 0.12, facts: 0.7 });
-  const [call] = calls;
-  assert.equal(call!.model, MAIL_SCREEN_MODEL); assert.equal(call!.input.model, "clef-flash");
-  assert.deepEqual(Object.entries(call!.input.questions).map(([id, question]) => [id, question.type]), [["attention", "noul"], ["facts", "noul"]]);
-  assert.equal(call!.input.state.messages.length, 3, "only the latest three messages");
-  assert.ok(call!.input.state.messages.every(message => message.excerpt.length === 600));
-  answers = { attention: { type: "noul", noul: 1.4 } };
-  await assert.rejects(screen(input), /no probability/);
+  assert.deepEqual(await mailScreen(decisions)(input), { attention: 0.12, facts: 0.7 });
+  assert.equal(calls[0]!.model, "@cf/cloudflare/clef-flash");
+  assert.deepEqual(Object.entries(calls[0]!.input.questions).map(([id, question]) => [id, question.type]), [["attention", "noul"], ["facts", "noul"]]);
+  assert.equal(calls[0]!.input.state.messages.length, 3, "only the latest three messages");
+  assert.ok(calls[0]!.input.state.messages.every(message => message.excerpt.length === 600));
+  assert.deepEqual((decisions.status() as { byPurpose: object }).byPurpose, { mail: { calls: 1, tokens: 600, failures: 0 } });
 });
 
 test("Telegram mail controls bind the confirmed message and exact settings version", async t => {
