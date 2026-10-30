@@ -1,6 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ToolExecutionResult, type ToolRegistration } from "@earendil-works/pi-durable";
-import { shiftPlanningDay } from "../shared/daily-planning.js";
+import { planningDayBounds, shiftPlanningDay } from "../shared/daily-planning.js";
 import { InputError, record } from "../shared/protocol.js";
 import { readJson } from "./transport.js";
 import type { ActivityStore } from "./activity-store.js";
@@ -169,9 +169,12 @@ export function dreamTools(sources: DreamSources): ToolRegistration[] {
 /** History and lessons for the owner conversation. */
 export function historyTools(dream: DreamStore, index: HistoryIndex, isBackground: (sessionId: string) => boolean): ToolRegistration[] {
   return [
-    defineTool({ name: "search_history", description: "Search the owner's past: nightly digests (day, week, month, year) and the raw text of past conversations, by words and by meaning. Ask in plain words, such as \"which model did we pick for mail\". Returns the best passages with their date; read a digest in full with read_history. source 'conversation' searches only what was actually said; 'digest' only the summaries.",
-      parameters: Type.Object({ query: Type.String({ minLength: 2, maxLength: 300 }), source: Type.Optional(Type.Union([Type.Literal("digest"), Type.Literal("conversation")])), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })) }, { additionalProperties: false }), replay: "safe",
-      async execute(input) { return result(async () => ({ matches: await index.search(input.query, { source: input.source, limit: input.limit }) })); } }),
+    defineTool({ name: "search_history", description: "Search the owner's past: nightly digests (day, week, month, year) and the raw text of past conversations, by words (with stemming) and by meaning, reranked for relevance; from and to limit it to local days. Ask in plain words, such as \"which model did we pick for mail\". Returns the best passages with their date; read a digest in full with read_history. source 'conversation' searches only what was actually said; 'digest' only the summaries.",
+      parameters: Type.Object({ query: Type.String({ minLength: 2, maxLength: 300 }), source: Type.Optional(Type.Union([Type.Literal("digest"), Type.Literal("conversation")])),
+        from: Type.Optional(Type.String({ pattern: "^\\d{4}-\\d{2}-\\d{2}$", description: "First local day to include" })), to: Type.Optional(Type.String({ pattern: "^\\d{4}-\\d{2}-\\d{2}$", description: "Last local day to include" })),
+        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })) }, { additionalProperties: false }), replay: "safe",
+      async execute(input) { return result(async () => ({ matches: await index.search(input.query, { source: input.source, limit: input.limit,
+        ...(input.from ? { from: Date.parse(planningDayBounds(input.from, dream.timezone).start) } : {}), ...(input.to ? { to: Date.parse(planningDayBounds(input.to, dream.timezone).end) } : {}) }) })); } }),
     defineTool({ name: "read_history", description: "Read one nightly digest in full: a day (2026-10-30), a week (2026-W44), a month (2026-10), or a year (2026).",
       parameters: Type.Object({ period: Type.String({ pattern: "^\\d{4}(?:-(?:\\d{2}-\\d{2}|W\\d{2}|\\d{2}))?$" }) }, { additionalProperties: false }), replay: "safe",
       async execute(input) { return result(() => {

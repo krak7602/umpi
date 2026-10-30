@@ -17,8 +17,10 @@ const EXTRACTION_MODEL = "clairic";
 export const EMBEDDING_MODEL = "@cf/qwen/qwen3-embedding-0.6b";
 export const EMBEDDING_DIMENSIONS = 256;
 const EMBEDDING_BATCH = 32;
+/** A cross-encoder: reads the question and each passage together, so it judges relevance better than vectors alone. */
+export const RERANK_MODEL = "@cf/baai/bge-reranker-base";
 /** US dollars per million input tokens. Clef-flash uses the higher of the published figures, so the count does not undershoot. */
-const PRICE_PER_MILLION: Record<DecisionModel | typeof EXTRACTION_MODEL | "embedding", number> = { fast: 0.09, careful: 0.24, clairic: 0.10, embedding: 0.0118 };
+const PRICE_PER_MILLION: Record<DecisionModel | typeof EXTRACTION_MODEL | "embedding" | "rerank", number> = { fast: 0.09, careful: 0.24, clairic: 0.10, embedding: 0.0118, rerank: 0.00311 };
 /** In thousandths of a US dollar, like the web budget. */
 export const DEFAULT_DECISION_MONTHLY_BUDGET = 1_000;
 const MAX_STATE_CHARS = 60_000;
@@ -179,6 +181,30 @@ export class Decisions {
       const vector = row.slice(0, EMBEDDING_DIMENSIONS), norm = Math.hypot(...vector) || 1;
       return vector.map(value => value / norm);
     });
+  }
+
+  /** Relevance scores of passages for a query, in the passages' order. Passages are cut to 1,500 characters. */
+  async rerank(purpose: string, query: string, passages: string[]): Promise<number[]> {
+    if (!this.ai) throw new DecisionUnavailable("Decision models are not configured");
+    if (this.state().spent >= this.budget()) throw new DecisionUnavailable("This month's decision budget is used");
+    if (!passages.length || passages.length > 50) throw new StateError(400, "Rerank 1 to 50 passages");
+    const contexts = passages.map(text => ({ text: text.slice(0, 1_500) }));
+    let result: { response?: unknown };
+    try { result = await this.ai.run(RERANK_MODEL, { query: query.slice(0, 1_000), contexts, top_k: contexts.length }) as { response?: unknown }; }
+    catch (error) {
+      this.record(purpose, 0, 0, `rerank failed (${error instanceof Error ? error.name : "unknown"})`);
+      throw new DecisionUnavailable("The rerank call failed");
+    }
+    const tokens = Math.round((query.length + contexts.reduce((sum, context) => sum + context.text.length + query.length, 0)) / 4), cost = tokens * PRICE_PER_MILLION.rerank / 1000;
+    const scores = new Array<number>(contexts.length).fill(Number.NEGATIVE_INFINITY);
+    const rows = Array.isArray(result?.response) ? result.response as { id?: unknown; score?: unknown }[] : [];
+    for (const row of rows) if (Number.isInteger(row.id) && (row.id as number) >= 0 && (row.id as number) < scores.length && typeof row.score === "number" && Number.isFinite(row.score)) scores[row.id as number] = row.score;
+    if (scores.some(score => score === Number.NEGATIVE_INFINITY)) {
+      this.record(purpose, tokens, cost, "malformed rerank");
+      throw new DecisionUnavailable("The rerank model returned malformed scores");
+    }
+    this.record(purpose, tokens, cost, null);
+    return scores;
   }
 
   status(): object {

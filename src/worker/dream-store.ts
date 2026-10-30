@@ -19,6 +19,7 @@ const DIGEST_DAYS_KEPT = 400;
 /** A conversation part handed to the night at a time; the night reads every part. */
 export const DREAM_PART_CHARS = 60_000;
 const PASSAGE_CHARS = 2_000;
+const PASSAGE_OVERLAP_CHARS = 600;
 /** A day this long is closed early with the anchored summary, before the 550k threshold. */
 export const LONG_DAY_TOKENS = 450_000;
 const LONG_DAY_GAP_MS = 3 * 3_600_000;
@@ -245,8 +246,12 @@ export class DreamStore {
     const passages: { at: number; lines: string[]; size: number }[] = [];
     for (let part = 1; part <= this.partCount(day); part++) for (const line of this.part(day, part)) {
       const last = passages.at(-1);
-      if (!last || last.size + line.text.length > PASSAGE_CHARS) passages.push({ at: line.at, lines: [line.text], size: line.text.length });
-      else { last.lines.push(line.text); last.size += line.text.length + 1; }
+      if (!last || last.size + line.text.length > PASSAGE_CHARS) {
+        // A passage starts with the previous passage's last line, so a question and its answer are not split apart.
+        const carried = last?.lines.at(-1);
+        const lines = carried && carried.length <= PASSAGE_OVERLAP_CHARS ? [carried, line.text] : [line.text];
+        passages.push({ at: line.at, lines, size: lines.reduce((sum, text) => sum + text.length + 1, 0) });
+      } else { last.lines.push(line.text); last.size += line.text.length + 1; }
     }
     this.index.put(passages.map((passage, index) => ({ id: `conv:${day}:${passage.at}:${index}`, source: "conversation", period: day, at: passage.at, text: passage.lines.join("\n") })));
   }
