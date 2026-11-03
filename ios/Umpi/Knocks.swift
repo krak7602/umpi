@@ -57,7 +57,8 @@ final class KnockScheduler {
                 content.categoryIdentifier = category
                 content.threadIdentifier = "knock.\(reminder.id)"
                 content.interruptionLevel = gentle ? .active : .timeSensitive
-                content.sound = UNNotificationSound(named: UNNotificationSoundName(gentle ? "knock-gentle.caf" : "knock.caf"))
+                // 30 seconds, iOS's limit: the first knock grows from soft to full volume; repeats start loud.
+                content.sound = UNNotificationSound(named: UNNotificationSoundName(gentle ? "knock-gentle.caf" : attempt == 0 ? "knock.caf" : "knock-loud.caf"))
                 content.userInfo = ["reminderId": reminder.id, "version": reminder.version]
                 let id = identifier(reminder, attempt)
                 let delay = due.timeIntervalSince(now) + Double(attempt) * repeatInterval
