@@ -29,7 +29,7 @@ struct WorkView: View {
                         }
                     }
                     ForEach(openQuestions) { choice in
-                        NavigationLink { ChoiceDetailView(choice: choice) } label: { Label(choice.question, systemImage: "questionmark.bubble") }
+                        NavigationLink { ChoiceDetailView(choice: choice) } label: { Label { Text(ReminderRow.title(choice.question)).lineLimit(2) } icon: { Image(systemName: "questionmark.bubble") } }
                     }
                 }
             }
@@ -45,11 +45,7 @@ struct WorkView: View {
             if !nextReminders.isEmpty {
                 Section("Coming up") {
                     ForEach(nextReminders) { reminder in
-                        HStack {
-                            Label(reminder.text, systemImage: reminder.intensity == "gentle" ? "bell" : "bell.badge")
-                            Spacer()
-                            if let due = reminder.due { Text(due, format: .dateTime.weekday(.abbreviated).hour().minute()).font(.footnote).foregroundStyle(.secondary) }
-                        }
+                        NavigationLink { ReminderDetailView(reminder: reminder) } label: { ReminderRow(reminder: reminder) }
                     }
                 }
             }
@@ -61,6 +57,48 @@ struct WorkView: View {
         .softScrollEdges()
         .refreshable { await store.synchronize() }
         .navigationTitle("Work")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// A reminder in a list: its first line as a two-line preview, and when it is due. The full text opens on tap.
+struct ReminderRow: View {
+    let reminder: Reminder
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Image(systemName: reminder.intensity == "gentle" ? "bell" : "bell.badge").foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(ReminderRow.title(reminder.text)).lineLimit(2)
+                if let due = reminder.due {
+                    Text(due, format: .dateTime.weekday(.abbreviated).hour().minute()).font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+    /// The first line with text, without list or heading marks.
+    static func title(_ text: String) -> String {
+        let line = text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty } ?? text
+        return line.replacingOccurrences(of: #"^(#+|[-*+]|\d+\.)\s+"#, with: "", options: .regularExpression)
+    }
+}
+
+/// The whole reminder, rendered like a note.
+struct ReminderDetailView: View {
+    let reminder: Reminder
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                if let due = reminder.due {
+                    Label(due.formatted(.dateTime.weekday(.wide).day().month(.abbreviated).hour().minute()), systemImage: "bell")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+                MarkdownView(reminder.text).textSelection(.enabled)
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .softScrollEdges()
+        .navigationTitle("Reminder")
         .navigationBarTitleDisplayMode(.inline)
     }
 }
