@@ -7,6 +7,7 @@ struct UmpiWidgets: WidgetBundle {
     var body: some Widget {
         TaskLiveActivity()
         HomeWidget()
+        ButtonsWidget()
         if #available(iOS 18.0, *) { CaptureControl() }
     }
 }
