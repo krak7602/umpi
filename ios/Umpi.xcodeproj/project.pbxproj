@@ -16,6 +16,7 @@
 		22FCF7D0DFC1336220C26A31 /* TaskActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4C30AA88504D79B39CFAED6 /* TaskActivityAttributes.swift */; };
 		2376488D54E3B88D383689ED /* knock.caf in Resources */ = {isa = PBXBuildFile; fileRef = C1917C675F6D8B3F143CBDD7 /* knock.caf */; };
 		253E8583D30AE97095BC6E52 /* OpenUmpiAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E9AB65F56609B7A65947DF5 /* OpenUmpiAction.swift */; };
+		26B7F1A09DD70340D801F78B /* knock-loud.caf in Resources */ = {isa = PBXBuildFile; fileRef = 57A3140C71B425EE3A527817 /* knock-loud.caf */; };
 		3431D1D839E0D5CBED583675 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5130E3C64EA03895D3F8EA5A /* SettingsView.swift */; };
 		39FA14005F9953715C52D2C2 /* CompanionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A14AEACCCD7F5BCD8694CBB0 /* CompanionClient.swift */; };
 		3B9BC5DD46428D9D14E85F25 /* CompanionStateRecords.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D31EFDBA636E32983025960 /* CompanionStateRecords.swift */; };
@@ -106,6 +107,7 @@
 		3D406A11F29877842AFB10C1 /* pele.global.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = pele.global.js; sourceTree = "<group>"; };
 		5130E3C64EA03895D3F8EA5A /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		561433B418D0D1EEC60CAB97 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		57A3140C71B425EE3A527817 /* knock-loud.caf */ = {isa = PBXFileReference; path = "knock-loud.caf"; sourceTree = "<group>"; };
 		5A8E584FECEF00D284F2F7B8 /* UmpiTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = UmpiTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5E9AB65F56609B7A65947DF5 /* OpenUmpiAction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenUmpiAction.swift; sourceTree = "<group>"; };
 		6003C7D47F04AE6CFBF42555 /* LICENSE */ = {isa = PBXFileReference; path = LICENSE; sourceTree = "<group>"; };
@@ -236,6 +238,7 @@
 			isa = PBXGroup;
 			children = (
 				8E0ACFCC605F137407E0B52E /* knock-gentle.caf */,
+				57A3140C71B425EE3A527817 /* knock-loud.caf */,
 				C1917C675F6D8B3F143CBDD7 /* knock.caf */,
 			);
 			path = Sounds;
@@ -436,6 +439,7 @@
 				0C1F5213DE603F56F342F856 /* Assets.xcassets in Resources */,
 				F05A425723A1940DD55B21AB /* highlight.min.js in Resources */,
 				82599F419212FC5FC8DD6117 /* knock-gentle.caf in Resources */,
+				26B7F1A09DD70340D801F78B /* knock-loud.caf in Resources */,
 				2376488D54E3B88D383689ED /* knock.caf in Resources */,
 				22924A7C70A532D6692AAED1 /* pele.global.js in Resources */,
 			);

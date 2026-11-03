@@ -53,6 +53,6 @@ test("a pushed knock carries the knock category, sound, Time Sensitive level, an
   const result = await sendCompanionPush({ deviceId: "phone", apnsToken: "ab".repeat(32), apnsEnvironment: "sandbox" },
     { revision: 0, jobs: [], knock: { reminderId: "r1", version: 1, attempt: 1, text: "Check D-U-N-S", hint: "Look in spam too.", gentle: false } }, config, { fetch: transport });
   assert.equal(result.status, "accepted");
-  assert.deepEqual(bodies[0], { aps: { alert: { title: "Umpi · still waiting", body: "Check D-U-N-S\nLook in spam too." }, sound: "knock.caf", category: "UMPI_KNOCK",
+  assert.deepEqual(bodies[0], { aps: { alert: { title: "Umpi · still waiting", body: "Check D-U-N-S\nLook in spam too." }, sound: "knock-loud.caf", category: "UMPI_KNOCK",
     "interruption-level": "time-sensitive", "thread-id": "knock.r1" }, reminderId: "r1", version: 1 });
 });

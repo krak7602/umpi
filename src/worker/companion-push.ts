@@ -95,7 +95,7 @@ function notifications(target: CompanionPushTarget, event: CompanionPushEvent, n
     const knock = event.knock;
     result.push({ token: target.apnsToken, type: "alert", body: JSON.stringify({
       aps: { alert: { title: knock.attempt ? "Umpi · still waiting" : "Umpi", body: (knock.hint ? `${knock.text}\n${knock.hint}` : knock.text).slice(0, 400) },
-        sound: knock.gentle ? "knock-gentle.caf" : "knock.caf", category: "UMPI_KNOCK", "interruption-level": knock.gentle ? "active" : "time-sensitive",
+        sound: knock.gentle ? "knock-gentle.caf" : knock.attempt ? "knock-loud.caf" : "knock.caf", category: "UMPI_KNOCK", "interruption-level": knock.gentle ? "active" : "time-sensitive",
         "thread-id": `knock.${knock.reminderId}` },
       reminderId: knock.reminderId, version: knock.version,
     }) });
