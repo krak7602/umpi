@@ -102,7 +102,7 @@ A failed Aside read is skipped until the next tick and never stops shell, coding
 
 ### Knocks
 
-The knock lane shows due reminders on this Mac. It is always on, and it uses `/api/executor/knock/poll` and `/api/executor/knock/report` with the executor credential.
+The coordinator sends no knocks to the Mac since 2026-11-03: knocks move to the phone. The lane still polls and shows nothing. When it had knocks, it showed due reminders on this Mac. It is always on, and it uses `/api/executor/knock/poll` and `/api/executor/knock/report` with the executor credential.
 
 - A coordinator wake, or a minute without one, starts a poll. Each poll claims at most three due knocks. They are shown one at a time in the background, so a prompt never delays other lanes.
 - Before a knock, the lane reads the keyboard and mouse idle time from `ioreg -c IOHIDSystem`. After more than 120 seconds without input, it reports `away` and shows nothing.
