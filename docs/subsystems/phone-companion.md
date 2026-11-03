@@ -1,7 +1,7 @@
 ---
 title: Phone companion and device acknowledgment
 aliases: [iPhone companion, personal Umpi app, SwiftUI, AlarmKit, device alarms]
-updated: 2026-10-14
+updated: 2026-11-03
 ---
 
 # Phone companion and device acknowledgment
@@ -14,7 +14,17 @@ updated: 2026-10-14
 
 The companion is separate from any external caller or voice system. Calls are not a prerequisite; any later voice work must meet the [voice retention criteria](../concepts/interaction-quality.md#voice-retention-criteria).
 
-The [coordinator's text reminders](assistant-runtime.md#reminders) remain distinct from native phone alarms. Telegram remains the conversational desktop/phone interface. This app provides structured workflows and device actions, not a caller conversion or a duplicate chat transcript.
+The [coordinator's text reminders](assistant-runtime.md#reminders) remain distinct from native phone alarms. The app and Telegram share one owner conversation; see [shared chat](#shared-chat). Telegram stays a second door for now; the owner may phase it out once the app covers enough.
+
+### Shared chat
+
+The app's chat is the owner's Telegram conversation, not a second one. `POST /api/device/messages` admits `{id, text?, sentAt?, images?, file?}` to the Telegram Pi session with an `app-text`, `app-image`, or `app-file` source, so Umpi remembers both surfaces as one conversation. Up to four images (1 MB together, as for Telegram) or one file (10 MB, read as in [Telegram files](assistant-runtime.md#images-and-other-attachments)) can be sent; the body may be 15 MB. The reply to an app message stays in the app: it is not sent to Telegram.
+
+`chat.ts` keeps the readable history in the coordinator's SQLite, written in the same transactions that admit owner messages and queue Umpi's Telegram messages: what the owner said on either surface, Umpi's replies, and the messages Umpi started (brief, reminders, mail, approvals and questions, with their buttons). Telegram command panels (`/mail`, `/schedule`, memory views, and other menus) are Telegram's own interface and are left out. `GET /api/device/chat` pages it by position: `?limit=` (default 50, at most 100) returns the newest, `?before=N` older entries, and `?after=N` newer ones; `latest` is the newest position. Images are counted, not stored; a file is named.
+
+The app keeps a socket at `GET /api/device/chat/socket` (WebSocket, device credential). It carries only `{"type":"chat","latest":N}` when the conversation grows; the app then reads the new entries. A revoked device's socket is closed.
+
+`GET` and `PUT /api/device/chat/settings` hold `notify`: `telegram` (default) or `app`. With `app`, each message Umpi starts is announced on every paired phone with an APNs alert (title "Umpi", a preview of up to 600 characters, `chat` position, thread `chat`) and Telegram delivers the same message silently. Replies follow the surface: an app reply is announced in the app; a reply in Telegram stays a normal Telegram message and is not pushed. A failed alert is tried up to three times; an uncertain one is not repeated. APNs acceptance is not delivery, so switch to `app` only after alerts are seen arriving on the phone. Protected `GET /api/status` → `chat` reports the setting, entries, push outcomes, and open sockets.
 
 ### Roles and composition boundary
 
@@ -118,7 +128,10 @@ The agent tools are `read_companion_state`, `update_companion`, and `request_dev
 | `POST /api/device/actions/:id/ack` | Target device only; immutable outcome |
 | `POST /api/device/jobs/:id/approve` or `/cancel` | Device credential; exact reviewed `{version}` |
 | `POST /api/device/choices/:id/answer` | Device credential; predefined or ordinary non-slash text answer |
-| `POST /api/device/messages` | Device credential; idempotent `{id,text}` admission to the control conversation |
+| `POST /api/device/messages` | Device credential; idempotent app message admitted to the owner's shared conversation; see [shared chat](#shared-chat) |
+| `GET /api/device/chat` | Device credential; shared conversation history by position |
+| `GET /api/device/chat/socket` | Device credential; WebSocket that announces new positions |
+| `GET`, `PUT /api/device/chat/settings` | Device credential; `{expectedVersion, notify}` |
 | `DELETE /api/device/session` | Device credential; revoke itself |
 
 Mutations use `operationId`, `workflowId`, `expectedRevision`, and explicit `create`, `define`, `set_values`, `archive`, `restore`, or `remove`. Missing values remain unchanged; `null` explicitly clears a value. Stale revisions return 409. Replay identities bind the actor and exact request. Pending device actions are retained independently of the recent completed-action window.
@@ -172,3 +185,4 @@ Real-device signing, APNs delivery, alarm ringing, and lock-screen Live Activity
 - 2026-10-11: Accepted and implemented a separate SwiftUI Umpi app with bounded composition, revision-safe updates, durable workflows, truthful device effects, and publication safeguards.
 - 2026-10-13: Deferred detailed alarm-versus-call selection until a calling path meets the interaction-quality criteria. Explicit alarm support remains available.
 - 2026-10-14: Removed external installation history while preserving native capability and verification boundaries.
+- 2026-11-03: Added the shared chat backend: app messages join the Telegram conversation, history and a live socket for the app, and app notifications with Telegram silent.

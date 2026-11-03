@@ -18,6 +18,8 @@ export interface CompanionPushEvent {
   revision: number;
   jobs: readonly { jobId: string; status: JobStatus }[];
   alert?: boolean;
+  /** A chat message announced on the phone: its preview and position in the shared conversation. */
+  message?: { body: string; seq: number };
 }
 
 export interface CompanionPushResult {
@@ -87,7 +89,13 @@ function notifications(target: CompanionPushTarget, event: CompanionPushEvent, n
       !["sandbox", "production"].includes(target.apnsEnvironment ?? "") ||
       (target.activityTokens?.length ?? 0) > 32) throw new Error("Invalid push target");
   const result: Notification[] = [];
-  if (target.apnsToken) {
+  if (target.apnsToken && event.message) {
+    // The preview is cut so the payload stays within APNs' 4 KB limit.
+    result.push({ token: target.apnsToken, type: "alert", body: JSON.stringify({
+      aps: { alert: { title: "Umpi", body: event.message.body.slice(0, 600) }, sound: "default", "thread-id": "chat", "content-available": 1 },
+      chat: event.message.seq,
+    }) });
+  } else if (target.apnsToken) {
     result.push({ token: target.apnsToken, type: event.alert ? "alert" : "background", body: JSON.stringify({
       aps: event.alert
         ? { alert: { title: "Umpi", body: "Open Umpi to review the latest changes." }, "content-available": 1 }

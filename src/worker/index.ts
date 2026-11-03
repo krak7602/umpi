@@ -11,7 +11,7 @@ import { InputError, boundedText, identifier, record } from "../shared/protocol.
 import { DurableCredentials } from "./credentials.js";
 import { Store, StateError, type Channel, type Operation, type OwnerMessageSource } from "./store.js";
 import { assistantTools, ASSISTANT_INSTRUCTIONS, RESPONSE_STYLE_INSTRUCTIONS } from "./tools.js";
-import { readJson, authorize, isExecutorWakeUpgrade, telegramMissing, telegramUpdate, sendTelegram, answerTelegramCallback, editTelegramKeyboard, type TelegramConfig } from "./transport.js";
+import { readJson, authorize, isChatSocketUpgrade, isExecutorWakeUpgrade, telegramMissing, telegramUpdate, sendTelegram, answerTelegramCallback, editTelegramKeyboard, type TelegramConfig } from "./transport.js";
 import { formatTelegramStatus } from "./telegram-view.js";
 import { coreContextSection, coreContextTools, readCoreContext, replaceCoreContext, readMemoryReviews, readMemoryReview, readMemoryHistory, readMemoryRevision, proposeMemoryRestore, decideMemoryReview } from "./core-context.js";
 import { reconcileMemoryTelegram, handleMemoryTelegramCallback, enqueueMemoryOverview } from "./memory-telegram.js";
@@ -77,9 +77,12 @@ import { SubagentRuntime, SUBAGENT_INSTRUCTIONS } from "./subagent-runtime.js";
 import { assistantSubagentExtension } from "./subagent-profile.js";
 import { subagentRequest } from "./subagent-http.js";
 import type { SubagentReport, SubagentScope } from "./subagent-types.js";
-import { TelegramInbox } from "./telegram-inbox.js";
+import { FILE_WITHOUT_CAPTION, IMAGE_WITHOUT_CAPTION, TelegramInbox } from "./telegram-inbox.js";
 import { downloadTelegramImage, downloadTelegramVoice } from "./telegram-voice.js";
-import { readTelegramFile, type DocumentConverter } from "./telegram-files.js";
+import { documentFromBytes, readTelegramFile, type DocumentConverter } from "./telegram-files.js";
+import { ChatLog, type ChatEntry } from "./chat.js";
+import { ChatSocket } from "./chat-socket.js";
+import type { AppMessage } from "./companion-http.js";
 import { SUBSCRIPTION_TRANSCRIPTION_MODEL, transcribeSubscriptionAudio } from "./subscription-transcription.js";
 import { MAX_VOICE_NOTE_BYTES, MAX_VOICE_NOTE_SECONDS, VoiceNoteError, type TelegramDocument, type TelegramImage, type TelegramInboxDelivery } from "../shared/voice-note.js";
 import { classifyModelError, describeModelFailure, type ModelFailure } from "../model/failure.js";
@@ -138,7 +141,7 @@ class Coordinator extends LifecycleCapability {
     this.assistant.telegramInbox.recover();
     // Recover both new proposals and decisions committed before their SQL delivery projection.
     await reconcileMemoryTelegram(await this.assistant.harness.pi(), BACKGROUND_CONTEXT, this.assistant.store);
-    if (this.assistant.telegramInbox.hasPending() || this.assistant.store.pendingOperations().length || this.assistant.store.nextReminder() !== undefined || this.assistant.knocks.nextDue() !== undefined || this.assistant.store.readyDeliveries().length || this.assistant.companion.nextPush() || this.assistant.proactive.settings().enabled || this.assistant.planning.settings().enabled || this.assistant.brief.settings().enabled || this.assistant.dream.settings().enabled || this.assistant.mailRuntime.nextDue() !== undefined || this.assistant.coding.active().length || this.assistant.browserRuntime.nextDue() !== undefined || this.assistant.browser.active().length || await this.assistant.subagents.nextDue() !== undefined) await this.wake();
+    if (this.assistant.telegramInbox.hasPending() || this.assistant.store.pendingOperations().length || this.assistant.store.nextReminder() !== undefined || this.assistant.knocks.nextDue() !== undefined || this.assistant.store.readyDeliveries().length || this.assistant.companion.nextPush() || this.assistant.chat.nextPush() || this.assistant.proactive.settings().enabled || this.assistant.planning.settings().enabled || this.assistant.brief.settings().enabled || this.assistant.dream.settings().enabled || this.assistant.mailRuntime.nextDue() !== undefined || this.assistant.coding.active().length || this.assistant.browserRuntime.nextDue() !== undefined || this.assistant.browser.active().length || await this.assistant.subagents.nextDue() !== undefined) await this.wake();
   }
 
   async onJob({ job }: LifecycleJobContext): Promise<LifecycleJobOutcome> {
@@ -225,12 +228,14 @@ class Coordinator extends LifecycleCapability {
         const result = await sendCompanionPush(push.target, { revision: push.revision, jobs: push.jobs }, this.assistant.config);
         this.assistant.companion.finishPush(push.target.deviceId, push.hash, result.status);
       }
+      const chatPush = this.assistant.chat.nextPush();
+      if (chatPush) this.assistant.chat.finishPush(chatPush.seq, await this.assistant.announce(chatPush));
       this.assistant.driveExecutor();
       const due = store.nextReminder();
       // Missing credentials do not justify a two-second polling loop; auth updates wake the queue.
       const pending = store.pendingOperations().some(op => op.status === "submitted");
       const outbox = store.readyDeliveries().length > 0;
-      const wakeAt = Math.min(due ?? Infinity, proactive.nextDue(Date.now(), store.hasForegroundInput()) ?? Infinity, this.assistant.planning.nextDue() ?? Infinity, this.assistant.brief.nextDue() ?? Infinity, this.assistant.dream.nextDue() ?? Infinity, this.assistant.dreamRuntime.nextDue() ?? Infinity, this.assistant.alerts.nextDue() ?? Infinity, this.assistant.journal.nextDue() ?? Infinity, this.assistant.mailRuntime.nextDue() ?? Infinity, this.assistant.codingRuntime.nextDue() ?? Infinity, this.assistant.browserRuntime.nextDue() ?? Infinity, await this.assistant.subagents.nextDue() ?? Infinity, this.assistant.telegramInbox.nextDue() ?? Infinity, this.assistant.knocks.nextDue() ?? Infinity, pending ? Date.now() + 2_000 : Infinity, outbox || this.assistant.companion.nextPush() ? Date.now() + 100 : Infinity);
+      const wakeAt = Math.min(due ?? Infinity, proactive.nextDue(Date.now(), store.hasForegroundInput()) ?? Infinity, this.assistant.planning.nextDue() ?? Infinity, this.assistant.brief.nextDue() ?? Infinity, this.assistant.dream.nextDue() ?? Infinity, this.assistant.dreamRuntime.nextDue() ?? Infinity, this.assistant.alerts.nextDue() ?? Infinity, this.assistant.journal.nextDue() ?? Infinity, this.assistant.mailRuntime.nextDue() ?? Infinity, this.assistant.codingRuntime.nextDue() ?? Infinity, this.assistant.browserRuntime.nextDue() ?? Infinity, await this.assistant.subagents.nextDue() ?? Infinity, this.assistant.telegramInbox.nextDue() ?? Infinity, this.assistant.knocks.nextDue() ?? Infinity, pending ? Date.now() + 2_000 : Infinity, outbox || this.assistant.companion.nextPush() || this.assistant.chat.nextPush() ? Date.now() + 100 : Infinity);
       if (Number.isFinite(wakeAt)) return { rescheduleAt: wakeAt };
     } catch {
       this.assistant.modelIssue = "Coordinator reconciliation failed; work is retained and retry is scheduled. Check configuration and protected status.";
@@ -283,6 +288,8 @@ export class Assistant extends Agent<Env> {
   private backgroundExtension!: Extension;
   readonly contextHealth: ContextHealth;
   readonly knocks: KnockStore;
+  readonly chat: ChatLog;
+  private chatSocket?: ChatSocket;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -328,6 +335,9 @@ export class Assistant extends Agent<Env> {
     this.modelFallback = new ModelFallback(this.store.db, () => env.UMPI_ANTHROPIC_FALLBACK_KEY, fallbackZone, (groupId, text) => this.store.enqueue(groupId, "telegram", text));
     this.contextHealth = new ContextHealth(this.store.db);
     this.knocks = new KnockStore(this.store.db);
+    this.chat = new ChatLog(this.store.db);
+    this.store.chat = this.chat;
+    this.chat.appended = entry => { this.chatSocket?.changed(entry.seq); };
     // Knocks belong on the phone, in place of alarms; the Mac lane stays idle until the app takes them. Reminders are Telegram messages meanwhile.
     this.webUsage = new WebUsageStore(this.store.db, () => {
       const budget = Number(env.UMPI_WEB_MONTHLY_BUDGET);
@@ -455,7 +465,12 @@ export class Assistant extends Agent<Env> {
       track: work => { this.lifecycle.trackAlarmWork(work); },
     });
     this.store.pendingForegroundInput = () => this.telegramInbox.hasPending();
-    this.lifecycle.use(this.harness).use(this.coordinator).use(this.executorWake);
+    this.chatSocket = new ChatSocket({
+      authenticate: async request => this.companion.authenticate(request.headers.get("authorization")).id,
+      active: deviceId => { try { this.companion.requireDevice(deviceId); return true; } catch { return false; } },
+      latest: () => this.chat.latest(),
+    });
+    this.lifecycle.use(this.harness).use(this.coordinator).use(this.executorWake).use(this.chatSocket);
   }
 
   private subagentScope(parentSessionId: string): SubagentScope {
@@ -652,6 +667,16 @@ export class Assistant extends Agent<Env> {
     return this.store.operation(op.id)!;
   }
 
+  /** An app message joins the Telegram conversation; its reply stays in the app. */
+  private async admitApp(id: string, deviceId: string, message: AppMessage): Promise<Operation> {
+    const kind = message.images ? "app-image" : message.document ? "app-file" : "app-text";
+    const text = message.text.trim() ? message.text : message.images ? IMAGE_WITHOUT_CAPTION : message.document ? FILE_WITHOUT_CAPTION : message.text;
+    return this.admit(id, text, "telegram", () => { this.companion.requireDevice(deviceId); }, {
+      kind, ...(message.sentAt ? { sentAt: message.sentAt } : {}),
+      ...(message.document ? { file: { name: message.document.name, characters: message.document.text.length, ...(message.document.truncated ? { truncated: true as const } : {}) } } : {}),
+    }, message.images, message.document);
+  }
+
   private async deliverTelegramInput(input: TelegramInboxDelivery): Promise<string> {
     const existing = this.store.operation(`message:telegram:${input.id}`);
     const sessionId = this.store.session("telegram");
@@ -688,6 +713,15 @@ export class Assistant extends Agent<Env> {
     items.push(...this.knocks.demand());
     return items;
   }
+  /** Shows a chat message on every paired phone that can take an alert. Acceptance by APNs is not delivery. */
+  async announce(entry: ChatEntry): Promise<"accepted" | "failed" | "uncertain" | "unconfigured"> {
+    const targets = this.companion.alertTargets();
+    if (!targets.length) return "unconfigured";
+    const body = entry.text.replace(/[*_`#>]+/g, "").replace(/\s+/g, " ").trim() || "New message";
+    const results = await Promise.all(targets.map(target => sendCompanionPush(target, { revision: 0, jobs: [], message: { body, seq: entry.seq } }, this.config)));
+    return results.some(result => result.status === "accepted") ? "accepted" : results.some(result => result.status === "uncertain") ? "uncertain"
+      : results.every(result => result.status === "unconfigured") ? "unconfigured" : "failed";
+  }
   notifyExecutor(): void { this.executorWake.wake(this.executorDemand()); }
   private executorPollSeenAt(): number | null {
     const times = (this.store.executors() as { lastSeenAt?: string }[]).map(executor => Date.parse(executor.lastSeenAt ?? "")).filter(Number.isFinite);
@@ -710,6 +744,7 @@ export class Assistant extends Agent<Env> {
       web: this.webUsage.status(Boolean(this.config.UMPI_PARALLEL_API_KEY)),
       decisions: { ...this.decisions.status(), ownerEffort: this.efforts },
       knocks: this.knocks.status(),
+      chat: { ...this.chat.status(), sockets: this.chatSocket?.count() ?? 0 },
       conversations: this.contextHealth.status([
         { label: "telegram", id: this.store.session("telegram") }, { label: "control", id: this.store.session("control") },
         { label: "background:telegram", id: this.store.backgroundSession("telegram") }, { label: "background:control", id: this.store.backgroundSession("control") },
@@ -740,8 +775,9 @@ export class Assistant extends Agent<Env> {
   async onRequest(request: Request): Promise<Response> {
     try {
       const companion = await companionRequest(request, {
-        companion: this.companion, config: this.config, wake: () => this.coordinator.wake(),
-        admit: (id, text, deviceId) => this.admit(id, text, "control", () => { this.companion.requireDevice(deviceId); }),
+        companion: this.companion, config: this.config, wake: () => this.coordinator.wake(), chat: this.chat,
+        admitApp: (id, deviceId, message) => this.admitApp(id, deviceId, message),
+        readFile: (name, bytes) => documentFromBytes(bytes, name, (this.env as Env).AI as unknown as DocumentConverter | undefined),
         requireModel: async () => { if (!(await this.modelReady())) throw new StateError(503, this.modelIssue!); },
       });
       if (companion) { companion.headers.set("cache-control", "no-store"); return companion; }
@@ -1029,7 +1065,7 @@ export default {
       await authorize(request, env, "forward-device");
       // Do not expose Agent RPC, WebSockets, arbitrary object names, or SDK control headers.
       const headers = new Headers();
-      const upgrade = isExecutorWakeUpgrade(request) ? ["upgrade", "connection", "sec-websocket-key", "sec-websocket-version", "sec-websocket-extensions"] : [];
+      const upgrade = isExecutorWakeUpgrade(request) || isChatSocketUpgrade(request) ? ["upgrade", "connection", "sec-websocket-key", "sec-websocket-version", "sec-websocket-extensions"] : [];
       for (const key of ["authorization", "content-type", "content-length", "x-telegram-bot-api-secret-token", "x-umpi-coding-cwd", "content-encoding", ...upgrade]) {
         const value = request.headers.get(key); if (value !== null) headers.set(key, value);
       }
