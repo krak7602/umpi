@@ -362,7 +362,7 @@ final class CompanionStore {
         // Saved copies of the conversation, notes, and previews leave with the pairing.
         let fileManager = FileManager.default
         if let caches = try? fileManager.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: false) {
-            for name in ["chat-recent.json", "Today"] { try? fileManager.removeItem(at: caches.appendingPathComponent(name)) }
+            for name in ["chat-recent.json", "Today", "t3-overview.json"] { try? fileManager.removeItem(at: caches.appendingPathComponent(name)) }
         }
         if let support = try? fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: false) {
             for name in ["Companion/Media", "Companion/Attachments"] { try? fileManager.removeItem(at: support.appendingPathComponent(name)) }

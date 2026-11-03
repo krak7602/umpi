@@ -4,17 +4,22 @@ import SwiftUI
 struct WorkView: View {
     @Environment(CompanionStore.self) private var store
     @Environment(DeviceCapabilities.self) private var effects
+    @Environment(T3CodeModel.self) private var t3
 
     private var waitingJobs: [Job] { store.jobs.filter { $0.status == "pending_approval" } }
     private var runningJobs: [Job] { store.jobs.filter { $0.status == "queued" || $0.status == "running" } }
     private var openQuestions: [Choice] { store.choices.filter { $0.status == "pending" } }
+    /// Coding threads waiting on the owner, from every connected machine.
+    private var waitingThreads: [(machine: T3Machine, thread: T3Thread)] {
+        t3.machines.flatMap { machine in (machine.threads ?? []).filter { $0.status == "waiting" && $0.subagent != true }.map { (machine, $0) } }
+    }
     private var nextReminders: [Reminder] {
         store.reminders.filter { $0.status == "scheduled" }.sorted { ($0.due ?? .distantFuture) < ($1.due ?? .distantFuture) }.prefix(5).map { $0 }
     }
 
     var body: some View {
         List {
-            if waitingJobs.isEmpty && openQuestions.isEmpty && effects.pendingReview.isEmpty {
+            if waitingJobs.isEmpty && openQuestions.isEmpty && effects.pendingReview.isEmpty && waitingThreads.isEmpty {
                 Section {
                     Label("Nothing is waiting on you", systemImage: "checkmark.circle").foregroundStyle(.secondary)
                 }
@@ -27,6 +32,9 @@ struct WorkView: View {
                         NavigationLink { JobDetailView(jobID: job.id) } label: {
                             Label { Text(job.command).font(.system(.callout, design: .monospaced)).lineLimit(2) } icon: { Image(systemName: "terminal") }
                         }
+                    }
+                    ForEach(waitingThreads, id: \.thread.id) { item in
+                        NavigationLink { T3ThreadView(machine: item.machine, thread: item.thread) } label: { T3ThreadRow(thread: item.thread) }
                     }
                     ForEach(openQuestions) { choice in
                         NavigationLink { ChoiceDetailView(choice: choice) } label: { Label { Text(ReminderRow.title(choice.question)).lineLimit(2) } icon: { Image(systemName: "questionmark.bubble") } }
@@ -42,6 +50,7 @@ struct WorkView: View {
                     }
                 }
             }
+            T3WorkSection()
             if !nextReminders.isEmpty {
                 Section("Coming up") {
                     ForEach(nextReminders) { reminder in
@@ -55,7 +64,8 @@ struct WorkView: View {
             }
         }
         .softScrollEdges()
-        .refreshable { await store.synchronize() }
+        .refreshable { async let sync: Void = store.synchronize(); async let threads: Void = t3.loadThreads(store); _ = await (sync, threads) }
+        .onAppear { Task { await t3.loadThreads(store) } }
         .navigationTitle("Work")
         .navigationBarTitleDisplayMode(.inline)
     }

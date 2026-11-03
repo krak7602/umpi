@@ -324,6 +324,19 @@ Completion requires retained artifacts, actual R2 receipts before destruction, r
 
 No new agent-platform subscription is required, but this is not zero-cost or an all-in cost cap. At published [Container pricing](https://developers.cloudflare.com/containers/platform/pricing/), maximum CPU plus provisioned memory/disk beyond shared included allowances is at most $0.028008 per running hour for Basic compute. Actual CPU use, model subscription limits, Workers/DO/R2, and egress still apply.
 
+### T3 Code threads
+
+Umpi reads the owner's [T3 Code](https://github.com/pingdotgg/t3code) coding threads as a remote MCP client, through each machine's T3 Connect address. Nothing of Umpi runs on the machine. The [T3 Code access decision](../decisions/2026-11-03-t3-code-access.md) records why. `T3CodeStore` (`src/worker/t3-code.ts`) owns machines, approval, and calls.
+
+- **Adding a machine.** The owner pastes the machine's MCP address (T3 Code: Settings → Environments → Copy MCP URL) in the app. The address must use https (http only on this computer, for a local copy) and end in `/mcp`. At most six machines.
+- **Approval.** The MCP SDK's `auth()` discovers the machine's OAuth metadata, registers Umpi (client name `Umpi`, public client, PKCE S256), and returns the approval address. The app opens it; the owner enters a pairing code from T3 Code (Settings → Sharing & access) and chooses the access level. Read only is enough. T3 Code returns the browser to `GET /t3/callback` on Umpi's origin. That route is public: the one-time `state` (32 random bytes, 15 minutes) is the check. Umpi exchanges the code with the PKCE verifier, keeps the access token in the coordinator's SQLite storage, and names the machine from `t3_environment_read`. The page the browser lands on says whether it worked.
+- **Expiry.** T3 Code issues no refresh token. Access lasts about 30 days (`expires_in`). After that, or when the machine answers 401, the machine shows as expired and the owner approves again from Settings. A new approval keeps the old access until it completes.
+- **Calls.** Each read opens one MCP session (Streamable HTTP, `@modelcontextprotocol/sdk` with the `@cfworker/json-schema` validator, since Workers do not allow Ajv's generated code), makes its calls, and ends the session. A request that takes over 20 seconds fails, for example when a laptop is asleep. Results are mapped to small records: thread ID, title, status, project name, branch, times, and message text.
+- **Umpi's tools** (foreground only, read-only): `t3_code_threads` (newest first, filters for status, title, and settled; every connected machine unless one is named), `t3_code_read_thread` (latest messages by default, or from the start with paging), and `t3_code_search` (titles, branches, projects, then message text). A machine is named by its label or ID; with one connected machine, no name is needed. Errors tell Umpi what the owner must do, such as approving again in the app.
+- **App.** Settings lists machines and approval state; Work shows coding threads. See [Today and Work](phone-companion.md#today-and-work).
+
+Not built: starting or messaging threads (T3 Code's `t3_thread_launch` and `t3_thread_send`). They need a separate owner-approval design and a higher access level on the machine.
+
 ### Subagents
 
 Native background delegation is available for foreground assistant requests and approved coding runs. It follows Pi Durable's pinned [background subagent example](https://github.com/earendil-works/pi/blob/v1.1.0/packages/durable/test/examples/23-subagent-background.ts), using owned child conversations and durable Anchor/Reporter tasks. It does not use a second agent framework or Cloudflare Agents RPC as a substitute for model delegation.

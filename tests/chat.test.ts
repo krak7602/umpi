@@ -8,6 +8,7 @@ import { ChatLog, type ChatEntry } from "../src/worker/chat.js";
 import { Store, type Database } from "../src/worker/store.js";
 import { CompanionStore } from "../src/worker/companion-store.js";
 import { companionRequest, type CompanionHttpContext } from "../src/worker/companion-http.js";
+import { T3CodeStore } from "../src/worker/t3-code.js";
 import { sendCompanionPush } from "../src/worker/companion-push.js";
 import { authorize } from "../src/worker/transport.js";
 
@@ -30,7 +31,7 @@ function fixture(t: TestContext) {
   const chat = new ChatLog(db); owner.chat = chat;
   const appended: ChatEntry[] = []; chat.appended = entry => { appended.push(entry); };
   const companion = new CompanionStore(owner);
-  const context: CompanionHttpContext = { companion, config, chat, async wake() {}, async requireModel() {},
+  const context: CompanionHttpContext = { companion, config, chat, t3: new T3CodeStore(db), async wake() {}, async requireModel() {},
     async admitApp(id, deviceId, message) {
       companion.requireDevice(deviceId);
       return owner.admit(id, message.text || "[attachment]", "telegram", "telegram-session", { kind: message.images ? "app-image" : message.document ? "app-file" : message.voice ? "app-voice" : "app-text",

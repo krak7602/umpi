@@ -72,6 +72,7 @@ struct SettingsView: View {
             } header: { Text("Widget") } footer: {
                 Text("The small widget shows the first button; medium and large show all of them. Umpi can change these too when you ask.")
             }
+            T3MachinesSection()
             Section {
                 Toggle("Let Umpi act on this phone", isOn: Binding(get: { store.remoteEffectsAllowed }, set: { allowed in
                     if allowed { confirmRemoteEffects = true } else { store.remoteEffectsAllowed = false }

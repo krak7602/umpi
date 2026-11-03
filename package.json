@@ -24,12 +24,14 @@
     "deploy": "node --env-file-if-exists=.dev.vars --import tsx src/cli/deploy.ts"
   },
   "dependencies": {
+    "@cfworker/json-schema": "4.1.1",
     "@cloudflare/containers": "0.3.7",
     "@cloudflare/playwright": "1.3.6",
     "@earendil-works/chord": "1.1.0",
     "@earendil-works/pi-ai": "1.1.0",
     "@earendil-works/pi-durable": "1.1.0",
     "@js-temporal/polyfill": "0.5.1",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "@obsy/agent": "file:vendor/obsy/obsy-agent-0.0.0.tgz",
     "@obsy/core": "file:vendor/obsy/obsy-core-0.0.0.tgz",
     "@obsy/merge": "file:vendor/obsy/obsy-merge-0.0.0.tgz",

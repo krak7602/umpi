@@ -7,6 +7,7 @@ import { CompanionStore, companionHash } from "./companion-store.js";
 import { companionRole } from "./companion-routes.js";
 import { authorize, readJson, secretEqual, type TelegramConfig } from "./transport.js";
 import { StateError, type Operation } from "./store.js";
+import { T3Error, type T3CodeStore } from "./t3-code.js";
 
 export interface CompanionHttpContext {
   companion: CompanionStore;
@@ -23,6 +24,8 @@ export interface CompanionHttpContext {
   setTask(day: string, line: number, expected: string, checked: boolean): Promise<object>;
   widget(): Promise<object>;
   setWidgetActions(value: unknown): Promise<object>;
+  /** T3 Code machines reached through T3 Connect. */
+  t3: T3CodeStore;
 }
 /** What an attachment was, for the history to show: the app sends its preview separately, never through the chat. */
 export interface AppMedia { kind: "photos" | "video" | "audio" | "file" | "voice"; name?: string; seconds?: number; count?: number }
@@ -116,6 +119,17 @@ export async function companionRequest(request: Request, context: CompanionHttpC
     if (day !== null && !/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new InputError("Invalid day");
     return Response.json(await context.today(day ?? undefined));
   }
+  if (path === "/api/device/t3") return Response.json({ machines: context.t3.list() });
+  if (path === "/api/device/t3/threads") return Response.json(await context.t3.overview());
+  if (path === "/api/device/t3/thread") {
+    const query = new URL(request.url).searchParams;
+    const machine = identifier(query.get("machine"), "machine ID"), thread = identifier(query.get("id"), "thread ID"), after = query.get("after");
+    if (after !== null && !/^\d{1,9}$/.test(after)) throw new InputError("Invalid position");
+    try { return Response.json(await context.t3.read(machine, thread, after === null ? { latest: true, limit: 40, maxChars: 8_000 } : { afterPosition: Number(after), limit: 40, maxChars: 8_000 })); }
+    catch (error) { if (error instanceof T3Error) throw new StateError(502, error.message); throw error; }
+  }
+  const t3Machine = /^\/api\/device\/t3\/machines\/([^/]+)$/.exec(path);
+  if (t3Machine && request.method === "DELETE") { await context.wake(); companion.requireDevice(device.id); return Response.json(context.t3.remove(t3Machine[1]!)); }
   if (path === "/api/device/chat/socket") throw new StateError(426, "Open the chat socket as a WebSocket");
   if (path === "/api/device/chat/settings" && request.method === "GET") return Response.json(context.chat.settings());
   if (path === "/api/device/session") {
@@ -142,6 +156,9 @@ export async function companionRequest(request: Request, context: CompanionHttpC
     if (typeof input.checked !== "boolean") throw new InputError("checked must be true or false");
     return Response.json(await context.setTask(input.day, input.line, boundedText(input.text, 4_000, "task line"), input.checked));
   }
+  if (path === "/api/device/t3/machines") return Response.json(await context.t3.add(body, new URL(request.url).origin));
+  const t3Connect = /^\/api\/device\/t3\/machines\/([^/]+)\/connect$/.exec(path);
+  if (t3Connect) return Response.json(await context.t3.connect(t3Connect[1]!, new URL(request.url).origin));
   if (path === "/api/device/knocks") return Response.json(companion.owner.recordPhoneKnocks(device.id, body));
   const knock = /^\/api\/device\/reminders\/([^/]+)\/answer$/.exec(path);
   if (knock) return Response.json(companion.owner.answerPhoneKnock(knock[1]!, body, KNOCK_SNOOZE_MINUTES));

@@ -42,7 +42,7 @@ Speech uses the phone's on-device recognizer when it has one, and Apple's recogn
 
 The app's tabs are **Chat**, **Today**, **Work**, and **Settings**. **Today** (`TodayView.swift`) shows the day's note from the owner's obsy vault, the note [daily preparation](assistant-runtime.md#daily-note-preparation) writes, rendered like the chat with its frontmatter hidden; arrows move between days. `GET /api/device/today?day=` returns `{day, text, revision}` (today in the owner's timezone by default; `text` is null without a note). Tapping a checkbox calls `POST /api/device/today/task {day, line, text, checked}`: `ObsyVaultClient.setTask` changes only that line, and only while it still reads as the app showed it, through a compare-and-swap commit by agent `umpi`. Edits elsewhere in the note are kept; a changed line returns `conflict` with the latest note, which the app then shows. Without a configured vault the routes answer 503 and Today says notes aren't available. The coordinator keeps one obsy reader for its lifetime, so a read catches up only on commits since the last one instead of rebuilding the vault from its checkpoint and log each time. The app keeps the last copy of each day's note in its caches and shows it at once, then refreshes it.
 
-**Work** (`WorkView.swift`) puts what needs the owner first (device actions to review, commands awaiting approval, open questions), then running commands, the next reminders, and links to Workflows and the full activity record.
+**Work** (`WorkView.swift`) puts what needs the owner first (device actions to review, commands awaiting approval, [T3 Code threads](assistant-runtime.md#t3-code-threads) waiting on them, open questions), then running commands, a **Coding** section per T3 Code machine (running threads, then recent unsettled ones, six at most), the next reminders, and links to Workflows and the full activity record. A coding thread opens to its latest messages. Work reads threads each time it appears and keeps the last overview in the app's caches. Settings lists T3 Code machines with their approval state, adds a machine from its MCP address, and opens the approval page again when access ends.
 
 ### Widgets and quick capture
 
@@ -183,6 +183,12 @@ The agent tools are `read_companion_state`, `update_companion`, and `request_dev
 | `PUT /api/device/widget/actions` | Device credential; `{actions}` the widget's buttons |
 | `POST /api/device/knocks` | Device credential; `{scheduled}` reminders this phone has set as knocks |
 | `POST /api/device/reminders/:id/answer` | Device credential; `{version, action}` with done, snooze, or later |
+| `GET /api/device/t3` | Device credential; T3 Code machines and approval state, no tokens |
+| `GET /api/device/t3/threads` | Device credential; each connected machine's recent threads, or its problem |
+| `GET /api/device/t3/thread` | Device credential; `?machine=&id=` a thread's latest messages, `&after=` to page |
+| `POST /api/device/t3/machines` | Device credential; `{url, label?}` adds a machine and returns `{machine, authorizeUrl}` |
+| `POST /api/device/t3/machines/:id/connect` | Device credential; starts approval again, returns `{machine, authorizeUrl}` |
+| `DELETE /api/device/t3/machines/:id` | Device credential; removes the machine and its access |
 | `DELETE /api/device/session` | Device credential; revoke itself |
 
 Mutations use `operationId`, `workflowId`, `expectedRevision`, and explicit `create`, `define`, `set_values`, `archive`, `restore`, or `remove`. Missing values remain unchanged; `null` explicitly clears a value. Stale revisions return 409. Replay identities bind the actor and exact request. Pending device actions are retained independently of the recent completed-action window.
