@@ -16,6 +16,17 @@ final class ChatTests: XCTestCase {
         XCTAssertFalse(page.entries[0].fromOwner)
     }
 
+    func testTimeHeadersStartNewStretches() {
+        let now = Date()
+        let iso = { (date: Date) in date.formatted(.iso8601) }
+        let first = ChatEntry(seq: 1, id: "a", at: iso(now.addingTimeInterval(-3_600)), role: "umpi", surface: "telegram", kind: "message", text: "a")
+        let close = ChatEntry(seq: 2, id: "b", at: iso(now.addingTimeInterval(-3_300)), role: "umpi", surface: "telegram", kind: "message", text: "b")
+        let later = ChatEntry(seq: 3, id: "c", at: iso(now), role: "umpi", surface: "telegram", kind: "message", text: "c")
+        XCTAssertNotNil(ChatView.timeHeader(first, after: nil))
+        XCTAssertNil(ChatView.timeHeader(close, after: first), "five minutes later continues the stretch")
+        XCTAssertEqual(ChatView.timeHeader(later, after: close)?.hasPrefix("Today"), Calendar.current.isDateInToday(now))
+    }
+
     func testMergeKeepsOrderAndReplacesBySequence() {
         let merged = ChatModel.merge([entry(1, role: "owner"), entry(3, role: "umpi")], [entry(2, role: "umpi"), entry(3, role: "umpi")])
         XCTAssertEqual(merged.map(\.seq), [1, 2, 3])
