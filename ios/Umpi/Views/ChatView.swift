@@ -14,6 +14,8 @@ struct ChatView: View {
     @State private var showPhotos = false
     @State private var showFiles = false
     @State private var recorder = VoiceRecorder()
+    /// The recording was started from the capture control: it is an idea to file in the notes.
+    @State private var capturing = false
 
     var body: some View {
         let pending = store.pendingMessages
@@ -80,6 +82,11 @@ struct ChatView: View {
             }
         }
         .task { await chat.stayLive(store) }
+        .onReceive(NotificationCenter.default.publisher(for: .umpiCaptureIdea)) { _ in
+            guard !recorder.isRecording else { return }
+            capturing = true
+            Task { await startRecording() }
+        }
         .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: MediaPrep.maxImages, matching: .any(of: [.images, .videos]))
         .onChange(of: photoItems) { _, items in
             guard !items.isEmpty else { return }
@@ -174,7 +181,7 @@ struct ChatView: View {
 
     private var recordingBar: some View {
         HStack(spacing: 12) {
-            Button { _ = recorder.stop(keep: false) } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 28)) }
+            Button { _ = recorder.stop(keep: false); capturing = false } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 28)) }
                 .foregroundStyle(.secondary).accessibilityLabel("Cancel recording")
             Image(systemName: "waveform").symbolEffect(.variableColor.iterative, isActive: true).foregroundStyle(.red)
             if let started = recorder.startedAt {
@@ -218,7 +225,9 @@ struct ChatView: View {
             defer { preparing = nil; try? FileManager.default.removeItem(at: url) }
             do {
                 let transcript = try await MediaPrep.transcribe(url)
-                if await store.sendChat(text: transcript, voice: true, media: MediaInfo(kind: "voice", seconds: seconds), previews: LocalMedia(seconds: seconds)) {
+                let idea = capturing ? "Captured with the quick-capture button: this is an idea. File it in today's daily note (notes section) with add_to_daily_note, then confirm in one short line." : nil
+                capturing = false
+                if await store.sendChat(text: transcript, voice: true, context: idea, media: MediaInfo(kind: "voice", seconds: seconds), previews: LocalMedia(seconds: seconds)) {
                     await chat.refresh(store)
                 }
             } catch { chat.show((error as? LocalizedError)?.errorDescription ?? "The voice note could not be transcribed.") }

@@ -9,19 +9,60 @@ struct SettingsView: View {
     @State private var confirmRemoteEffects = false
     @State private var disconnecting = false
 
+    @State private var notify: String?
+    @State private var notifyVersion = 1
+
+    private func status(_ id: String) -> String? { effects.descriptors.first { $0.id == id }?.status }
+    private var notificationsAllowed: Bool { status("notification.schedule") == "available" }
+
     var body: some View {
         Form {
             ConnectionStatusSection()
             if !store.queuedChanges.isEmpty {
                 Section {
-                    NavigationLink("Review \(store.queuedChanges.count) queued changes") { QueuedChangesView() }
+                    NavigationLink("Review \(store.queuedChanges.count) unsent changes") { QueuedChangesView() }
                         .accessibilityIdentifier("settings.queue")
                 }
             }
-            Section("Paired coordinator") {
-                LabeledContent("Server") { Text(store.serverURL).textSelection(.enabled) }
-                LabeledContent("Device ID") { Text(store.deviceID).font(.caption).textSelection(.enabled) }
-                Button("Synchronize now") {
+            Section {
+                LabeledContent("Notifications") {
+                    if notificationsAllowed { Text("On").foregroundStyle(.secondary) }
+                    else { Button("Turn on") { Task { await effects.requestNotificationPermission(); _ = await effects.refreshCapabilities() } } }
+                }
+                .accessibilityIdentifier("settings.notificationPermission")
+                LabeledContent("Reminder knocks") {
+                    Text(notificationsAllowed ? "On this phone" : "Needs notifications").foregroundStyle(.secondary)
+                }
+                if let notify {
+                    Picker("Umpi's messages alert on", selection: Binding(get: { notify }, set: { value in Task { await setNotify(value) } })) {
+                        Text("Telegram").tag("telegram")
+                        Text("This app").tag("app")
+                    }
+                }
+                LabeledContent("Wake-up alarms") {
+                    if status("alarm.schedule") == "available" { Text("On").foregroundStyle(.secondary) }
+                    else if status("alarm.schedule") == "unsupported" { Text("Needs iOS 26").foregroundStyle(.secondary) }
+                    else { Button("Turn on") { Task { await effects.requestAlarmPermission(); _ = await effects.refreshCapabilities() } } }
+                }
+                .accessibilityIdentifier("settings.alarmPermission")
+                if let error = effects.errorMessage { Label(error, systemImage: "exclamationmark.triangle") }
+            } header: { Text("Alerts") } footer: {
+                Text("Reminders knock on this phone, even offline. Switch Umpi's messages to this app once a test alert has arrived; Telegram then stays as a silent record.")
+            }
+            Section {
+                Toggle("Let Umpi act on this phone", isOn: Binding(get: { store.remoteEffectsAllowed }, set: { allowed in
+                    if allowed { confirmRemoteEffects = true } else { store.remoteEffectsAllowed = false }
+                }))
+                .accessibilityIdentifier("settings.remoteEffects")
+                ForEach(effects.pendingReview) { action in
+                    NavigationLink("Review \(action.capability)") { DeviceActionReviewView(action: action) }
+                }
+            } header: { Text("Permissions") } footer: {
+                Text("When on, Umpi can set alarms and notifications without asking each time. Commands on your Mac always need your review.")
+            }
+            Section("Server") {
+                LabeledContent("Address") { Text(store.serverURL).textSelection(.enabled) }
+                Button("Sync now") {
                     Task {
                         _ = await effects.refreshCapabilities()
                         await store.synchronize()
@@ -29,66 +70,54 @@ struct SettingsView: View {
                 }
                 .disabled(store.isRefreshing)
                 .accessibilityIdentifier("settings.synchronize")
-            }
-            Section {
-                Text(effects.permissionSummary)
-                Text(effects.pushStatus).font(.footnote).foregroundStyle(.secondary)
-                Text(effects.backgroundStatus).font(.footnote).foregroundStyle(.secondary)
-                Button("Request alarm permission") { Task { await effects.requestAlarmPermission() } }
-                    .accessibilityIdentifier("settings.alarmPermission")
-                Button("Request notification permission") { Task { await effects.requestNotificationPermission() } }
-                    .accessibilityIdentifier("settings.notificationPermission")
-                Button("Open system settings") {
-                    if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
-                }
-                if let error = effects.errorMessage { Label(error, systemImage: "exclamationmark.triangle") }
-            } header: { Text("System permissions") } footer: {
-                Text("Alarms require iOS 26 or later and AlarmKit authorization. Notifications and Live Activities also depend on system settings. Granting permission does not by itself allow remote effects.")
-            }
-            Section {
-                Toggle("Allow remote device effects", isOn: Binding(get: { store.remoteEffectsAllowed }, set: { allowed in
-                    if allowed { confirmRemoteEffects = true } else { store.remoteEffectsAllowed = false }
-                }))
-                .accessibilityIdentifier("settings.remoteEffects")
-                if !effects.pendingReview.isEmpty {
-                    ForEach(effects.pendingReview) { action in
-                        NavigationLink("Review \(action.capability)") { DeviceActionReviewView(action: action) }
+                DisclosureGroup("Details") {
+                    LabeledContent("Device ID") { Text(store.deviceID).font(.caption).textSelection(.enabled) }
+                    Text(effects.pushStatus).font(.footnote).foregroundStyle(.secondary)
+                    Text(effects.backgroundStatus).font(.footnote).foregroundStyle(.secondary)
+                    ForEach(store.capabilities) { capability in
+                        LabeledContent(capability.id) { Text(capability.status.replacingOccurrences(of: "_", with: " ")).font(.footnote) }
                     }
-                }
-            } header: { Text("Your device consent") } footer: {
-                Text("When off, remote actions require individual review. When on, your paired coordinator may request supported alarms, notifications, and Live Activities without a separate review for each action. System permissions still apply. Disabling consent does not cancel existing alarms or notifications.")
-            }
-            Section("Reported capabilities") {
-                if store.capabilities.isEmpty { Text("Capabilities have not been registered yet.").foregroundStyle(.secondary) }
-                ForEach(store.capabilities) { capability in
-                    VStack(alignment: .leading) {
-                        Text(capability.id)
-                        Text(capability.status.replacingOccurrences(of: "_", with: " ")).font(.subheadline).foregroundStyle(.secondary)
-                        if let reason = capability.reason { Text(reason).font(.footnote).foregroundStyle(.secondary) }
-                    }
+                    Button("Open iOS Settings") { if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) } }
                 }
             }
             Section {
-                Button(disconnecting ? "Disconnecting…" : "Disconnect this device", role: .destructive) { confirmDisconnect = true }
+                Button(disconnecting ? "Disconnecting…" : "Disconnect this phone", role: .destructive) { confirmDisconnect = true }
                     .disabled(disconnecting)
                     .accessibilityIdentifier("settings.disconnect")
             } footer: {
-                Text("Disconnect attempts to revoke this device at the coordinator, then removes its local session and cached data. If offline, also revoke this device with the coordinator's owner controls. Existing scheduled OS effects may remain.")
+                Text("Removes this phone from Umpi and clears its local data. Alarms and notifications already set may remain.")
             }
         }
+        .task { await loadNotify() }
         .softScrollEdges()
         .navigationTitle("Settings")
-        .confirmationDialog("Allow remote device effects?", isPresented: $confirmRemoteEffects, titleVisibility: .visible) {
-            Button("Allow remote device effects") {
+        .navigationBarTitleDisplayMode(.inline)
+        .confirmationDialog("Let Umpi act on this phone?", isPresented: $confirmRemoteEffects, titleVisibility: .visible) {
+            Button("Allow") {
                 store.remoteEffectsAllowed = true
                 Task { await store.synchronize() }
             }
-        } message: { Text("Your paired coordinator can request supported effects on this phone when system permission allows. This is separate from command approval, which always requires exact-command review.") }
-        .confirmationDialog("Disconnect this device?", isPresented: $confirmDisconnect, titleVisibility: .visible) {
-            Button("Disconnect and clear local data", role: .destructive) {
+        } message: { Text("Umpi can set alarms and notifications here when iOS allows it. Commands on your Mac still need your review each time.") }
+        .confirmationDialog("Disconnect this phone?", isPresented: $confirmDisconnect, titleVisibility: .visible) {
+            Button("Disconnect", role: .destructive) {
                 disconnecting = true
                 Task { await store.disconnect(); disconnecting = false }
             }
-        } message: { Text("Unsynchronized edits on this device will be removed. Other devices and coordinator workflows are not deleted.") }
+        } message: { Text("Unsent changes on this phone are removed. Nothing else is deleted.") }
+    }
+
+    private struct ChatSettings: Codable { var notify: String; var version: Int }
+    private func loadNotify() async {
+        guard let transport = store.chatTransport, let data = try? await transport.send(path: "/api/device/chat/settings", method: "GET", body: nil),
+              let settings = try? JSONDecoder().decode(ChatSettings.self, from: data) else { return }
+        notify = settings.notify; notifyVersion = settings.version
+    }
+    private func setNotify(_ value: String) async {
+        struct Change: Encodable { var expectedVersion: Int; var notify: String }
+        guard let transport = store.chatTransport, let body = try? JSONEncoder().encode(Change(expectedVersion: notifyVersion, notify: value)) else { return }
+        if let data = try? await transport.send(path: "/api/device/chat/settings", method: "PUT", body: body),
+           let settings = try? JSONDecoder().decode(ChatSettings.self, from: data) {
+            notify = settings.notify; notifyVersion = settings.version
+        } else { await loadNotify() }
     }
 }

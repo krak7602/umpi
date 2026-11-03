@@ -21,6 +21,7 @@ export interface CompanionHttpContext {
   /** The day's note (today by default); undefined when no vault is configured. */
   today(day?: string): Promise<object>;
   setTask(day: string, line: number, expected: string, checked: boolean): Promise<object>;
+  widget(): Promise<object>;
 }
 /** What an attachment was, for the history to show: the app sends its preview separately, never through the chat. */
 export interface AppMedia { kind: "photos" | "video" | "audio" | "file" | "voice"; name?: string; seconds?: number; count?: number }
@@ -108,6 +109,7 @@ export async function companionRequest(request: Request, context: CompanionHttpC
     return Response.json(context.chat.page({ ...(chatPosition(query.get("before")) !== undefined ? { before: chatPosition(query.get("before"))! } : {}),
       ...(chatPosition(query.get("after")) !== undefined ? { after: chatPosition(query.get("after"))! } : {}), ...(limit !== null ? { limit: Number(limit) } : {}) }));
   }
+  if (path === "/api/device/widget") return Response.json(await context.widget());
   if (path === "/api/device/today" && request.method === "GET") {
     const day = new URL(request.url).searchParams.get("day");
     if (day !== null && !/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new InputError("Invalid day");

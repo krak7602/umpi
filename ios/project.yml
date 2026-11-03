@@ -51,12 +51,14 @@ targets:
       - path: UmpiWidgets
         excludes:
           - Info.plist
+          - UmpiWidgets.entitlements
       - path: Shared
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(UMPI_BUNDLE_IDENTIFIER).widgets
         PRODUCT_NAME: UmpiWidgets
         INFOPLIST_FILE: UmpiWidgets/Info.plist
+        CODE_SIGN_ENTITLEMENTS: UmpiWidgets/UmpiWidgets.entitlements
         APPLICATION_EXTENSION_API_ONLY: YES
         SKIP_INSTALL: YES
   UmpiTests:
