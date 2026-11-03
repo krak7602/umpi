@@ -61,14 +61,14 @@ struct WorkView: View {
     }
 }
 
-/// A reminder in a list: its first line as a two-line preview, and when it is due. The full text opens on tap.
+/// A reminder in a list: its one-line title and when it is due. The details open on tap.
 struct ReminderRow: View {
     let reminder: Reminder
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Image(systemName: reminder.intensity == "gentle" ? "bell" : "bell.badge").foregroundStyle(.tint)
             VStack(alignment: .leading, spacing: 3) {
-                Text(ReminderRow.title(reminder.text)).lineLimit(2)
+                Text(reminder.text).lineLimit(2)
                 if let due = reminder.due {
                     Text(due, format: .dateTime.weekday(.abbreviated).hour().minute()).font(.footnote).foregroundStyle(.secondary)
                 }
@@ -92,7 +92,8 @@ struct ReminderDetailView: View {
                     Label(due.formatted(.dateTime.weekday(.wide).day().month(.abbreviated).hour().minute()), systemImage: "bell")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
-                MarkdownView(reminder.text).textSelection(.enabled)
+                Text(reminder.text).font(.title3.weight(.semibold)).textSelection(.enabled)
+                if let details = reminder.details { MarkdownView(details).textSelection(.enabled) }
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)

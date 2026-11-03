@@ -93,6 +93,8 @@ The bridge checks file identity and content before atomic, permission-preserving
 
 ### Reminders
 
+A reminder's `text` is its title: one line of at most 120 characters, used as the knock, the message's first line, and the list row. Context, steps, or links go in optional `details` (Markdown, up to 4,000 characters), sent below the title when it fires and shown when it is opened. `create_reminder` and `update_reminder` reject a multi-line or longer title with that instruction, so the model corrects itself; `update_reminder` keeps details when they are omitted and clears them with `null`. Scheduled reminders stored before the split were divided once at startup: the first line became the title and the full text the details.
+
 The model uses semantic tools: `current_time`, `list_reminders`, `create_reminder`, `update_reminder`, and `cancel_reminder`. Relative dates use the configured IANA timezone. Stored deadlines are valid ISO instants with an explicit offset. Creation and correction reject past times.
 
 Reminder identity is stable. Corrections and cancellations require the current version. Due reminders transition to `fired` and create an outbox item atomically. Lifecycle wakeups recover pending and overdue reminders after restart. This is a text-notification contract, not an iPhone system alarm or a hard real-time deadline.
@@ -446,6 +448,7 @@ The [development and operation runbook](../runbooks/local-development.md) owns l
 - 2026-10-22: Added the Aside context: activity summaries for chat and the brief, and owner memory search through the Mac.
 - 2026-10-22: Added failure causes to run notes and a once-a-day Telegram notice when a retrying commitment gives up.
 - 2026-10-22: Added image input (photos, image files and albums). Other attachments are skipped with a short reply instead of a rejected webhook.
+- 2026-11-03: Gave reminders a one-line title and separate details.
 - 2026-11-03: Turned off Mac knocks; knocks move to the phone with the app redesign.
 - 2026-11-03: Added text, Markdown, PDF, and Word files from Telegram, and nightly notes that keep what lasts from them in history search.
 - 2026-10-30: Added reranking, stemming, passage overlap, and date filters to history search.

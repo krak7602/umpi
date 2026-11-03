@@ -168,6 +168,8 @@ struct Reminder: Codable, Equatable, Sendable, Identifiable {
     /// "gentle" knocks once and quietly; absent is a full knock.
     var intensity: String? = nil
     var answer: Answer? = nil
+    /// Context, steps, or links beyond the one-line title.
+    var details: String? = nil
 }
 struct Choice: Codable, Equatable, Sendable, Identifiable {
     var id: String

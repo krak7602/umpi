@@ -215,3 +215,24 @@ test("a test alert goes to the app only and is pushed", async t => {
   assert.equal(f.chat.nextPush()!.seq, seq);
   assert.equal(f.owner.deliveries().length, 0, "nothing goes to Telegram");
 });
+
+test("a reminder is a one-line title with optional details; older long reminders are split once", t => {
+  const f = fixture(t);
+  const due = new Date(Date.now() + 60_000).toISOString();
+  assert.throws(() => f.owner.createReminder("r1", "Check D-U-N-S\n- email\n- spam", due, "telegram"), /one line; put context, steps, or links in details/);
+  assert.throws(() => f.owner.createReminder("r1", "x".repeat(121), due, "telegram"), /at most 120 characters/);
+  const created = f.owner.createReminder("r1", "Check for the D-U-N-S number", due, "telegram", undefined, "- Check email, including spam.\n- If D&B asks, send the Udyam certificate.");
+  assert.equal(created.details, "- Check email, including spam.\n- If D&B asks, send the Udyam certificate.");
+  const kept = f.owner.updateReminder("r1", 1, "Check for the D-U-N-S number today", due);
+  assert.equal(kept.details, created.details, "details are kept when not given");
+  assert.equal(f.owner.updateReminder("r1", 2, "Check D-U-N-S", due, undefined, null).details, undefined, "null clears details");
+  f.owner.updateReminder("r1", 3, "Check D-U-N-S", due, undefined, "Look in spam too.");
+  f.owner.fireReminders(Date.now() + 61_000);
+  assert.equal(f.owner.deliveries("reminder:r1:4")[0]!.text, "Reminder: Check D-U-N-S\n\nLook in spam too.");
+  // A reminder stored before this change is split when the store opens.
+  const long = "Elsewhere: check what you're waiting on (D-U-N-S window opens today)\n- D-U-N-S number from D&B\n- BillDesk verification";
+  f.db.all("INSERT INTO umpi_reminders VALUES (?,?,?,?)", "old", "scheduled", Date.parse(due), JSON.stringify({ id: "old", version: 1, text: long, dueAt: due, channel: "telegram", status: "scheduled", createdAt: due }));
+  const reopened = new Store(f.db).reminder("old")!;
+  assert.equal(reopened.text, "Elsewhere: check what you're waiting on (D-U-N-S window opens today)");
+  assert.equal(reopened.details, long);
+});

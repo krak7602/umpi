@@ -51,7 +51,9 @@ final class KnockScheduler {
             for attempt in 0..<(gentle ? 1 : 3) {
                 let content = UNMutableNotificationContent()
                 content.title = attempt == 0 ? "Umpi" : "Umpi · still waiting"
-                content.body = reminder.text
+                // The title, then the first line of the details as a hint; the rest is in the app.
+                let hint = reminder.details.flatMap { $0.split(separator: "\n").first }.map { String($0).replacingOccurrences(of: #"^([-*+]|\d+\.)\s+"#, with: "", options: .regularExpression) }
+                content.body = hint.map { "\(reminder.text)\n\($0)" } ?? reminder.text
                 content.categoryIdentifier = category
                 content.threadIdentifier = "knock.\(reminder.id)"
                 content.interruptionLevel = gentle ? .active : .timeSensitive
