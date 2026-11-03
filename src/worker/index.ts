@@ -720,7 +720,7 @@ export class Assistant extends Agent<Env> {
 
   /** An app message joins the Telegram conversation; its reply stays in the app. */
   private async admitApp(id: string, deviceId: string, message: AppMessage): Promise<Operation> {
-    const kind = message.images ? "app-image" : message.document ? "app-file" : "app-text";
+    const kind = message.images ? "app-image" : message.document ? "app-file" : message.voice ? "app-voice" : "app-text";
     const text = message.text.trim() ? message.text : message.images ? IMAGE_WITHOUT_CAPTION : message.document ? FILE_WITHOUT_CAPTION : message.text;
     return this.admit(id, text, "telegram", () => { this.companion.requireDevice(deviceId); }, {
       kind, ...(message.sentAt ? { sentAt: message.sentAt } : {}),

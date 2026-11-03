@@ -323,7 +323,7 @@ private struct CodeBlockView: View {
                 .accessibilityIdentifier("markdown.code.copy")
             }
             ScrollView(.horizontal, showsIndicators: false) {
-                Text(text).font(.system(.footnote, design: .monospaced)).lineSpacing(2).textSelection(.enabled).fixedSize()
+                Text(SyntaxHighlighter.shared.highlight(text, language: language)).font(.system(.footnote, design: .monospaced)).lineSpacing(2).textSelection(.enabled).fixedSize()
             }
         }
         .padding(12)

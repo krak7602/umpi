@@ -33,7 +33,7 @@ function fixture(t: TestContext) {
   const context: CompanionHttpContext = { companion, config, chat, async wake() {}, async requireModel() {},
     async admitApp(id, deviceId, message) {
       companion.requireDevice(deviceId);
-      return owner.admit(id, message.text || "[attachment]", "telegram", "telegram-session", { kind: message.images ? "app-image" : message.document ? "app-file" : "app-text",
+      return owner.admit(id, message.text || "[attachment]", "telegram", "telegram-session", { kind: message.images ? "app-image" : message.document ? "app-file" : message.voice ? "app-voice" : "app-text",
         ...(message.document ? { file: { name: message.document.name, characters: message.document.text.length } } : {}) }, message.images, message.document);
     },
     async readFile(name, bytes) { return { name, text: new TextDecoder().decode(bytes), truncated: false }; },
@@ -120,12 +120,15 @@ test("the app reads history in pages, changes the notification setting, and send
   assert.equal(record(await again!.json()).id, op.id, "a resent message is admitted once");
   const file = await companionRequest(request("/api/device/messages", token, { id: "m2", file: { name: "plan.md", data: Buffer.from("Rice once a day.").toString("base64") } }), f.context);
   assert.match(String(f.owner.modelContent(f.owner.operation(String(record(await file!.json()).id))!)), /<owner-file name="plan\.md">\nRice once a day\.\n<\/owner-file>$/);
+  await companionRequest(request("/api/device/messages", token, { id: "m0", voice: true, text: "Remember to buy eggs" }), f.context);
+  assert.equal(f.chat.page().entries.at(-1)!.kind, "voice", "a voice message is marked as one");
   const image = { data: Buffer.from([0xff, 0xd8, 0xff, 0xe0]).toString("base64"), mimeType: "image/jpeg" };
   await companionRequest(request("/api/device/messages", token, { id: "m3", text: "What is this?", images: [image] }), f.context);
   const latest = (await page("?after=5")).entries as ChatEntry[];
   assert.deepEqual(latest.map(entry => [entry.surface, entry.kind, entry.text, entry.file ?? entry.images ?? null]),
-    [["app", "text", "Hi from the phone", null], ["app", "file", "[attachment]", "plan.md"], ["app", "image", "What is this?", 1]]);
+    [["app", "text", "Hi from the phone", null], ["app", "file", "[attachment]", "plan.md"], ["app", "voice", "Remember to buy eggs", null], ["app", "image", "What is this?", 1]]);
   await assert.rejects(companionRequest(request("/api/device/messages", token, { id: "m4" }), f.context), /needs text, images, or a file/);
+  await assert.rejects(companionRequest(request("/api/device/messages", token, { id: "m6", voice: true, text: "x", images: [image] }), f.context), /transcript only/);
   await assert.rejects(companionRequest(request("/api/device/messages", token, { id: "m5", file: { name: "x", data: "not base64!" } }), f.context), /base64/);
   await assert.rejects(companionRequest(request("/api/device/chat", "not-a-paired-token"), f.context));
   await assert.rejects(companionRequest(request("/api/device/chat/socket", token), f.context), /WebSocket/);

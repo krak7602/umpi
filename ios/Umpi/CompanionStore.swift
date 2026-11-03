@@ -88,7 +88,7 @@ final class CompanionStore {
     /// App messages still waiting in the durable outbox, oldest first, for the chat to show as sending.
     var pendingMessages: [(id: String, text: String, failed: Bool)] {
         state.outbox.compactMap { entry in
-            if case .message(let message) = entry.payload { return (message.id, message.text, entry.status != "queued") }
+            if case .message(let message) = entry.payload { return (message.id, message.text.isEmpty ? "[Attachment]" : message.text, entry.status != "queued") }
             return nil
         }
     }
@@ -219,6 +219,23 @@ final class CompanionStore {
         }
         let message = MessageRequest(id: UUID().uuidString, text: text)
         guard enqueue(OutboxEntry(id: message.id, payload: .message(message))) else { return false }
+        await flushOutbox()
+        return true
+    }
+    /// Sends a chat message with an optional voice transcript flag or attachment, through the durable outbox.
+    @discardableResult func sendChat(text: String, voice: Bool = false, attachment: OutgoingAttachment? = nil) async -> Bool {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty || attachment != nil else { return false }
+        guard text.isEmpty || DeviceActionValidation.text(text, limit: 16_384) else {
+            report("Enter a message of at most 16,384 characters."); return false
+        }
+        let id = UUID().uuidString
+        if let attachment {
+            do { try AttachmentFiles.save(attachment, id: id) } catch { report("The attachment could not be saved for sending."); return false }
+        }
+        let message = MessageRequest(id: id, text: text, sentAt: ISO8601DateFormatter().string(from: Date()),
+                                     voice: voice ? true : nil, hasAttachment: attachment == nil ? nil : true)
+        guard enqueue(OutboxEntry(id: message.id, payload: .message(message))) else { AttachmentFiles.remove(id); return false }
         await flushOutbox()
         return true
     }
@@ -512,6 +529,7 @@ final class CompanionStore {
         if case .action(let action) = entry.payload, state.effectOutcomes[action.id] != nil {
             report("An effect already has a local outcome. Its registration and receipt must be synchronized."); return
         }
+        if case .message(let message) = entry.payload, message.hasAttachment == true { AttachmentFiles.remove(message.id) }
         state.outbox.removeAll { $0.id == id }
         state.conflicts.removeAll { $0.id == id }
         for index in state.runs.indices where state.runs[index].waitingOperationID == id {
@@ -597,7 +615,16 @@ final class CompanionStore {
                         }
                     }
                 case .message(let message):
-                    let data = try await client.send(path: "/api/device/messages", method: "POST", body: encoder.encode(message))
+                    struct Body: Encodable {
+                        var id: String; var text: String?; var sentAt: String?; var voice: Bool?
+                        var images: [OutgoingAttachment.Image]?; var file: OutgoingAttachment.File?
+                    }
+                    let attachment = message.hasAttachment == true ? AttachmentFiles.load(message.id) : nil
+                    if message.hasAttachment == true && attachment == nil { throw CompanionClientError.http(status: 400, message: "The attachment is no longer on this phone. Discard this message and attach it again.", current: nil) }
+                    let body = Body(id: message.id, text: message.text.isEmpty ? nil : message.text, sentAt: message.sentAt, voice: message.voice,
+                                    images: attachment?.images, file: attachment?.file)
+                    let data = try await client.send(path: "/api/device/messages", method: "POST", body: encoder.encode(body))
+                    AttachmentFiles.remove(message.id)
                     guard generation == sessionGeneration else { return }
                     let operation = try decoder.decode(Operation.self, from: data)
                     state.snapshot?.operations.removeAll { $0.id == operation.id }
