@@ -101,6 +101,18 @@ export class ChatLog {
     if (seq !== undefined) this.db.all("INSERT INTO umpi_chat_push (seq, status) VALUES (?, 'pending') ON CONFLICT(seq) DO NOTHING", seq);
   }
 
+  /** Replaces a message's buttons after one was pressed; an empty keyboard removes them. */
+  setButtons(seq: number, markup: TelegramMarkup): void {
+    const entry = this.entry(seq);
+    if (!entry) return;
+    const { seq: _seq, at: _at, buttons: _old, ...rest } = entry;
+    const buttons = chatButtons(markup);
+    this.db.all("UPDATE umpi_chat SET data=? WHERE seq=?", JSON.stringify({ ...rest, ...(buttons ? { buttons } : {}) }), seq);
+    this.changed?.(this.latest());
+  }
+  /** Called when an existing entry changes, so open apps read it again. */
+  changed: ((latest: number) => void) | undefined;
+
   entry(seq: number): ChatEntry | undefined {
     const row = this.db.all<{ seq: number; at: number; data: string }>("SELECT seq, at, data FROM umpi_chat WHERE seq=?", seq)[0];
     return row ? { ...JSON.parse(row.data) as NewEntry, seq: row.seq, at: new Date(row.at).toISOString() } : undefined;

@@ -22,7 +22,11 @@ The app's chat is the owner's Telegram conversation, not a second one. `POST /ap
 
 `chat.ts` keeps the readable history in the coordinator's SQLite, written in the same transactions that admit owner messages and queue Umpi's Telegram messages: what the owner said on either surface, Umpi's replies, and the messages Umpi started (brief, reminders, mail, approvals and questions, with their buttons). Telegram command panels (`/mail`, `/schedule`, memory views, and other menus) are Telegram's own interface and are left out. `GET /api/device/chat` pages it by position: `?limit=` (default 50, at most 100) returns the newest, `?before=N` older entries, and `?after=N` newer ones; `latest` is the newest position. Images are counted, not stored; a file is named.
 
-The app's first tab, **Chat** (`ChatView.swift`, `ChatModel.swift`), shows this history with Markdown, loads earlier pages on request, shows messages still in the durable outbox as sending, and shows "Umpi is thinking…" until the reply to the latest app message arrives. It sends through the same outbox as other device requests. Messages said in Telegram are marked "Telegram". Buttons are shown but still answered in Telegram.
+The app's first tab, **Chat** (`ChatView.swift`, `ChatModel.swift`), shows this history, loads earlier pages on request, shows messages still in the durable outbox as sending, and shows "Umpi is thinking…" until the reply to the latest app message arrives. It sends through the same outbox as other device requests; a small format bar inserts Markdown for bold, lists, checkboxes, and code. The owner's messages are tinted bubbles; Umpi's replies read like a note, full width; messages Umpi started (reminders, questions, approvals, alerts) are cards. Messages said in Telegram are marked "Telegram".
+
+`MarkdownView.swift` renders Markdown with Apple's swift-markdown parser: headings, lists, checklists (Apple Notes circles), tables (hairline borders, wide tables scroll), quotes, code blocks with copy, rules, and Obsidian's callouts (`> [!tip] Title`), highlights (`==text==`), and wiki links (`[[Note|alias]]`). A `mermaid` code block is drawn by [Pele](https://github.com/obsidianmd/pele) (MIT, bundled in `ios/Umpi/Resources/Pele` with its license) in a small offline web view with the system's colors; a diagram Pele cannot draw shows its source.
+
+Buttons on Umpi's messages work in the app. `POST /api/device/chat/press {seq, data}` runs the same handler as a Telegram press. When the message reached Telegram, the press is bound to that Telegram message and its Telegram keyboard changes too; otherwise approvals and questions are bound to their own message, and other buttons say to answer in Telegram. A question answered in the app is replied to in the app.
 
 The app keeps a socket at `GET /api/device/chat/socket` (WebSocket, device credential). It carries only `{"type":"chat","latest":N}` when the conversation grows; the app then reads the new entries. A revoked device's socket is closed.
 
@@ -134,6 +138,7 @@ The agent tools are `read_companion_state`, `update_companion`, and `request_dev
 | `GET /api/device/chat` | Device credential; shared conversation history by position |
 | `GET /api/device/chat/socket` | Device credential; WebSocket that announces new positions |
 | `GET`, `PUT /api/device/chat/settings` | Device credential; `{expectedVersion, notify}` |
+| `POST /api/device/chat/press` | Device credential; `{seq, data}` presses a button on a chat message |
 | `DELETE /api/device/session` | Device credential; revoke itself |
 
 Mutations use `operationId`, `workflowId`, `expectedRevision`, and explicit `create`, `define`, `set_values`, `archive`, `restore`, or `remove`. Missing values remain unchanged; `null` explicitly clears a value. Stale revisions return 409. Replay identities bind the actor and exact request. Pending device actions are retained independently of the recent completed-action window.

@@ -11,7 +11,7 @@ struct ChatView: View {
         let pending = store.pendingMessages
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
+                LazyVStack(alignment: .leading, spacing: 16) {
                     if chat.hasOlder {
                         Button("Load earlier messages") { Task { await chat.loadOlder(store) } }
                             .font(.footnote).frame(maxWidth: .infinity)
@@ -22,7 +22,7 @@ struct ChatView: View {
                             .padding(.top, 60)
                     }
                     ForEach(chat.entries) { entry in
-                        ChatBubble(entry: entry).id(entry.seq)
+                        ChatBubble(entry: entry) { data in Task { await chat.press(store, seq: entry.seq, data: data) } }.id(entry.seq)
                     }
                     ForEach(pending, id: \.id) { message in
                         PendingBubble(text: message.text, failed: message.failed)
@@ -54,8 +54,11 @@ struct ChatView: View {
             }
         }
         .overlay(alignment: .top) {
-            if let error = chat.errorMessage {
-                Text(error).font(.footnote).padding(8).background(.thinMaterial, in: Capsule()).padding(.top, 4)
+            if let message = chat.notice ?? chat.errorMessage {
+                Text(message).font(.footnote).padding(.horizontal, 12).padding(.vertical, 8).background(.thinMaterial, in: Capsule()).padding(.top, 4)
+                    .onTapGesture { chat.clearNotice() }
+                    .task(id: message) { try? await Task.sleep(for: .seconds(4)); chat.clearNotice() }
+                    .accessibilityIdentifier("chat.notice")
             }
         }
         .task { await chat.stayLive(store) }
@@ -63,6 +66,32 @@ struct ChatView: View {
     }
 
     private var composer: some View {
+        VStack(spacing: 6) {
+            if composing { formatBar }
+            composerRow
+        }
+        .padding(.horizontal).padding(.vertical, 8)
+        .background(.bar)
+    }
+
+    /// Inserts Markdown the owner would otherwise type by hand; the text stays plain Markdown.
+    private var formatBar: some View {
+        HStack(spacing: 18) {
+            Button { draft += draft.isEmpty || draft.hasSuffix(" ") || draft.hasSuffix("\n") ? "****" : " ****" } label: { Image(systemName: "bold") }
+                .accessibilityLabel("Bold")
+            Button { draft += draft.isEmpty || draft.hasSuffix("\n") ? "- " : "\n- " } label: { Image(systemName: "list.bullet") }
+                .accessibilityLabel("List item")
+            Button { draft += draft.isEmpty || draft.hasSuffix("\n") ? "- [ ] " : "\n- [ ] " } label: { Image(systemName: "checklist") }
+                .accessibilityLabel("Checkbox")
+            Button { draft += draft.isEmpty || draft.hasSuffix("\n") ? "```\n\n```" : "\n```\n\n```" } label: { Image(systemName: "chevron.left.forwardslash.chevron.right") }
+                .accessibilityLabel("Code block")
+            Spacer()
+        }
+        .font(.callout)
+        .foregroundStyle(.secondary)
+    }
+
+    private var composerRow: some View {
         HStack(alignment: .bottom, spacing: 8) {
             TextField("Message Umpi", text: $draft, axis: .vertical)
                 .lineLimit(1...6)
@@ -83,40 +112,86 @@ struct ChatView: View {
             .accessibilityIdentifier("chat.send")
             .accessibilityLabel("Send")
         }
-        .padding(.horizontal).padding(.vertical, 8)
-        .background(.bar)
     }
 }
 
 private struct ChatBubble: View {
     let entry: ChatEntry
+    let press: (String) -> Void
 
     var body: some View {
-        VStack(alignment: entry.fromOwner ? .trailing : .leading, spacing: 4) {
-            VStack(alignment: .leading, spacing: 6) {
-                if let file = entry.file { Label(file, systemImage: "doc").font(.footnote.weight(.semibold)) }
-                if let images = entry.images { Label(images == 1 ? "Image" : "\(images) images", systemImage: "photo").font(.footnote.weight(.semibold)) }
-                Text(rendered).textSelection(.enabled)
-            }
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .foregroundStyle(entry.fromOwner ? Color.white : Color.primary)
-            .background(entry.fromOwner ? Color.accentColor : Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18))
-            if let rows = entry.buttons {
-                // Buttons are shown for reference until they can be answered here; Telegram still takes the answer.
-                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                    HStack { ForEach(row, id: \.data) { button in Text(button.label).font(.footnote).padding(.horizontal, 10).padding(.vertical, 5).overlay(Capsule().stroke(.tertiary)) } }
-                }
-            }
-            Text(caption).font(.caption2).foregroundStyle(.secondary)
+        VStack(alignment: entry.fromOwner ? .trailing : .leading, spacing: 6) {
+            if entry.fromOwner { ownerBubble } else if entry.kind == "message" { messageCard } else { reply }
+            if let rows = entry.buttons { buttons(rows) }
+            Text(caption).font(.caption2).foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity, alignment: entry.fromOwner ? .trailing : .leading)
-        .padding(entry.fromOwner ? .leading : .trailing, 40)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chat.entry.\(entry.seq)")
     }
 
-    private var rendered: AttributedString {
-        (try? AttributedString(markdown: entry.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(entry.text)
+    /// The owner's message: a Messages-style tinted bubble on the right.
+    private var ownerBubble: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            attachments
+            MarkdownView(entry.text, onOwnerTint: true).textSelection(.enabled)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 9)
+        .foregroundStyle(.white)
+        .tint(.white)
+        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .padding(.leading, 48)
+    }
+    /// Umpi's reply reads like a note: full width, no bubble.
+    private var reply: some View {
+        MarkdownView(entry.text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+    }
+    /// A message Umpi started (a reminder, the brief, an alert): a card, so it stands apart from the conversation.
+    private var messageCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(cardTitle, systemImage: cardSymbol).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            MarkdownView(entry.text).textSelection(.enabled)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+    @ViewBuilder private var attachments: some View {
+        if let file = entry.file { Label(file, systemImage: "doc.text").font(.footnote.weight(.semibold)) }
+        if let images = entry.images { Label(images == 1 ? "Photo" : "\(images) photos", systemImage: "photo").font(.footnote.weight(.semibold)) }
+    }
+    private func buttons(_ rows: [[ChatEntry.Button]]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                HStack(spacing: 8) {
+                    ForEach(row, id: \.data) { button in
+                        Button(button.label) { press(button.data) }
+                            .buttonStyle(.bordered).buttonBorderShape(.capsule)
+                            .accessibilityIdentifier("chat.button.\(entry.seq).\(button.label)")
+                    }
+                }
+            }
+        }
+    }
+
+    private var cardTitle: String {
+        let id = entry.id
+        if id.hasPrefix("umpi:reminder:") { return "Reminder" }
+        if id.hasPrefix("umpi:approval:") || id.hasPrefix("umpi:coding-approval:") { return "Needs your approval" }
+        if id.hasPrefix("umpi:choice:") { return "Question" }
+        if id.hasPrefix("umpi:alert:") { return "Coming up" }
+        if id.hasPrefix("umpi:memory:") { return "Memory" }
+        return "Umpi"
+    }
+    private var cardSymbol: String {
+        switch cardTitle {
+        case "Reminder": "bell"
+        case "Needs your approval": "checkmark.shield"
+        case "Question": "questionmark.bubble"
+        case "Coming up": "calendar"
+        case "Memory": "brain"
+        default: "sparkles"
+        }
     }
     private var caption: String {
         var parts: [String] = []
@@ -134,8 +209,8 @@ private struct PendingBubble: View {
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 4) {
-            Text(text)
-                .padding(.horizontal, 12).padding(.vertical, 8)
+            MarkdownView(text, onOwnerTint: true)
+                .padding(.horizontal, 14).padding(.vertical, 9)
                 .foregroundStyle(.white)
                 .background(Color.accentColor.opacity(0.6), in: RoundedRectangle(cornerRadius: 18))
             Text(failed ? "Not sent — see Settings › Queued changes" : "Sending…").font(.caption2).foregroundStyle(failed ? .red : .secondary)

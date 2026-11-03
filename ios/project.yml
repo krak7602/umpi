@@ -20,6 +20,10 @@ settings:
   configs:
     Debug:
       SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+packages:
+  Markdown:
+    url: https://github.com/swiftlang/swift-markdown
+    exactVersion: 0.9.0
 targets:
   Umpi:
     type: application
@@ -39,6 +43,7 @@ targets:
         INFOPLIST_FILE: Umpi/Info.plist
     dependencies:
       - target: UmpiWidgets
+      - package: Markdown
   UmpiWidgets:
     type: app-extension
     platform: iOS

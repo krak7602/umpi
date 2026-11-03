@@ -16,6 +16,7 @@ export interface CompanionHttpContext {
   /** Admits an app message to the owner's shared conversation; the reply stays in the app. */
   admitApp(id: string, deviceId: string, message: AppMessage): Promise<Operation>;
   readFile(name: string, bytes: Uint8Array): Promise<TelegramDocument>;
+  press(seq: number, data: string): Promise<{ text: string }>;
 }
 export interface AppMessage { text: string; sentAt?: string; images?: TelegramImage[]; document?: TelegramDocument }
 
@@ -99,6 +100,12 @@ export async function companionRequest(request: Request, context: CompanionHttpC
   await context.wake();
   companion.requireDevice(device.id);
   if (path === "/api/device/chat/settings") return Response.json(context.chat.configure(body));
+  if (path === "/api/device/chat/press") {
+    const input = record(body); exactKeys(input, ["seq", "data"]);
+    if (typeof input.seq !== "number" || !Number.isSafeInteger(input.seq) || input.seq < 1) throw new InputError("Invalid chat position");
+    const result = await context.press(input.seq, boundedText(input.data, 64, "button"));
+    return Response.json({ text: result.text });
+  }
   if (path === "/api/device/register") return Response.json(companion.register(device.id, body));
   if (path === "/api/device/changes") return Response.json(companion.mutate(body, `device:${device.id}`));
   if (path === "/api/device/actions") return Response.json(companion.requestAction(body, device.id));

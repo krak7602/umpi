@@ -28,3 +28,62 @@ final class ChatTests: XCTestCase {
         XCTAssertTrue(model.isThinking(now: now, pending: 1), "a message still in the outbox counts as waiting")
     }
 }
+
+final class MarkdownTests: XCTestCase {
+    func testParsesTheBlocksClaudeWrites() {
+        let blocks = MarkdownBlock.parse("""
+        # Plan
+        Some **bold** and `code`.
+
+        | Item | Cost |
+        | --- | ---: |
+        | Eggs | 720 |
+
+        - [x] Done
+        - [ ] Open
+
+        1. First
+        2. Second
+
+        > Quoted
+
+        ```swift
+        let x = 1
+        ```
+
+        ---
+        """)
+        guard blocks.count == 8 else { return XCTFail("got \(blocks.count) blocks: \(blocks)") }
+        if case .heading(let level, _) = blocks[0] { XCTAssertEqual(level, 1) } else { XCTFail("heading") }
+        if case .table(let header, let rows, let alignments) = blocks[2] {
+            XCTAssertEqual(header.map { String($0.characters) }, ["Item", "Cost"])
+            XCTAssertEqual(rows.first.map { $0.map { String($0.characters) } }, ["Eggs", "720"])
+            XCTAssertEqual(alignments.last ?? nil, .trailing)
+        } else { XCTFail("table") }
+        if case .list(false, _, let items) = blocks[3] { XCTAssertEqual(items.map(\.checkbox), [true, false]) } else { XCTFail("checklist") }
+        if case .list(true, let start, let items) = blocks[4] { XCTAssertEqual(start, 1); XCTAssertEqual(items.count, 2) } else { XCTFail("ordered") }
+        if case .code(let language, let text) = blocks[6] { XCTAssertEqual(language, "swift"); XCTAssertEqual(text, "let x = 1") } else { XCTFail("code") }
+        XCTAssertEqual(blocks[7], .rule)
+    }
+}
+
+final class ObsidianMarkdownTests: XCTestCase {
+    func testCalloutsMermaidHighlightsAndWikiLinks() {
+        let blocks = MarkdownBlock.parse("""
+        > [!warning] Retest in February
+        > Fast for 10–12 hours.
+
+        ```mermaid
+        graph TD; A-->B
+        ```
+
+        See ==this== and [[Health|my health note]].
+        """)
+        guard blocks.count == 3 else { return XCTFail("got \(blocks)") }
+        if case .callout(let kind, let title, let inner) = blocks[0] {
+            XCTAssertEqual(kind, .warning); XCTAssertEqual(title, "Retest in February"); XCTAssertEqual(inner.count, 1)
+        } else { XCTFail("callout") }
+        XCTAssertEqual(blocks[1], .mermaid("graph TD; A-->B"))
+        if case .paragraph(let text) = blocks[2] { XCTAssertEqual(String(text.characters), "See this and my health note.") } else { XCTFail("paragraph") }
+    }
+}
