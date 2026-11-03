@@ -1,7 +1,7 @@
 import { InputError, boundedText, record } from "../shared/protocol.js";
 import { StateError, type Delivery, type TelegramMarkup } from "./store.js";
 import { companionRole } from "./companion-routes.js";
-import { IMAGE_TYPES, MAX_IMAGE_BYTES, MAX_IMAGE_SIDE, type TelegramImageMessage, type TelegramTextMessage, type TelegramUnreadableMessage, type TelegramVoiceNote } from "../shared/voice-note.js";
+import { IMAGE_TYPES, MAX_IMAGE_BYTES, MAX_IMAGE_SIDE, type TelegramFileMessage, type TelegramImageMessage, type TelegramTextMessage, type TelegramUnreadableMessage, type TelegramVoiceNote } from "../shared/voice-note.js";
 
 export interface TelegramConfig {
   TELEGRAM_BOT_TOKEN?: string;
@@ -51,7 +51,7 @@ export async function secretEqual(actual: string, expected: string): Promise<boo
 }
 
 export type TelegramUpdate =
-  | TelegramTextMessage | TelegramVoiceNote | TelegramImageMessage | TelegramUnreadableMessage
+  | TelegramTextMessage | TelegramVoiceNote | TelegramImageMessage | TelegramFileMessage | TelegramUnreadableMessage
   | { kind: "callback"; id: string; callbackId: string; messageId: number; data: string };
 
 function requireTelegramOwner(sender: Record<string, unknown>, chat: Record<string, unknown>, config: TelegramConfig): void {
@@ -130,6 +130,14 @@ export function telegramUpdate(value: unknown, config: TelegramConfig): Telegram
     if (message.media_group_id !== undefined) result.mediaGroupId = boundedText(message.media_group_id, 64, "Telegram album ID");
     return result;
   }
+  const document = telegramDocument(message);
+  if (document) {
+    if (message.text !== undefined) throw new InputError("Ambiguous Telegram file message");
+    if (!Number.isSafeInteger(message.message_id) || Number(message.message_id) <= 0) throw new InputError("Invalid Telegram file metadata");
+    const result: TelegramFileMessage = { kind: "file", id, messageId: message.message_id as number, file: document, sentAt: telegramSentAt(message.date) };
+    if (caption !== undefined) result.caption = caption;
+    return result;
+  }
   const attachment = UNREADABLE.find(([field]) => message[field] !== undefined)?.[1];
   if (attachment) {
     if (message.text !== undefined) throw new InputError("Ambiguous Telegram message");
@@ -153,6 +161,25 @@ const UNREADABLE = [
   ["document", "a file"], ["sticker", "a sticker"], ["location", "a location"], ["venue", "a location"],
   ["contact", "a contact"], ["poll", "a poll"], ["dice", "a dice roll"], ["paid_media", "paid media"], ["story", "a story"],
 ] as const;
+
+/** Documents read as text by extension or declared type; PDF and Word are converted. */
+const DOCUMENT_EXTENSIONS = ["md", "markdown", "txt", "text", "csv", "tsv", "json", "pdf", "docx"];
+const DOCUMENT_TYPES = ["text/plain", "text/markdown", "text/x-markdown", "text/csv", "text/tab-separated-values", "application/json", "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document"];
+
+function telegramDocument(message: Record<string, unknown>): TelegramFileMessage["file"] | undefined {
+  if (message.document === undefined) return undefined;
+  const document = record(message.document);
+  const mimeType = typeof document.mime_type === "string" ? document.mime_type.toLowerCase() : undefined;
+  const rawName = typeof document.file_name === "string" ? document.file_name : "";
+  const extension = rawName.includes(".") ? rawName.slice(rawName.lastIndexOf(".") + 1).toLowerCase() : "";
+  if (!DOCUMENT_EXTENSIONS.includes(extension) && !(mimeType && DOCUMENT_TYPES.includes(mimeType))) return undefined;
+  // The name is shown to the model; keep it short and printable.
+  const name = rawName.replace(/[\u0000-\u001f\u007f<>"]/g, "").trim().slice(0, 120) || "file";
+  const fileSize = telegramImageSize(document.file_size, "file size");
+  return { fileId: telegramFileId(document.file_id), fileUniqueId: telegramFileId(document.file_unique_id), name,
+    ...(fileSize === undefined ? {} : { fileSize }), ...(mimeType && mimeType.length <= 128 ? { mimeType } : {}) };
+}
 
 function telegramImageSize(value: unknown, label: string): number | undefined {
   if (value === undefined) return undefined;

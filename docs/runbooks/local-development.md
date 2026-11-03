@@ -131,6 +131,8 @@ The hosted coordinator owns refresh after handoff; local auth status can therefo
 
 Send a photo, an album, or an image file in the private Telegram chat, with or without a caption. No command or configuration is needed. An image file over 1 MB is refused with a reply; send it as a photo so Telegram compresses it. Videos and other attachments are skipped. With a caption, Umpi acts on the caption and says the attachment was not used. [The Telegram contract](../subsystems/assistant-runtime.md#images-and-other-attachments) owns the limits. Protected `telegram.voiceNotes.inbox` status shows image outcomes with `source: "image"`.
 
+Send a `.md`, `.txt`, PDF, or Word file the same way. Umpi reads its text and replies; that night the [nightly run](../subsystems/assistant-runtime.md#nightly-run) writes a note with what lasts from it, which history search then finds. Status shows file outcomes with `source: "file"`.
+
 ### Operate coding tasks
 
 The [authoritative coding contract](../subsystems/assistant-runtime.md#coding-tasks) defines approval, tools, limits, cloud lifetime, and completion. The [Mac contract](../subsystems/mac-executor.md#coding-execution) defines private journals and foreground-group supervision. Bounded native/cloud evidence is in [verification](../learning/assistant-core-verification.md#coding-task-verification). Every installation requires its own explicit resource, deployment, and native opt-in decisions.

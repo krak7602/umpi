@@ -1,13 +1,14 @@
 import { boundedText, identifier, InputError, timestamp } from "../shared/protocol.js";
 import {
-  MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE, MAX_TELEGRAM_INBOX_PENDING, MAX_VOICE_NOTE_BYTES, MAX_VOICE_NOTE_SECONDS, MAX_VOICE_TRANSCRIPT_LENGTH,
-  VoiceNoteError, type TelegramImage, type TelegramImageMessage, type TelegramInboxDelivery, type TelegramInboxInput, type TelegramVoiceAudio,
+  MAX_FILE_BYTES, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE, MAX_TELEGRAM_INBOX_PENDING, MAX_VOICE_NOTE_BYTES, MAX_VOICE_NOTE_SECONDS, MAX_VOICE_TRANSCRIPT_LENGTH,
+  VoiceNoteError, type TelegramDocument, type TelegramFileMessage, type TelegramImage, type TelegramImageMessage, type TelegramInboxDelivery, type TelegramInboxInput, type TelegramVoiceAudio,
   type TelegramVoiceNote, type VoiceNoteFailureCode,
 } from "../shared/voice-note.js";
 
 /** Telegram sends album items as separate updates within about a second; the first waits this long for the rest. */
 export const ALBUM_WAIT_MS = 2_000;
 export const IMAGE_WITHOUT_CAPTION = "[Image without a caption]";
+export const FILE_WITHOUT_CAPTION = "[File without a caption]";
 /** Text keeps retrying admission. An image stops after this many tries so it cannot hold up later messages. */
 const MAX_IMAGE_DELIVERY_ATTEMPTS = 3;
 import { StateError, type Database } from "./store.js";
@@ -17,6 +18,8 @@ export interface TelegramInboxOptions {
   download(note: TelegramVoiceNote, signal: AbortSignal): Promise<TelegramVoiceAudio>;
   /** Downloads one image of at most `maxBytes`, base64-encoded. */
   downloadImage(image: TelegramImageMessage["image"], maxBytes: number, signal: AbortSignal): Promise<TelegramImage & { bytes: number }>;
+  /** Downloads one document and reads its text. Read-only, so an interrupted attempt may be repeated. */
+  readFile(file: TelegramFileMessage["file"], signal: AbortSignal): Promise<TelegramDocument>;
   transcribe(audio: TelegramVoiceAudio, signal: AbortSignal): Promise<string>;
   deliver(input: TelegramInboxDelivery): Promise<string>;
   notify(id: string, text: string): void;
@@ -32,6 +35,8 @@ interface InboxEntry {
   updatedAt: string;
   due: number;
   transcript?: string;
+  /** A document's text, kept from reading until the message is delivered. */
+  document?: TelegramDocument;
   operationId?: string;
   attemptId?: string;
   dispatchedAt?: string;
@@ -58,6 +63,8 @@ const failures: Record<VoiceNoteFailureCode | "queue_full", string> = {
   image_too_large: "This image is larger than 1 MB. Please send it as a photo, not as a file, so Telegram compresses it.",
   image_download_failed: "The image could not be downloaded or is not a JPEG, PNG, WebP or GIF image. No message was sent to the assistant. Please send it again.",
   image_not_delivered: "The image message could not be confirmed as passed to the assistant. If no answer follows, please send it again.",
+  file_too_large: "This file is larger than 10 MB. Please send a smaller file, or paste the part that matters.",
+  file_unreadable: "The file could not be downloaded or read as text. No message was sent to the assistant. Please send it again, or paste its text.",
   unreadable: "I can't read this kind of message yet, so I did not act on it.",
   queue_full: "The Telegram message queue is full (eight pending messages). This message was not sent to the assistant. Please wait and send it again with a new message.",
 };
@@ -83,6 +90,18 @@ function intent(input: TelegramInboxInput): TelegramInboxInput {
         ...(image.fileSize !== undefined ? { fileSize: image.fileSize } : {}), ...(image.mimeType !== undefined ? { mimeType: boundedText(image.mimeType, 128, "image MIME type") } : {}) },
       ...(input.caption !== undefined && input.caption !== "" ? { caption: boundedText(input.caption, 1_024, "image caption") } : {}),
       ...(input.mediaGroupId !== undefined ? { mediaGroupId: boundedText(input.mediaGroupId, 64, "Telegram album ID") } : {}),
+    };
+  }
+  if (input.kind === "file") {
+    const file = input.file;
+    if (!Number.isSafeInteger(input.messageId) || input.messageId < 1 ||
+        (file.fileSize !== undefined && (!Number.isSafeInteger(file.fileSize) || file.fileSize <= 0))) throw new InputError("Invalid Telegram file metadata");
+    return {
+      kind: "file", id: input.id, messageId: input.messageId, sentAt: timestamp(input.sentAt, "Telegram sent time"),
+      file: { fileId: boundedText(file.fileId, 1_024, "Telegram file ID"), fileUniqueId: boundedText(file.fileUniqueId, 1_024, "Telegram unique file ID"),
+        name: boundedText(file.name, 120, "file name"), ...(file.fileSize !== undefined ? { fileSize: file.fileSize } : {}),
+        ...(file.mimeType !== undefined ? { mimeType: boundedText(file.mimeType, 128, "file MIME type") } : {}) },
+      ...(input.caption !== undefined && input.caption !== "" ? { caption: boundedText(input.caption, 1_024, "file caption") } : {}),
     };
   }
   if (input.kind !== "voice" || !Number.isSafeInteger(input.messageId) || input.messageId < 1 ||
@@ -170,6 +189,7 @@ export class TelegramInbox {
       const code = accepted.kind === "voice" && accepted.duration > MAX_VOICE_NOTE_SECONDS ? "too_long"
         : accepted.kind === "voice" && (accepted.fileSize ?? 0) > MAX_VOICE_NOTE_BYTES ? "too_large"
           : accepted.kind === "image" && (accepted.image.fileSize ?? 0) > MAX_IMAGE_BYTES ? "image_too_large"
+            : accepted.kind === "file" && (accepted.file.fileSize ?? 0) > MAX_FILE_BYTES ? "file_too_large"
             : count >= MAX_TELEGRAM_INBOX_PENDING ? "queue_full" : undefined;
       if (code) { this.fail(next, code); return this.entry(accepted.id)!; }
       this.write(next);
@@ -275,6 +295,21 @@ export class TelegramInbox {
       entry = { ...current, status: "ready", updatedAt: new Date().toISOString(), due: Date.now() };
       this.write(entry);
     }
+    if (entry.status === "downloading" && entry.input.kind === "file") {
+      let document: TelegramDocument;
+      try { document = await this.phase(signal => this.options.readFile((entry.input as TelegramFileMessage).file, signal), 90_000); }
+      catch (error) {
+        const current = this.current(entry, "downloading");
+        if (current) this.fail(current, error instanceof VoiceNoteError && error.code === "file_too_large" ? "file_too_large" : "file_unreadable");
+        return;
+      }
+      const current = this.current(entry, "downloading");
+      if (!current) return;
+      if (typeof document?.text !== "string" || !document.text.trim()) { this.fail(current, "file_unreadable"); return; }
+      // The text is kept until delivery, like a transcript, so a retried admission does not read the file again.
+      entry = { ...current, status: "ready", document, updatedAt: new Date().toISOString(), due: Date.now() };
+      this.write(entry);
+    }
     let audio: TelegramVoiceAudio | undefined;
     if (entry.status === "downloading" && entry.input.kind === "voice") {
       try {
@@ -315,24 +350,28 @@ export class TelegramInbox {
     }
     const current = this.entry(entry.input.id);
     if (!current || current.attemptId !== entry.attemptId || !["ready", "delivering"].includes(current.status)) return;
+    if (current.input.kind === "file" && !current.document) { this.write({ ...current, status: "queued", due: Date.now(), updatedAt: new Date().toISOString() }); return; }
     if (current.input.kind === "image" && !media) { this.write({ ...current, status: "queued", due: Date.now(), updatedAt: new Date().toISOString() }); return; }
     const delivering: InboxEntry = { ...current, status: "delivering", deliveryAttempts: current.deliveryAttempts + 1,
       updatedAt: new Date().toISOString(), deadline: Date.now() + 30_000 };
     this.write(delivering);
     const input = delivering.input;
+    const fileText = input.kind === "file" ? input.caption ?? FILE_WITHOUT_CAPTION : undefined;
     const captions = input.kind === "image" ? [input, ...delivering.album ?? []].map(part => part.caption).filter((caption): caption is string => !!caption).join("\n\n") : "";
     const delivery: TelegramInboxDelivery = {
-      id: input.id, text: input.kind === "message" ? input.text : input.kind === "voice" ? delivering.transcript! : captions || IMAGE_WITHOUT_CAPTION,
-      source: input.kind === "message" ? "text" : input.kind === "voice" ? "voice" : "image", ...(input.sentAt !== undefined ? { sentAt: input.sentAt } : {}),
+      id: input.id, text: input.kind === "message" ? input.text : input.kind === "voice" ? delivering.transcript! : fileText ?? (captions || IMAGE_WITHOUT_CAPTION),
+      source: input.kind === "message" ? "text" : input.kind === "voice" ? "voice" : input.kind === "file" ? "file" : "image", ...(input.sentAt !== undefined ? { sentAt: input.sentAt } : {}),
       ...(input.kind === "voice" && input.caption !== undefined ? { caption: input.caption } : {}),
       ...(input.kind === "message" && input.skipped !== undefined ? { skipped: input.skipped } : {}),
+      ...(input.kind === "file" && delivering.document ? { document: delivering.document } : {}),
       ...(media ? { images: media.images, ...(media.omitted ? { omittedImages: media.omitted } : {}) } : {}),
     };
     try {
       const operationId = await this.phase(() => this.options.deliver(delivery), 30_000);
       if (typeof operationId !== "string" || !operationId.length || operationId.length > 256 || operationId.includes("\0")) throw new Error();
       const current = this.current(delivering, "delivering");
-      if (current) this.write({ ...current, status: "delivered", operationId, updatedAt: new Date().toISOString(), issue: undefined });
+      // The document text now lives in the conversation; the inbox keeps only the record.
+      if (current) this.write({ ...current, status: "delivered", operationId, updatedAt: new Date().toISOString(), issue: undefined, document: undefined });
     } catch {
       const current = this.current(delivering, "delivering");
       if (current?.input.kind === "image" && current.deliveryAttempts >= MAX_IMAGE_DELIVERY_ATTEMPTS) { this.fail(current, "image_not_delivered"); return; }

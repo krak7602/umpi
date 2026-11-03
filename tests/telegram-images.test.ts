@@ -31,7 +31,7 @@ test("other attachments are skipped: a caption is still acted on, and without on
     { kind: "message", id: "tg:9", text: "Remind me to watch this tonight", skipped: "a video", sentAt: "2026-09-21T14:13:20.000Z" });
   assert.deepEqual(telegramUpdate({ update_id: 10, message: { ...base, video_note: { file_id: "v" } } }, config),
     { kind: "unreadable", id: "tg:10", attachment: "a video message", sentAt: "2026-09-21T14:13:20.000Z" });
-  assert.equal((telegramUpdate({ update_id: 11, message: { ...base, document: { file_id: "d", file_unique_id: "u", mime_type: "application/pdf" }, caption: "Summarise" } }, config) as { skipped: string }).skipped, "a file");
+  assert.equal((telegramUpdate({ update_id: 11, message: { ...base, document: { file_id: "d", file_unique_id: "u", mime_type: "application/zip", file_name: "photos.zip" }, caption: "Summarise" } }, config) as { skipped: string }).skipped, "a file");
   assert.equal((telegramUpdate({ update_id: 12, message: { ...base, sticker: { file_id: "s" } } }, config) as { attachment: string }).attachment, "a sticker");
   assert.equal(telegramUpdate({ update_id: 13, message: { ...base, pinned_message: {} } }, config), undefined, "a service message is ignored, not rejected");
 });
@@ -55,7 +55,7 @@ function fixture(t: TestContext, downloadImage: (image: TelegramImageMessage["im
   const store = new Store(db); store.setSession("telegram", "telegram-session");
   const deliveries: TelegramInboxDelivery[] = [], work: Promise<void>[] = [];
   let failDelivery = 0;
-  const inbox = new TelegramInbox({ db, download: async () => { throw new Error("no voice"); }, transcribe: async () => "", downloadImage: (image, maxBytes) => downloadImage(image, maxBytes),
+  const inbox = new TelegramInbox({ db, download: async () => { throw new Error("no voice"); }, transcribe: async () => "", downloadImage: (image, maxBytes) => downloadImage(image, maxBytes), readFile: async () => { throw new Error("no file"); },
     deliver: async input => { if (failDelivery-- > 0) throw new Error("not confirmed"); deliveries.push(input); return `op:${input.id}`; },
     notify: (id, text) => { store.enqueue(id, "telegram", text); }, track: task => { work.push(task); }, wake: async () => undefined, foreground: () => undefined });
   const drain = async () => {

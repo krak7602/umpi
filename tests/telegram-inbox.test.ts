@@ -36,6 +36,7 @@ function fixture(t: TestContext, changes: Partial<TelegramInboxOptions> = {}) {
     db,
     download: async () => { downloadCalls++; return { bytes: new Uint8Array([79, 103, 103, 83, 9]), filename: "voice-note.ogg", mimeType: "audio/ogg" }; },
     downloadImage: async () => { throw new Error("no image expected"); },
+    readFile: async () => { throw new Error("no file expected"); },
     transcribe: async () => { transcriptionCalls++; return "Remind me tomorrow morning to review the draft."; },
     deliver: async input => {
       deliveries.push(input);

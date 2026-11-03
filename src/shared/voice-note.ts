@@ -8,6 +8,10 @@ export const MAX_IMAGES_PER_MESSAGE = 4;
 /** Longest image side to request from Telegram's sizes; the model scales larger images down anyway. */
 export const MAX_IMAGE_SIDE = 2_000;
 export const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"] as const;
+/** Documents Umpi reads: text files directly, PDF and Word through Workers AI conversion. */
+export const MAX_FILE_BYTES = 10 * 1024 * 1024;
+/** Characters of a document's text passed to the assistant; the rest is left out and the owner is told. */
+export const MAX_FILE_TEXT = 60_000;
 
 export interface TelegramTextMessage {
   kind: "message";
@@ -48,6 +52,16 @@ export interface TelegramImageMessage {
   mediaGroupId?: string;
 }
 
+/** A text, Markdown, PDF, or Word document sent as a file. */
+export interface TelegramFileMessage {
+  kind: "file";
+  id: string;
+  messageId: number;
+  file: TelegramFile & { name: string; mimeType?: string };
+  caption?: string;
+  sentAt: string;
+}
+
 /** A message with nothing Umpi can act on, such as a video without a caption. */
 export interface TelegramUnreadableMessage {
   kind: "unreadable";
@@ -56,7 +70,10 @@ export interface TelegramUnreadableMessage {
   sentAt?: string;
 }
 
-export type TelegramInboxInput = TelegramTextMessage | TelegramVoiceNote | TelegramImageMessage | TelegramUnreadableMessage;
+export type TelegramInboxInput = TelegramTextMessage | TelegramVoiceNote | TelegramImageMessage | TelegramFileMessage | TelegramUnreadableMessage;
+
+/** A document's text, as read from the file. */
+export interface TelegramDocument { name: string; text: string; truncated: boolean }
 
 export interface TelegramImage {
   data: string;
@@ -72,19 +89,20 @@ export interface TelegramVoiceAudio {
 export interface TelegramInboxDelivery {
   id: string;
   text: string;
-  source: "text" | "voice" | "image";
+  source: "text" | "voice" | "image" | "file";
   sentAt?: string;
   caption?: string;
   skipped?: string;
   images?: TelegramImage[];
   /** Album images left out because the combined size limit was reached. */
   omittedImages?: number;
+  document?: TelegramDocument;
 }
 
 export type VoiceNoteFailureCode =
   | "too_long" | "too_large" | "download_failed" | "authorization_missing"
   | "transcription_failed" | "speech_empty" | "transcript_too_long" | "interrupted"
-  | "image_too_large" | "image_download_failed" | "image_not_delivered" | "unreadable";
+  | "image_too_large" | "image_download_failed" | "image_not_delivered" | "file_too_large" | "file_unreadable" | "unreadable";
 
 /** Only fixed codes cross the private provider/Telegram transport boundary. */
 export class VoiceNoteError extends Error {
