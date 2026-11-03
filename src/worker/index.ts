@@ -83,6 +83,7 @@ import { documentFromBytes, readTelegramFile, type DocumentConverter } from "./t
 import { ChatLog, type ChatEntry } from "./chat.js";
 import { ChatSocket } from "./chat-socket.js";
 import { openTasks, WidgetStore, widgetTools, type WidgetContent, type WidgetItem } from "./widget.js";
+import { KnockPushStore } from "./knock-push.js";
 import type { AppMessage } from "./companion-http.js";
 type ButtonResult = { text: string; replyMarkup?: TelegramMarkup };
 import { SUBSCRIPTION_TRANSCRIPTION_MODEL, transcribeSubscriptionAudio } from "./subscription-transcription.js";
@@ -143,7 +144,7 @@ class Coordinator extends LifecycleCapability {
     this.assistant.telegramInbox.recover();
     // Recover both new proposals and decisions committed before their SQL delivery projection.
     await reconcileMemoryTelegram(await this.assistant.harness.pi(), BACKGROUND_CONTEXT, this.assistant.store);
-    if (this.assistant.telegramInbox.hasPending() || this.assistant.store.pendingOperations().length || this.assistant.store.nextReminder() !== undefined || this.assistant.knocks.nextDue() !== undefined || this.assistant.store.readyDeliveries().length || this.assistant.companion.nextPush() || this.assistant.chat.nextPush() || this.assistant.proactive.settings().enabled || this.assistant.planning.settings().enabled || this.assistant.brief.settings().enabled || this.assistant.dream.settings().enabled || this.assistant.mailRuntime.nextDue() !== undefined || this.assistant.coding.active().length || this.assistant.browserRuntime.nextDue() !== undefined || this.assistant.browser.active().length || await this.assistant.subagents.nextDue() !== undefined) await this.wake();
+    if (this.assistant.telegramInbox.hasPending() || this.assistant.store.pendingOperations().length || this.assistant.store.nextReminder() !== undefined || this.assistant.knocks.nextDue() !== undefined || this.assistant.knockPushes.nextDue() !== undefined || this.assistant.store.readyDeliveries().length || this.assistant.companion.nextPush() || this.assistant.chat.nextPush() || this.assistant.proactive.settings().enabled || this.assistant.planning.settings().enabled || this.assistant.brief.settings().enabled || this.assistant.dream.settings().enabled || this.assistant.mailRuntime.nextDue() !== undefined || this.assistant.coding.active().length || this.assistant.browserRuntime.nextDue() !== undefined || this.assistant.browser.active().length || await this.assistant.subagents.nextDue() !== undefined) await this.wake();
   }
 
   async onJob({ job }: LifecycleJobContext): Promise<LifecycleJobOutcome> {
@@ -230,6 +231,16 @@ class Coordinator extends LifecycleCapability {
         const result = await sendCompanionPush(push.target, { revision: push.revision, jobs: push.jobs }, this.assistant.config);
         this.assistant.companion.finishPush(push.target.deviceId, push.hash, result.status);
       }
+      const knock = this.assistant.knockPushes.next();
+      if (knock) {
+        // An answered, changed, or cancelled reminder stops knocking.
+        const reminder = store.reminder(knock.reminderId);
+        if (!reminder || reminder.version !== knock.version || reminder.answer || reminder.status !== "fired") this.assistant.knockPushes.finish(knock.id, "skipped");
+        else {
+          const results = await Promise.all(this.assistant.companion.alertTargets().map(target => sendCompanionPush(target, { revision: 0, jobs: [], knock }, this.assistant.config)));
+          this.assistant.knockPushes.finish(knock.id, results.some(result => result.status === "accepted") ? "sent" : "failed");
+        }
+      }
       const chatPush = this.assistant.chat.nextPush();
       if (chatPush) this.assistant.chat.finishPush(chatPush.seq, await this.assistant.announce(chatPush));
       this.assistant.driveExecutor();
@@ -237,7 +248,7 @@ class Coordinator extends LifecycleCapability {
       // Missing credentials do not justify a two-second polling loop; auth updates wake the queue.
       const pending = store.pendingOperations().some(op => op.status === "submitted");
       const outbox = store.readyDeliveries().length > 0;
-      const wakeAt = Math.min(due ?? Infinity, proactive.nextDue(Date.now(), store.hasForegroundInput()) ?? Infinity, this.assistant.planning.nextDue() ?? Infinity, this.assistant.brief.nextDue() ?? Infinity, this.assistant.dream.nextDue() ?? Infinity, this.assistant.dreamRuntime.nextDue() ?? Infinity, this.assistant.alerts.nextDue() ?? Infinity, this.assistant.journal.nextDue() ?? Infinity, this.assistant.mailRuntime.nextDue() ?? Infinity, this.assistant.codingRuntime.nextDue() ?? Infinity, this.assistant.browserRuntime.nextDue() ?? Infinity, await this.assistant.subagents.nextDue() ?? Infinity, this.assistant.telegramInbox.nextDue() ?? Infinity, this.assistant.knocks.nextDue() ?? Infinity, pending ? Date.now() + 2_000 : Infinity, outbox || this.assistant.companion.nextPush() || this.assistant.chat.nextPush() ? Date.now() + 100 : Infinity);
+      const wakeAt = Math.min(due ?? Infinity, proactive.nextDue(Date.now(), store.hasForegroundInput()) ?? Infinity, this.assistant.planning.nextDue() ?? Infinity, this.assistant.brief.nextDue() ?? Infinity, this.assistant.dream.nextDue() ?? Infinity, this.assistant.dreamRuntime.nextDue() ?? Infinity, this.assistant.alerts.nextDue() ?? Infinity, this.assistant.journal.nextDue() ?? Infinity, this.assistant.mailRuntime.nextDue() ?? Infinity, this.assistant.codingRuntime.nextDue() ?? Infinity, this.assistant.browserRuntime.nextDue() ?? Infinity, await this.assistant.subagents.nextDue() ?? Infinity, this.assistant.telegramInbox.nextDue() ?? Infinity, this.assistant.knocks.nextDue() ?? Infinity, this.assistant.knockPushes.nextDue() ?? Infinity, pending ? Date.now() + 2_000 : Infinity, outbox || this.assistant.companion.nextPush() || this.assistant.chat.nextPush() ? Date.now() + 100 : Infinity);
       if (Number.isFinite(wakeAt)) return { rescheduleAt: wakeAt };
     } catch {
       this.assistant.modelIssue = "Coordinator reconciliation failed; work is retained and retry is scheduled. Check configuration and protected status.";
@@ -292,6 +303,7 @@ export class Assistant extends Agent<Env> {
   readonly knocks: KnockStore;
   readonly chat: ChatLog;
   readonly widgets: WidgetStore;
+  readonly knockPushes: KnockPushStore;
   private chatSocket?: ChatSocket;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -340,6 +352,13 @@ export class Assistant extends Agent<Env> {
     this.knocks = new KnockStore(this.store.db);
     this.chat = new ChatLog(this.store.db);
     this.widgets = new WidgetStore(this.store.db);
+    this.knockPushes = new KnockPushStore(this.store.db);
+    // A reminder the phone has not set as a knock is knocked by push, when a phone can take alerts.
+    this.store.knockFallback = reminder => {
+      if (!this.companion.alertTargets().length) return false;
+      this.knockPushes.queue(reminder);
+      return true;
+    };
     // A widget Umpi chose wakes the phone like other owner changes, so the home screen follows.
     this.companion.extraState = () => ({ widget: this.widgets.current()?.setAt ?? null, actions: this.widgets.actions() });
     this.store.chat = this.chat;
@@ -817,7 +836,7 @@ export class Assistant extends Agent<Env> {
       model: { providerId: this.providerId, modelId: this.modelId, configured, issue: this.modelIssue ?? null, lastFailure: this.lastModelFailure ?? null, fallback: this.modelFallback.status() },
       web: this.webUsage.status(Boolean(this.config.UMPI_PARALLEL_API_KEY)),
       decisions: { ...this.decisions.status(), ownerEffort: this.efforts },
-      knocks: this.knocks.status(),
+      knocks: { ...this.knocks.status(), pushed: this.knockPushes.status() },
       chat: { ...this.chat.status(), sockets: this.chatSocket?.count() ?? 0 },
       conversations: this.contextHealth.status([
         { label: "telegram", id: this.store.session("telegram") }, { label: "control", id: this.store.session("control") },
