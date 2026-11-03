@@ -155,6 +155,14 @@ final class T3CodeModel {
         T3CodeModel.save(machines)
     }
 
+    /// The owner's own action on a thread: send a message or stop it. It runs at once.
+    func act(_ store: CompanionStore, machine: String, thread: String, kind: String, message: String? = nil) async throws {
+        guard let transport = store.chatTransport else { throw CompanionClientError.invalidServer }
+        struct Body: Encodable { var machine: String; var requestId: String; var kind: String; var threadId: String; var message: String? }
+        _ = try await transport.send(path: "/api/device/t3/act", method: "POST",
+                                     body: JSONEncoder().encode(Body(machine: machine, requestId: UUID().uuidString, kind: kind, threadId: thread, message: message)))
+    }
+
     func read(_ store: CompanionStore, machine: String, thread: String) async throws -> T3ThreadRead {
         guard let transport = store.chatTransport else { throw CompanionClientError.invalidServer }
         var query = URLComponents()

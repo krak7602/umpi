@@ -28,7 +28,7 @@ struct T3MachinesSection: View {
             Button { adding = true } label: { Label("Add a machine", systemImage: "plus") }
             if let message { Text(message).font(.footnote).foregroundStyle(.secondary) }
         } header: { Text("T3 Code") } footer: {
-            Text("Umpi reads your coding threads through your tailnet or T3 Connect; nothing runs on the machine. Approval lasts 30 days.")
+            Text("Umpi reaches your coding threads through your tailnet or T3 Connect; nothing runs on the machine. Approval lasts 30 days.")
         }
         .task { await t3.loadMachines(store) }
         // Back from the approval page in Safari: show the new state.
@@ -65,7 +65,7 @@ struct T3AddMachineView: View {
                 }
                 Section {
                     Label("Approve on the next page with a pairing code from T3 Code: Settings → Sharing & access.", systemImage: "1.circle")
-                    Label("Choose Read only. Umpi only reads threads for now.", systemImage: "2.circle")
+                    Label("Choose Full access, or Supervised, so Umpi can message, start, and stop threads. Read only lets it just look.", systemImage: "2.circle")
                 }
                 .font(.footnote).foregroundStyle(.secondary)
                 if let problem { Section { Label(problem, systemImage: "exclamationmark.triangle").foregroundStyle(.orange) } }
@@ -153,6 +153,11 @@ struct T3ThreadView: View {
     let thread: T3Thread
     @State private var read: T3ThreadRead?
     @State private var problem: String?
+    @State private var draft = ""
+    @State private var sending = false
+    @State private var notice: String?
+    @State private var confirmStop = false
+    @FocusState private var composing: Bool
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -180,11 +185,61 @@ struct T3ThreadView: View {
                 .padding(.horizontal, 20).padding(.vertical, 12)
             }
             .softScrollEdges()
+            .scrollDismissesKeyboard(.interactively)
             .refreshable { await load() }
             .task { await load(); if let last = read?.messages.last { proxy.scrollTo(last.position, anchor: .bottom) } }
+            .onChange(of: read?.messages.last?.position) { _, last in if let last { withAnimation { proxy.scrollTo(last, anchor: .bottom) } } }
+        }
+        .safeAreaInset(edge: .bottom) { composer }
+        .overlay(alignment: .top) {
+            if let notice {
+                Text(notice).font(.footnote).padding(.horizontal, 12).padding(.vertical, 8).background(.thinMaterial, in: Capsule()).padding(.top, 4)
+                    .task(id: notice) { try? await Task.sleep(for: .seconds(4)); self.notice = nil }
+            }
         }
         .navigationTitle(thread.title)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if (read?.thread ?? thread).active {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(role: .destructive) { confirmStop = true } label: { Image(systemName: "stop.circle") }.accessibilityLabel("Stop thread")
+                }
+            }
+        }
+        .confirmationDialog("Stop this thread?", isPresented: $confirmStop, titleVisibility: .visible) {
+            Button("Stop", role: .destructive) { Task { await perform("stop") } }
+        } message: { Text("Like T3 Code's Stop button: the running turn ends and queued messages wait.") }
+        .disabled(!machine.connected)
+    }
+
+    /// A message to the thread's agent: it starts an idle thread, steers a running turn, or waits its turn.
+    private var composer: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            TextField("Message this thread", text: $draft, axis: .vertical)
+                .lineLimit(1...6).focused($composing)
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            Button { Task { await perform("send") } } label: {
+                Image(systemName: sending ? "ellipsis.circle.fill" : "arrow.up.circle.fill").font(.system(size: 32))
+            }
+            .disabled(sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .accessibilityLabel("Send to thread")
+        }
+        .padding(.horizontal, 16).padding(.vertical, 8)
+    }
+
+    private func perform(_ kind: String) async {
+        sending = true; defer { sending = false }
+        let message = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            try await t3.act(store, machine: machine.id, thread: thread.threadId, kind: kind, message: kind == "send" ? message : nil)
+            if kind == "send" { draft = ""; composing = false }
+            notice = kind == "send" ? "Sent to \(machine.label)" : "Stopped"
+            try? await Task.sleep(for: .seconds(2))
+            await load()
+        } catch {
+            notice = (error as? LocalizedError)?.errorDescription ?? "It did not reach the machine."
+        }
     }
 
     private var header: some View {
@@ -193,7 +248,7 @@ struct T3ThreadView: View {
             Label(current.statusText, systemImage: current.symbol).font(.subheadline.weight(.medium))
             Text([thread.project, thread.branch, machine.label].compactMap { $0 }.joined(separator: " · "))
                 .font(.footnote).foregroundStyle(.secondary)
-            Text("Showing the latest messages. Open the thread in T3 Code to continue it.").font(.caption).foregroundStyle(.tertiary)
+            Text("Showing the latest messages. Permission requests are answered in T3 Code.").font(.caption).foregroundStyle(.tertiary)
         }
     }
 

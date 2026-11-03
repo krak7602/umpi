@@ -85,6 +85,7 @@ import { documentFromBytes, readTelegramFile, type DocumentConverter } from "./t
 import { ChatLog, type ChatEntry } from "./chat.js";
 import { ChatSocket } from "./chat-socket.js";
 import { T3CodeStore, T3_CALLBACK_PATH, t3CallbackPage, t3CodeTools } from "./t3-code.js";
+import { T3ActionRequests, t3ActionTools } from "./t3-actions.js";
 import { openTasks, WidgetStore, widgetTools, type WidgetContent, type WidgetItem } from "./widget.js";
 import { KnockPushStore } from "./knock-push.js";
 import type { AppMessage } from "./companion-http.js";
@@ -311,6 +312,7 @@ export class Assistant extends Agent<Env> {
   readonly widgets: WidgetStore;
   readonly knockPushes: KnockPushStore;
   readonly t3: T3CodeStore;
+  readonly t3Requests: T3ActionRequests;
   private chatSocket?: ChatSocket;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -326,6 +328,7 @@ export class Assistant extends Agent<Env> {
     // One bridge for every machine: tailnet addresses go through it, T3 Connect addresses go direct.
     const bridge = env.TAILNET_BRIDGE && env.UMPI_TAILSCALE_AUTHKEY ? () => env.TAILNET_BRIDGE!.getByName("tailnet") : undefined;
     this.t3 = new T3CodeStore(this.store.db, tailnetFetch(bridge));
+    this.t3Requests = new T3ActionRequests(this.store.db, this.store, this.t3);
     this.providerId = env.UMPI_MODEL_PROVIDER || DEFAULT_PROVIDER;
     this.modelId = env.UMPI_MODEL_ID || DEFAULT_MODEL;
     this.timezone = env.UMPI_TIMEZONE || "UTC";
@@ -449,7 +452,7 @@ export class Assistant extends Agent<Env> {
       track: work => this.lifecycle.trackAlarmWork(work),
     });
     const browserProfile = browserExtension(this.browserRuntime);
-    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...activityTools(this.store, this.activity, this.timezone, () => this.notifyExecutor()), ...journalTools(this.journal, id => this.store.isBackgroundSession(id)), ...widgetTools(this.widgets, () => this.coordinator.wake()), ...t3CodeTools(this.t3), ...web, ...decision, ...historyTools(this.dream, this.history, id => this.store.isBackgroundSession(id)), ...contextTools(this.contextHealth, id => !this.store.isBackgroundSession(id)), ...delegation.tools ?? []];
+    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...activityTools(this.store, this.activity, this.timezone, () => this.notifyExecutor()), ...journalTools(this.journal, id => this.store.isBackgroundSession(id)), ...widgetTools(this.widgets, () => this.coordinator.wake()), ...t3CodeTools(this.t3), ...t3ActionTools(this.t3, this.t3Requests), ...web, ...decision, ...historyTools(this.dream, this.history, id => this.store.isBackgroundSession(id)), ...contextTools(this.contextHealth, id => !this.store.isBackgroundSession(id)), ...delegation.tools ?? []];
     const guardedProactiveTools = guardDreamReviewTools(guardBriefReviewTools(guardMailReviewTools(guardPlanningReviewTools(proactiveTools(this.proactive, () => this.coordinator.wake()), this.planningRuntime), this.mailRuntime), this.brief), this.dream);
     const briefSources = { brief: this.brief, situation: this.situation, mail: this.mail, planning: this.planningRuntime, calendarCredentials: () => this.config.UMPI_CALENDAR_CREDENTIALS, activity: this.activity, dream: this.dream };
     const ownerSessions = () => (["telegram", "control"] as const).flatMap(channel => { const session = this.store.session(channel); return session ? [{ channel, session }] : []; });
@@ -710,6 +713,9 @@ export class Assistant extends Agent<Env> {
   private async pressButton(data: string, messageId: number | undefined, groupId?: string): Promise<ButtonResult> {
     await this.coordinator.wake();
     try {
+      // T3 Code approvals answer the same way from Telegram and the app.
+      const t3 = await this.t3Requests.press(data, messageId, groupId);
+      if (t3) return t3;
       if (messageId !== undefined) {
         const coding = await handleCodingCallback(this.codingRuntime, data, messageId);
         if (coding) return { text: coding.text, ...(coding.removeKeyboard ? { replyMarkup: { inline_keyboard: [] } } : {}) };
@@ -848,7 +854,7 @@ export class Assistant extends Agent<Env> {
       decisions: { ...this.decisions.status(), ownerEffort: this.efforts },
       knocks: { ...this.knocks.status(), pushed: this.knockPushes.status() },
       chat: { ...this.chat.status(), sockets: this.chatSocket?.count() ?? 0 },
-      t3Code: this.t3.status(),
+      t3Code: { ...this.t3.status(), awaitingApproval: this.t3Requests.pending().length },
       conversations: this.contextHealth.status([
         { label: "telegram", id: this.store.session("telegram") }, { label: "control", id: this.store.session("control") },
         { label: "background:telegram", id: this.store.backgroundSession("telegram") }, { label: "background:control", id: this.store.backgroundSession("control") },

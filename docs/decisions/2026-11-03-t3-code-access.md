@@ -33,4 +33,8 @@ The owner reaches T3 Code through Tailscale HTTPS (`tailscale serve`), not T3 Co
 
 Umpi therefore runs one container that joins the tailnet only while Umpi needs a machine. It uses a Tailscale OAuth client secret that can create only ephemeral `tag:umpi` devices, and the tailnet policy limits that tag to HTTPS on the T3 machines. Nothing is installed or changed on the machines. T3 Connect addresses still work directly.
 
+## Amendment: Umpi manages threads, and asks first only for its own ideas
+
+The owner wants Umpi to manage sessions, not only read them: message, start, stop, and answer agents. The owner chose the approval rule: when the owner asked, Umpi acts; when Umpi decided on its own, it asks first with Approve and Decline buttons. Machines are approved at Full access, so the machine's level allows this; Umpi's own rule decides when it asks.
+
 The current contract lives in [T3 Code threads](../subsystems/assistant-runtime.md#t3-code-threads).

@@ -8,6 +8,7 @@ import { companionRole } from "./companion-routes.js";
 import { authorize, readJson, secretEqual, type TelegramConfig } from "./transport.js";
 import { StateError, type Operation } from "./store.js";
 import { T3Error, type T3CodeStore } from "./t3-code.js";
+import { parseAction } from "./t3-actions.js";
 
 export interface CompanionHttpContext {
   companion: CompanionStore;
@@ -157,6 +158,14 @@ export async function companionRequest(request: Request, context: CompanionHttpC
     return Response.json(await context.setTask(input.day, input.line, boundedText(input.text, 4_000, "task line"), input.checked));
   }
   if (path === "/api/device/t3/machines") return Response.json(await context.t3.add(body, new URL(request.url).origin));
+  if (path === "/api/device/t3/act") {
+    // The owner's own action from the app: it runs at once. The request ID makes a retried send act once.
+    const input = record(body); exactKeys(input, ["machine", "requestId", "kind", "threadId", "message", "mode", "reason", "whole"]);
+    if (input.kind !== "send" && input.kind !== "stop") throw new InputError("The app can send to or stop a thread");
+    const action = parseAction(input);
+    try { return Response.json({ result: await context.t3.act(identifier(input.machine, "machine ID"), action, `app-${identifier(input.requestId, "request ID")}`) }); }
+    catch (error) { if (error instanceof T3Error) throw new StateError(502, error.message); throw error; }
+  }
   const t3Connect = /^\/api\/device\/t3\/machines\/([^/]+)\/connect$/.exec(path);
   if (t3Connect) return Response.json(await context.t3.connect(t3Connect[1]!, new URL(request.url).origin));
   if (path === "/api/device/knocks") return Response.json(companion.owner.recordPhoneKnocks(device.id, body));

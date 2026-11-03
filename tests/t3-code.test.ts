@@ -20,6 +20,7 @@ function fakeT3(options: { expiresIn?: number } = {}) {
   const codes = new Map<string, { challenge: string; redirect: string; client: string }>();
   const tokens = new Set<string>();
   const calls: string[] = [];
+  const acted: { name: string; args: Record<string, unknown> }[] = [];
   const sessions = { opened: 0, closed: 0 };
   let issued = 0;
   const json = (body: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
@@ -31,6 +32,13 @@ function fakeT3(options: { expiresIn?: number } = {}) {
       { threadId: "th-1", projectId: "p1", title: "Fix the widget", status: "running", settled: false, updatedAt: "2026-11-03T10:00:00Z", model: "m", link: "<t3-thread://x>" },
       { threadId: "th-2", projectId: "p1", title: "Review", status: "completed", settled: true, parentThreadId: "th-1" },
     ].slice(0, Number(args.limit ?? 20)), nextCursor: 2, total: 9 };
+    if (["t3_thread_send", "t3_thread_launch", "t3_thread_interrupt"].includes(name) || (name === "t3_pending_request" && args.action === "respond")) {
+      acted.push({ name, args });
+      if (name === "t3_thread_launch") return { threads: [{ threadId: "th-new", status: "starting", title: args.title, model: "m" }] };
+      return { ok: true };
+    }
+    if (name === "t3_pending_request" && args.action === "list") return { requestIds: ["q1"] };
+    if (name === "t3_pending_request" && args.action === "read") return { requestId: args.requestId, questions: [{ id: "choice", question: "Which DB?", options: ["sqlite", "postgres"] }] };
     if (name === "t3_thread_search") return { matches: [{ threadId: "th-1", projectId: "p1", title: "Fix the widget", snippet: "…the widget…", messageCreatedAt: "2026-11-03T09:00:00Z" }] };
     if (name === "t3_thread_read") {
       const after = Number(args.afterPosition ?? -1);
@@ -90,7 +98,7 @@ function fakeT3(options: { expiresIn?: number } = {}) {
     redirect.searchParams.set("code", code);
     return redirect;
   };
-  return { fetcher, approve, calls, sessions, revokeAll: () => tokens.clear() };
+  return { fetcher, approve, calls, acted, sessions, revokeAll: () => tokens.clear() };
 }
 
 test("MCP addresses must be https and end in /mcp", () => {
@@ -238,4 +246,70 @@ test("tailnet addresses go through the bridge; other addresses go direct", async
   await via("http://mac.tail0.ts.net/mcp");
   assert.deepEqual(seen, ["bridge POST https://mac.tail0.ts.net/mcp Bearer t {}", "direct https://connect.example/mcp", "direct http://mac.tail0.ts.net/mcp"]);
   await assert.rejects(tailnetFetch(undefined, direct)("https://mac.tail0.ts.net/mcp"), /bridge is not configured/);
+});
+
+async function connected(t: TestContext) {
+  const t3 = fakeT3();
+  const db = database(t);
+  const store = new T3CodeStore(db, t3.fetcher);
+  const started = await store.add({ url: `${ORIGIN}/mcp` }, UMPI);
+  const back = t3.approve(started.authorizeUrl);
+  await store.finish(back.searchParams.get("state")!, back.searchParams.get("code")!, undefined);
+  return { t3, db, store, id: started.machine.id };
+}
+
+test("thread actions reach T3 Code with an idempotency key; projects resolve by name", async t => {
+  const { t3, store, id } = await connected(t);
+  await store.act(id, { kind: "send", threadId: "th-1", message: "commit and push" }, "umpi-call-1");
+  await store.act(id, { kind: "stop", threadId: "th-1", reason: "wrong approach" }, "umpi-call-2");
+  const started = await store.act(id, { kind: "start", title: "Fix login", message: "Fix the login bug", project: "UMPI", branch: "fix/login" }, "umpi-call-3");
+  await store.act(id, { kind: "answer", threadId: "th-1", requestId: "q1", answers: { choice: "sqlite" } }, "umpi-call-4");
+  assert.deepEqual(started, { threadId: "th-new", title: "Fix login", status: "starting", model: "m" });
+  assert.deepEqual(t3.acted.map(item => item.name), ["t3_thread_send", "t3_thread_interrupt", "t3_thread_launch", "t3_pending_request"]);
+  assert.deepEqual(t3.acted[0]!.args, { threadId: "th-1", message: "commit and push", mode: "auto", clientRequestId: "umpi-call-1" });
+  assert.equal(t3.acted[1]!.args.stop, true);
+  assert.deepEqual(t3.acted[2]!.args, { title: "Fix login", message: "Fix the login bug", clientRequestId: "umpi-call-3", projectId: "p1", workspaceStrategy: { type: "worktree", branch: "fix/login" } });
+  await assert.rejects(store.act(id, { kind: "start", title: "x", message: "y", project: "nope" }, "umpi-call-5"), /No project called "nope"\. Projects: umpi/);
+  const questions = await store.questions(id, "th-1") as { questions: unknown[] };
+  assert.equal(questions.questions.length, 1);
+});
+
+test("an action Umpi decided on waits for Approve; Decline and second presses change nothing", async t => {
+  const { t3, db, store } = await connected(t);
+  const { Store } = await import("../src/worker/store.js");
+  const { T3ActionRequests, parseAction } = await import("../src/worker/t3-actions.js");
+  const owner = new Store(db);
+  const requests = new T3ActionRequests(db, owner, store);
+  const first = requests.request(undefined, parseAction({ kind: "send", threadId: "th-2", message: "Run the tests again" }), "The thread has waited an hour.");
+  const second = requests.request("Work Mac", parseAction({ kind: "stop", threadId: "th-1" }), "It is looping.", "Fix the widget");
+  assert.match(second.summary, /^Stop "Fix the widget" on Work Mac\.$/);
+  assert.equal(requests.pending().length, 2);
+  const buttons = (id: string) => owner.deliveries(`t3-request:${id}`)[0]!.replyMarkup!.inline_keyboard[0]!.map(button => button.callback_data);
+  const [approve, decline] = buttons(first.id);
+  assert.match(owner.deliveries(`t3-request:${first.id}`)[0]!.text, /Send to thread th-2 on Work Mac:\n\nRun the tests again\n\nWhy: The thread has waited an hour\./);
+  // A press must come from the message that carried the button.
+  await assert.rejects(requests.press(approve!, undefined, `t3-request:${second.id}`), /does not belong/);
+  assert.equal(t3.acted.length, 0);
+  const done = await requests.press(approve!, undefined, `t3-request:${first.id}`);
+  assert.equal(done!.text, "Done on Work Mac.");
+  assert.deepEqual(t3.acted.map(item => [item.name, item.args.clientRequestId]), [["t3_thread_send", `umpi-${first.id}`]]);
+  assert.equal((await requests.press(decline!, undefined, `t3-request:${first.id}`))!.text, "Already done.");
+  assert.equal((await requests.press(buttons(second.id)[1]!, undefined, `t3-request:${second.id}`))!.text, "Declined. Nothing was changed.");
+  assert.equal(t3.acted.length, 1);
+  assert.equal(requests.pending().length, 0);
+  assert.match(owner.deliveries(`t3-request:${first.id}:outcome`)[0]!.text, /Done on Work Mac/);
+  assert.equal(await requests.press("other:token", 1), undefined);
+  assert.throws(() => parseAction({ kind: "send", threadId: "th-1" }), /message/);
+  assert.throws(() => parseAction({ kind: "delete" }), /kind must be/);
+});
+
+test("background reviews may read T3 Code and request actions, not act directly", async () => {
+  const { backgroundTools } = await import("../src/worker/proactive-runtime.js");
+  for (const name of ["t3_code_threads", "t3_code_read_thread", "t3_code_search", "t3_code_questions", "request_t3_action"]) assert.equal(backgroundTools.has(name), true, name);
+  for (const name of ["t3_code_send", "t3_code_start", "t3_code_stop", "t3_code_answer"]) assert.equal(backgroundTools.has(name), false, name);
+});
+
+test("the app's own thread actions are device routes", () => {
+  assert.equal(companionRole("/api/device/t3/act", "POST"), "device");
+  assert.equal(companionRole("/api/device/t3/act", "GET"), undefined);
 });
