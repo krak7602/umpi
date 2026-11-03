@@ -40,17 +40,24 @@ export async function readTelegramFile(file: TelegramFileMessage["file"], config
   let bytes: Uint8Array;
   try { bytes = (await downloadTelegramFile(file, MAX_FILE_BYTES, config, signal, fetcher)).bytes; }
   catch (error) { throw new VoiceNoteError(error instanceof VoiceNoteError && error.code === "too_large" ? "file_too_large" : "file_unreadable"); }
+  try { return await documentFromBytes(bytes, file.name, converter, signal); }
+  finally { bytes.fill(0); }
+}
+
+/** A document's text from its bytes: text directly, PDF and Word through conversion. */
+export async function documentFromBytes(bytes: Uint8Array, name: string, converter: DocumentConverter | undefined, signal?: AbortSignal): Promise<TelegramDocument> {
+  if (bytes.byteLength > MAX_FILE_BYTES) throw new VoiceNoteError("file_too_large");
   try {
-    const type = kind(bytes, file.name);
-    if (type === "text") return documentFromText(file.name, decodeText(bytes));
+    const type = kind(bytes, name);
+    if (type === "text") return documentFromText(name, decodeText(bytes));
     if (!converter) throw new VoiceNoteError("file_unreadable");
-    signal.throwIfAborted();
-    const [result] = await converter.toMarkdown([{ name: file.name, blob: new Blob([bytes as BlobPart], { type: CONVERTED[type] }) }],
+    signal?.throwIfAborted();
+    const [result] = await converter.toMarkdown([{ name, blob: new Blob([bytes as BlobPart], { type: CONVERTED[type] }) }],
       { conversionOptions: type === "pdf" ? { pdf: { images: { convert: false }, metadata: false } } : { docx: { images: { convert: false } } } });
     if (!result || result.format === "error" || typeof result.data !== "string") throw new VoiceNoteError("file_unreadable");
-    return documentFromText(file.name, result.data);
+    return documentFromText(name, result.data);
   } catch (error) {
     if (error instanceof VoiceNoteError) throw error;
     throw new VoiceNoteError("file_unreadable");
-  } finally { bytes.fill(0); }
+  }
 }

@@ -293,6 +293,13 @@ export class CompanionStore {
     }
     return undefined;
   }
+  /** Paired devices that can show an alert. */
+  alertTargets(): PushTarget[] {
+    return this.db.all<DeviceRow>("SELECT * FROM umpi_companion_devices ORDER BY rowid").flatMap(row => {
+      const device = JSON.parse(row.data) as Device, push = JSON.parse(row.push) as DeviceRegistration;
+      return device.revoked || !push.apnsToken ? [] : [{ ...push, deviceId: row.id, activityTokens: [] }];
+    });
+  }
   beginPush(deviceId: string, hash: string): void {
     this.requireDevice(deviceId);
     this.db.all("INSERT INTO umpi_companion_push VALUES (?,?,'sending') ON CONFLICT(id) DO UPDATE SET hash=excluded.hash,status=excluded.status", deviceId, hash);

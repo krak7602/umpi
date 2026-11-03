@@ -11,6 +11,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ToolExecutionApi, ToolExecutionResult } from "@earendil-works/pi-durable";
 import { parseDefinition, parseMutation, parseCapabilities, parseRegistration, type Workflow, type Capability, type WorkflowDefinition } from "../src/shared/companion.js";
 import { InputError, record } from "../src/shared/protocol.js";
+import { ChatLog } from "../src/worker/chat.js";
 import { Store, StateError, type Database } from "../src/worker/store.js";
 import { CompanionStore, CompanionConflict, companionHash } from "../src/worker/companion-store.js";
 import { companionRequest, type CompanionHttpContext } from "../src/worker/companion-http.js";
@@ -39,8 +40,14 @@ function fixture(t: TestContext) {
   const owner = new Store(db); owner.setSession("control", "1"); owner.setSession("telegram", "2");
   const companion = new CompanionStore(owner);
   t.after(() => { sqlite.close(); rmSync(directory, { recursive: true, force: true }); });
-  const context: CompanionHttpContext = { companion, config, async wake() {}, async requireModel() {},
-    async admit(id, text, deviceId) { companion.requireDevice(deviceId); return owner.admit(id, text, "control", "1"); } };
+  const chat = new ChatLog(db); owner.chat = chat;
+  const context: CompanionHttpContext = { companion, config, chat, async wake() {}, async requireModel() {},
+    async admitApp(id, deviceId, message) {
+      companion.requireDevice(deviceId);
+      return owner.admit(id, message.text || "[attachment]", "telegram", "2", { kind: message.images ? "app-image" : message.document ? "app-file" : "app-text",
+        ...(message.document ? { file: { name: message.document.name, characters: message.document.text.length } } : {}) }, message.images, message.document);
+    },
+    async readFile(name, bytes) { return { name, text: new TextDecoder().decode(bytes), truncated: false }; } };
   return { db, owner, companion, context, reopen() { sqlite.close(); sqlite = new DatabaseSync(path); return new CompanionStore(new Store(db)); } };
 }
 function paired(companion: CompanionStore, deviceId = "phone-1") {

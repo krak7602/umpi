@@ -226,7 +226,7 @@ export async function sendTelegram(delivery: Delivery, config: TelegramConfig, f
       // workerd rejects "error"; "manual" prevents forwarding private message data.
       redirect: "manual",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ chat_id: config.TELEGRAM_CHAT_ID, text: delivery.text, link_preview_options: { is_disabled: true }, ...(delivery.replyMarkup ? { reply_markup: delivery.replyMarkup } : {}), ...(delivery.entities ? { entities: delivery.entities } : {}) }),
+      body: JSON.stringify({ chat_id: config.TELEGRAM_CHAT_ID, text: delivery.text, link_preview_options: { is_disabled: true }, ...(delivery.replyMarkup ? { reply_markup: delivery.replyMarkup } : {}), ...(delivery.entities ? { entities: delivery.entities } : {}), ...(delivery.silent ? { disable_notification: true } : {}) }),
       signal: AbortSignal.timeout(15_000),
     });
   } catch { return { status: "uncertain", error: "Telegram transport ended without a confirmed response; inspect the chat before resending" }; }
@@ -268,6 +268,10 @@ export async function editTelegramKeyboard(messageId: number, replyMarkup: Teleg
 }
 
 export const EXECUTOR_WAKE_PATH = "/api/executor/wake";
+export const CHAT_SOCKET_PATH = "/api/device/chat/socket";
+export function isChatSocketUpgrade(request: Request): boolean {
+  return new URL(request.url).pathname === CHAT_SOCKET_PATH && request.method === "GET" && request.headers.get("upgrade")?.toLowerCase() === "websocket";
+}
 export function isExecutorWakeUpgrade(request: Request): boolean {
   return new URL(request.url).pathname === EXECUTOR_WAKE_PATH && request.method === "GET" && request.headers.get("upgrade")?.toLowerCase() === "websocket";
 }
