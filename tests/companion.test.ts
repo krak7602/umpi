@@ -56,7 +56,10 @@ function fixture(t: TestContext) {
     },
     async today(day) { return { day: day ?? "2026-11-03", text: null, revision: "none" }; },
     async setTask() { return { status: "synced" }; },
-    async widget() { return { items: [], source: "default", updatedAt: "" }; } };
+    async widget() { return { items: [], source: "default", updatedAt: "" }; },
+    async setWidgetActions(value) { return { actions: value }; },
+    async ideas() { return { ideas: [] }; },
+    async addIdea(value) { return { idea: value, created: true }; } };
   return { db, owner, companion, context, reopen() { sqlite.close(); sqlite = new DatabaseSync(path); return new CompanionStore(new Store(db)); } };
 }
 function paired(companion: CompanionStore, deviceId = "phone-1") {

@@ -33,6 +33,7 @@ private struct RootView: View {
     @State private var pairingCode = ""
     @State private var selectedTab = 0
     @State private var linkMessage: String?
+    @State private var showIdeas = false
 
     var body: some View {
         Group {
@@ -72,7 +73,11 @@ private struct RootView: View {
                 switch url.host {
                 case "chat": selectedTab = 0
                 case "today": selectedTab = 1
-                case "capture":
+                case "ideas": showIdeas = true
+                case "remind":
+                    selectedTab = 0
+                    NotificationCenter.default.post(name: .umpiStartDraft, object: "Remind me ")
+                case "idea", "capture":
                     selectedTab = 0
                     NotificationCenter.default.post(name: .umpiCaptureIdea, object: nil)
                 default: selectedTab = 2
@@ -80,6 +85,7 @@ private struct RootView: View {
                 Task { await store.synchronize() }
             }
         }
+        .sheet(isPresented: $showIdeas) { NavigationStack { IdeasView() } }
         .alert("Pairing link", isPresented: Binding(get: { linkMessage != nil }, set: { if !$0 { linkMessage = nil } })) {
             Button("OK", role: .cancel) { linkMessage = nil }
         } message: {
@@ -101,4 +107,6 @@ private struct RootView: View {
 extension Notification.Name {
     /// Opened from the capture control or widget: start recording an idea in the chat.
     static let umpiCaptureIdea = Notification.Name("umpi.captureIdea")
+    /// Opened from a "Remind me" button: the chat starts with this text ready to finish.
+    static let umpiStartDraft = Notification.Name("umpi.startDraft")
 }

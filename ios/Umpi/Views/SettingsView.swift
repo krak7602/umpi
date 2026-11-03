@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import WidgetKit
 
 struct SettingsView: View {
     @Environment(CompanionStore.self) private var store
@@ -11,6 +12,7 @@ struct SettingsView: View {
 
     @State private var notify: String?
     @State private var testAlert: String?
+    @State private var widgetActions: [String] = WidgetAction.defaults
     @State private var notifyVersion = 1
 
     private func status(_ id: String) -> String? { effects.descriptors.first { $0.id == id }?.status }
@@ -59,6 +61,18 @@ struct SettingsView: View {
                 Text("Reminders knock on this phone, even offline. Switch Umpi's messages to this app once a test alert has arrived; Telegram then stays as a silent record.")
             }
             Section {
+                ForEach(0..<4, id: \.self) { slot in
+                    Picker(slot == 0 ? "First button" : "Button \(slot + 1)", selection: Binding(
+                        get: { widgetActions.indices.contains(slot) ? widgetActions[slot] : "" },
+                        set: { value in Task { await setWidgetButton(slot, value) } })) {
+                        if slot > 0 { Text("None").tag("") }
+                        ForEach(WidgetAction.all) { action in Label(action.label, systemImage: action.symbol).tag(action.id) }
+                    }
+                }
+            } header: { Text("Widget") } footer: {
+                Text("The small widget shows the first button; medium and large show all of them. Umpi can change these too when you ask.")
+            }
+            Section {
                 Toggle("Let Umpi act on this phone", isOn: Binding(get: { store.remoteEffectsAllowed }, set: { allowed in
                     if allowed { confirmRemoteEffects = true } else { store.remoteEffectsAllowed = false }
                 }))
@@ -97,7 +111,7 @@ struct SettingsView: View {
                 Text("Removes this phone from Umpi and clears its local data. Alarms and notifications already set may remain.")
             }
         }
-        .task { await loadNotify() }
+        .task { await loadNotify(); await loadWidget() }
         .softScrollEdges()
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
@@ -113,6 +127,26 @@ struct SettingsView: View {
                 Task { await store.disconnect(); disconnecting = false }
             }
         } message: { Text("Unsent changes on this phone are removed. Nothing else is deleted.") }
+    }
+
+    private func loadWidget() async {
+        guard let transport = store.chatTransport, let data = try? await transport.send(path: "/api/device/widget", method: "GET", body: nil),
+              let content = try? JSONDecoder().decode(WidgetContent.self, from: data) else { return }
+        widgetActions = content.actions ?? WidgetAction.defaults
+    }
+    /// Changes one button; an emptied slot closes the gap. The widget refreshes right away.
+    private func setWidgetButton(_ slot: Int, _ value: String) async {
+        var next = widgetActions
+        if value.isEmpty { if next.indices.contains(slot) { next.remove(at: slot) } }
+        else if next.indices.contains(slot) { next[slot] = value } else { next.append(value) }
+        var seen = Set<String>(); next = next.filter { seen.insert($0).inserted }
+        guard !next.isEmpty, let transport = store.chatTransport else { return }
+        struct Change: Encodable { var actions: [String] }
+        guard (try? await transport.send(path: "/api/device/widget/actions", method: "PUT", body: JSONEncoder().encode(Change(actions: next)))) != nil else { await loadWidget(); return }
+        widgetActions = next
+        if let data = try? await transport.send(path: "/api/device/widget", method: "GET", body: nil), let content = try? JSONDecoder().decode(WidgetContent.self, from: data) {
+            content.save(); WidgetCenter.shared.reloadAllTimelines()
+        }
     }
 
     private struct ChatSettings: Codable { var notify: String; var version: Int }

@@ -13,6 +13,8 @@ struct WidgetContent: Codable, Equatable, Sendable {
     var source: String
     var updatedAt: String
     var note: String?
+    /// The widget's buttons, in order; see `WidgetAction`.
+    var actions: [String]?
 
     static let key = "umpi.widget"
     static var defaults: UserDefaults? {
@@ -26,4 +28,23 @@ struct WidgetContent: Codable, Equatable, Sendable {
 
     /// Where a tap opens the app.
     static func url(_ link: String?) -> URL { URL(string: "umpi://\(link ?? "today")")! }
+}
+
+/// A widget button: what it shows and the link it opens.
+struct WidgetAction: Identifiable, Hashable, Sendable {
+    let id: String
+    let label: String
+    let symbol: String
+    var url: URL { URL(string: "umpi://\(id)")! }
+
+    static let all: [WidgetAction] = [
+        .init(id: "idea", label: "Idea", symbol: "mic.fill"),
+        .init(id: "today", label: "Today", symbol: "sun.max.fill"),
+        .init(id: "chat", label: "Chat", symbol: "bubble.left.and.bubble.right.fill"),
+        .init(id: "ideas", label: "Ideas", symbol: "lightbulb.fill"),
+        .init(id: "work", label: "Work", symbol: "tray.full.fill"),
+        .init(id: "remind", label: "Remind me", symbol: "bell.badge.fill"),
+    ]
+    static let defaults = ["idea", "today", "chat", "ideas"]
+    static func list(_ ids: [String]?) -> [WidgetAction] { (ids ?? defaults).compactMap { id in all.first { $0.id == id } } }
 }

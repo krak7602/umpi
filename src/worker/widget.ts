@@ -9,7 +9,20 @@ import { StateError, type Database } from "./store.js";
  * item, a medium one four, a large one eight.
  */
 export interface WidgetItem { title: string; detail?: string; symbol?: string; link?: "chat" | "today" | "work" }
-export interface WidgetContent { items: WidgetItem[]; source: "umpi" | "default"; updatedAt: string; note?: string }
+export interface WidgetContent { items: WidgetItem[]; source: "umpi" | "default"; updatedAt: string; note?: string; actions: WidgetAction[] }
+/** The widget's buttons: what each opens in the app. */
+export const WIDGET_ACTIONS = ["idea", "today", "chat", "ideas", "work", "remind"] as const;
+export type WidgetAction = (typeof WIDGET_ACTIONS)[number];
+export const DEFAULT_WIDGET_ACTIONS: WidgetAction[] = ["idea", "today", "chat", "ideas"];
+export function parseWidgetActions(value: unknown): WidgetAction[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 4) throw new InputError("actions must be a list of 1 to 4");
+  const actions = value.map(action => {
+    if (!(WIDGET_ACTIONS as readonly string[]).includes(String(action))) throw new InputError(`Unknown widget action; use ${WIDGET_ACTIONS.join(", ")}`);
+    return action as WidgetAction;
+  });
+  if (new Set(actions).size !== actions.length) throw new InputError("Each widget action can appear once");
+  return actions;
+}
 const MAX_ITEMS = 8;
 const SYMBOL = /^[a-z0-9.]{1,40}$/;
 
@@ -29,7 +42,8 @@ export function parseWidgetItems(value: unknown): WidgetItem[] {
 
 export class WidgetStore {
   constructor(private readonly db: Database, private readonly now = () => Date.now()) {
-    db.all("CREATE TABLE IF NOT EXISTS umpi_widget (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL)");
+    // Row 1 holds the items Umpi chose; row 2 the buttons.
+    db.all("CREATE TABLE IF NOT EXISTS umpi_widget (id INTEGER PRIMARY KEY, data TEXT NOT NULL)");
   }
   /** Umpi's chosen items while they have not expired. */
   current(): { items: WidgetItem[]; setAt: string; expiresAt: string; note?: string } | undefined {
@@ -48,6 +62,16 @@ export class WidgetStore {
     return value;
   }
   clear(): void { this.db.all("DELETE FROM umpi_widget WHERE id=1"); }
+  /** The widget's buttons, in order: the first is the small widget's only button. */
+  actions(): WidgetAction[] {
+    const row = this.db.all<{ data: string }>("SELECT data FROM umpi_widget WHERE id=2")[0];
+    return row ? JSON.parse(row.data) as WidgetAction[] : DEFAULT_WIDGET_ACTIONS;
+  }
+  setActions(value: unknown): WidgetAction[] {
+    const actions = parseWidgetActions(value);
+    this.db.all("INSERT INTO umpi_widget VALUES (2, ?) ON CONFLICT(id) DO UPDATE SET data=excluded.data", JSON.stringify(actions));
+    return actions;
+  }
 }
 
 /** Open checklist items of a Markdown note, in order. */
@@ -70,6 +94,9 @@ export function widgetTools(store: WidgetStore, wake: () => Promise<void>): Tool
         hours: Type.Optional(Type.Number({ minimum: 0.25, maximum: 48 })), note: Type.Optional(Type.String({ maxLength: 200 })),
       }, { additionalProperties: false }), replay: "safe",
       async execute(input) { return result(() => store.set(input)); } }),
+    defineTool({ name: "set_widget_actions", description: `Set the buttons on the owner's phone widget, in order, when they ask to change them: 1 to 4 of ${WIDGET_ACTIONS.join(", ")}. idea records a spoken idea; today, chat, ideas, and work open those views; remind opens the chat ready to set a reminder. The first is the small widget's button.`,
+      parameters: Type.Object({ actions: Type.Array(Type.Union(WIDGET_ACTIONS.map(action => Type.Literal(action))), { minItems: 1, maxItems: 4 }) }, { additionalProperties: false }), replay: "safe",
+      async execute(input) { return result(() => ({ actions: store.setActions(record(input).actions) })); } }),
     defineTool({ name: "clear_widget", description: "Return the owner's phone widgets to the default view (today's open tasks, next reminders, what is waiting).",
       parameters: Type.Object({}, { additionalProperties: false }), replay: "safe",
       async execute() { return result(() => { store.clear(); return { cleared: true }; }); } }),
