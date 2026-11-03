@@ -70,7 +70,9 @@ final class CompanionClient: CompanionTransport, @unchecked Sendable {
     deinit { session.invalidateAndCancel() }
 
     func send(path: String, method: String, body: Data?) async throws -> Data {
-        guard path.hasPrefix("/api/device/"), !path.contains("?"), !path.contains("#"),
+        // Only the chat history takes a query: its paging position.
+        let base = path.split(separator: "?", maxSplits: 1).first.map(String.init) ?? path
+        guard path.hasPrefix("/api/device/"), base == path || base == "/api/device/chat", !path.contains("#"),
               !path.contains(".."),
               let url = URL(string: path, relativeTo: origin)?.absoluteURL,
               url.host == origin.host, url.scheme == origin.scheme, url.port == origin.port else {
