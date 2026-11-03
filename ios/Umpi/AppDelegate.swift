@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import UserNotifications
+import WidgetKit
 
 @MainActor
 final class UmpiAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
@@ -45,10 +46,22 @@ final class UmpiAppDelegate: NSObject, UIApplicationDelegate, UNUserNotification
         await capabilities.registerCurrentState()
         guard !Task.isCancelled else { return false }
         await store.synchronize()
+        await updateWidget()
         return store.lastSyncedAt != previous
     }
 
     func scheduleBackgroundRefresh() { backgroundSync.schedule() }
+
+    /// Copies what the widgets should show into the App Group and reloads them when it changed.
+    private func updateWidget() async {
+        guard let transport = store.chatTransport,
+              let data = try? await transport.send(path: "/api/device/widget", method: "GET", body: nil),
+              let content = try? JSONDecoder().decode(WidgetContent.self, from: data) else { return }
+        let previous = WidgetContent.load()
+        guard previous?.items != content.items || previous?.note != content.note || previous?.source != content.source else { return }
+        content.save()
+        WidgetCenter.shared.reloadAllTimelines()
+    }
 
     func applicationDidEnterBackground(_ application: UIApplication) { scheduleBackgroundRefresh() }
 

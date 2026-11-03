@@ -75,5 +75,7 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>UmpiAppGroup</key>
+	<string>group.$(UMPI_BUNDLE_IDENTIFIER)</string>
 </dict>
 </plist>

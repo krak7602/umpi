@@ -44,6 +44,16 @@ The app's tabs are **Chat**, **Today**, **Work**, and **Settings**. **Today** (`
 
 **Work** (`WorkView.swift`) puts what needs the owner first (device actions to review, commands awaiting approval, open questions), then running commands, the next reminders, and links to Workflows and the full activity record.
 
+### Widgets and quick capture
+
+`WidgetStore` (`widget.ts`) holds what the phone widgets show. Umpi can choose 1 to 8 items with `set_widget` (title, optional detail, SF Symbol, and a link to chat, today, or work) for up to 48 hours, or return to the default with `clear_widget`. The default, built on each request, is what is waiting on the owner, the open tasks of today's note (Markdown marks removed), and the next two reminders. `GET /api/device/widget` returns `{items, source, updatedAt, note?}`. A change Umpi makes is part of the owner state hash, so it wakes the phone like other changes.
+
+After each sync the app copies the content into its App Group (`group.` plus the app identifier, in both targets' entitlements) and reloads the widgets when it changed. The `UmpiHome` widget shows the first item small, four medium, eight large, and two on the lock screen; taps open the linked tab. A medium or large widget has a capture button, and the `UmpiCapture` control (Control Center or the Action Button) opens `umpi://capture`: the chat starts recording, and the transcript goes to Umpi as an idea to file in today's note with `add_to_daily_note`. `umpi://chat`, `umpi://today`, and `umpi://work` open those tabs.
+
+The simulator verified the content path; the widget's look at each size and the control need checking on the phone.
+
+**Settings** groups Alerts (notifications, reminder knocks, where Umpi's messages alert through the chat `notify` setting, and wake-up alarms), Permissions (letting Umpi act on the phone), Server, and Disconnect, in plain words; technical details sit under a Details disclosure.
+
 ### Knocks
 
 Reminders knock on the phone in place of alarms (`Knocks.swift`). After each refresh the app sets every scheduled reminder (up to 18 ahead) as local notifications on the phone itself, so a knock comes even offline: a Time Sensitive notification with Umpi's own knock sound (`knock.caf`, about 20 seconds, a soft wooden double knock that grows slightly firmer; synthesized for Umpi, so no licensed tone is bundled), then two repeats three minutes apart. A `gentle` reminder knocks once with a short sound at the normal level. **Done**, **Snooze 10 min**, and **Later** answer it through the durable outbox (`POST /api/device/reminders/:id/answer {version, action}`); opening or dismissing it stops the repeats and leaves the reminder open. A knock answered a few seconds before the coordinator fires the reminder fires it once, without a second message. "Wake me" stays a native alarm.
@@ -165,6 +175,7 @@ The agent tools are `read_companion_state`, `update_companion`, and `request_dev
 | `POST /api/device/chat/press` | Device credential; `{seq, data}` presses a button on a chat message |
 | `GET /api/device/today` | Device credential; the day's note, `?day=YYYY-MM-DD` optional |
 | `POST /api/device/today/task` | Device credential; `{day, line, text, checked}` ticks one checklist line |
+| `GET /api/device/widget` | Device credential; what the widgets show |
 | `POST /api/device/knocks` | Device credential; `{scheduled}` reminders this phone has set as knocks |
 | `POST /api/device/reminders/:id/answer` | Device credential; `{version, action}` with done, snooze, or later |
 | `DELETE /api/device/session` | Device credential; revoke itself |

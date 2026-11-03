@@ -24,6 +24,7 @@
 		480A99FAD26686791F2EFAE4 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66C721B679025A29ED293E59 /* ChatView.swift */; };
 		49744912F7986A50CA9EAF63 /* SecureStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F3BFD0B54AB075C19E95F37 /* SecureStorage.swift */; };
 		4B6AC8CE963474A77BF240D0 /* UmpiWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = B03D8E3B2D22491EDB445A6F /* UmpiWidgets.swift */; };
+		5A6CFE1E7A52DCE3000472DA /* WidgetShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3BD3523F049B9E124DCDA19 /* WidgetShared.swift */; };
 		5C03DF65C478600264C013E0 /* MarkdownView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D010600AC2FC6C41ED03558F /* MarkdownView.swift */; };
 		6E39EDAB10F668DDCD9CE1C1 /* QueuedChangesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FA63C5DF1830458AA277C57 /* QueuedChangesView.swift */; };
 		739848E9D839C9C0920C965B /* CompanionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9129706318F50FC4F4F18210 /* CompanionUITests.swift */; };
@@ -33,8 +34,10 @@
 		9091E3664B14E51595D4B104 /* ChatAttachments.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15C396001AD0754C3A161E58 /* ChatAttachments.swift */; };
 		97C6D73E46001174A5545FEB /* ActivityViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81F84A3AD0BC60BAA18413D7 /* ActivityViews.swift */; };
 		9AD329F34051545AC797E5F9 /* BackgroundSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6398981AA3C9F6DDCC9FC8BA /* BackgroundSync.swift */; };
+		9E71F61195A0A7FDAD6BD92B /* WidgetShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3BD3523F049B9E124DCDA19 /* WidgetShared.swift */; };
 		A138BFEE0275119265871D59 /* ChatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 309A00142CD81859386AD711 /* ChatTests.swift */; };
 		BFA62599AE6A3111BF0AD2B6 /* WorkflowViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01688E9D5D74AA1EB9A37D45 /* WorkflowViews.swift */; };
+		C2EB32BC864A2C0A5DEEF6F0 /* HomeWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7EF9DA8A6B391BDB5D276CD /* HomeWidget.swift */; };
 		CA2572DDF10CA82A8543FF15 /* TodayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2401FEA779E0BCFCCAF2EC1D /* TodayView.swift */; };
 		D1DFB04CA4BA75EB463E2F69 /* SyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B25A76F8A7ED8AD27372684E /* SyntaxHighlighter.swift */; };
 		DEF9887A7D5D7B3061B7DB8C /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1279E4B7032997728B14B81D /* Models.swift */; };
@@ -117,9 +120,11 @@
 		9129706318F50FC4F4F18210 /* CompanionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionUITests.swift; sourceTree = "<group>"; };
 		A14AEACCCD7F5BCD8694CBB0 /* CompanionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionClient.swift; sourceTree = "<group>"; };
 		A1EAB9A47CBFD4B231E2F243 /* Umpi.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Umpi.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A3BD3523F049B9E124DCDA19 /* WidgetShared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetShared.swift; sourceTree = "<group>"; };
 		B03D8E3B2D22491EDB445A6F /* UmpiWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UmpiWidgets.swift; sourceTree = "<group>"; };
 		B2041A9A0FEAF44FB88A99CE /* CompanionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionStore.swift; sourceTree = "<group>"; };
 		B25A76F8A7ED8AD27372684E /* SyntaxHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntaxHighlighter.swift; sourceTree = "<group>"; };
+		B7EF9DA8A6B391BDB5D276CD /* HomeWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeWidget.swift; sourceTree = "<group>"; };
 		C1917C675F6D8B3F143CBDD7 /* knock.caf */ = {isa = PBXFileReference; path = knock.caf; sourceTree = "<group>"; };
 		C89BF2E15E70A77ECE98E0C9 /* EffectTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EffectTests.swift; sourceTree = "<group>"; };
 		D010600AC2FC6C41ED03558F /* MarkdownView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownView.swift; sourceTree = "<group>"; };
@@ -262,6 +267,7 @@
 		BE8AFD67F306A1427D644ED4 /* UmpiWidgets */ = {
 			isa = PBXGroup;
 			children = (
+				B7EF9DA8A6B391BDB5D276CD /* HomeWidget.swift */,
 				B03D8E3B2D22491EDB445A6F /* UmpiWidgets.swift */,
 			);
 			path = UmpiWidgets;
@@ -271,6 +277,7 @@
 			isa = PBXGroup;
 			children = (
 				E4C30AA88504D79B39CFAED6 /* TaskActivityAttributes.swift */,
+				A3BD3523F049B9E124DCDA19 /* WidgetShared.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -434,8 +441,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C2EB32BC864A2C0A5DEEF6F0 /* HomeWidget.swift in Sources */,
 				22FCF7D0DFC1336220C26A31 /* TaskActivityAttributes.swift in Sources */,
 				4B6AC8CE963474A77BF240D0 /* UmpiWidgets.swift in Sources */,
+				9E71F61195A0A7FDAD6BD92B /* WidgetShared.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -465,6 +474,7 @@
 				FE57803808D9A0F6E9042BE6 /* TaskActivityAttributes.swift in Sources */,
 				CA2572DDF10CA82A8543FF15 /* TodayView.swift in Sources */,
 				FCE345FBCA4731BC372CBFFE /* UmpiApp.swift in Sources */,
+				5A6CFE1E7A52DCE3000472DA /* WidgetShared.swift in Sources */,
 				EC9CCA04DD0DB7A704BFC4F3 /* WorkView.swift in Sources */,
 				BFA62599AE6A3111BF0AD2B6 /* WorkflowViews.swift in Sources */,
 			);
@@ -513,6 +523,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = UmpiWidgets/UmpiWidgets.entitlements;
 				INFOPLIST_FILE = UmpiWidgets/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -617,6 +628,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = UmpiWidgets/UmpiWidgets.entitlements;
 				INFOPLIST_FILE = UmpiWidgets/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

@@ -225,6 +225,8 @@ export class CompanionStore {
       this.changed(); return result;
     });
   }
+  /** Other owner state the phone should refresh for, such as the widget; a change wakes it like any other. */
+  extraState: (() => unknown) | undefined;
   private ownerState() {
     const recentJobs = this.owner.jobs();
     const jobs = new Map(recentJobs.map(job => [job.jobId, job]));
@@ -238,7 +240,7 @@ export class CompanionStore {
       }
       trackedByDevice.set(row.id, tracked);
     }
-    const state = { jobs: [...jobs.values()], reminders: this.owner.reminders(), choices: this.owner.choices(), operations: this.owner.recentOperations(false) };
+    const state = { jobs: [...jobs.values()], reminders: this.owner.reminders(), choices: this.owner.choices(), operations: this.owner.recentOperations(false), ...(this.extraState ? { extra: this.extraState() } : {}) };
     // One owner-wide hash includes every active device's tracked jobs, regardless of which device reads first.
     const hash = fingerprint(state);
     this.db.transaction(() => {

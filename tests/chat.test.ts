@@ -45,7 +45,8 @@ function fixture(t: TestContext) {
       return result;
     },
     async today(day) { return { day: day ?? "2026-11-03", text: null, revision: "none" }; },
-    async setTask() { return { status: "synced" }; } };
+    async setTask() { return { status: "synced" }; },
+    async widget() { return { items: [], source: "default", updatedAt: "" }; } };
   return { db, owner, chat, appended, companion, context };
 }
 function pair(companion: CompanionStore) {

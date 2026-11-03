@@ -68,7 +68,15 @@ private struct RootView: View {
                 pairingServer = items.first(where: { $0.name == "server" })?.value ?? ""
                 pairingCode = items.first(where: { $0.name == "code" })?.value ?? ""
             } else {
-                selectedTab = 2
+                // Widget and control links: chat, today, work, or capture (record an idea).
+                switch url.host {
+                case "chat": selectedTab = 0
+                case "today": selectedTab = 1
+                case "capture":
+                    selectedTab = 0
+                    NotificationCenter.default.post(name: .umpiCaptureIdea, object: nil)
+                default: selectedTab = 2
+                }
                 Task { await store.synchronize() }
             }
         }
@@ -88,4 +96,9 @@ private struct RootView: View {
             #endif
         }
     }
+}
+
+extension Notification.Name {
+    /// Opened from the capture control or widget: start recording an idea in the chat.
+    static let umpiCaptureIdea = Notification.Name("umpi.captureIdea")
 }

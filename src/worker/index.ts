@@ -82,6 +82,7 @@ import { downloadTelegramImage, downloadTelegramVoice } from "./telegram-voice.j
 import { documentFromBytes, readTelegramFile, type DocumentConverter } from "./telegram-files.js";
 import { ChatLog, type ChatEntry } from "./chat.js";
 import { ChatSocket } from "./chat-socket.js";
+import { openTasks, WidgetStore, widgetTools, type WidgetContent, type WidgetItem } from "./widget.js";
 import type { AppMessage } from "./companion-http.js";
 type ButtonResult = { text: string; replyMarkup?: TelegramMarkup };
 import { SUBSCRIPTION_TRANSCRIPTION_MODEL, transcribeSubscriptionAudio } from "./subscription-transcription.js";
@@ -290,6 +291,7 @@ export class Assistant extends Agent<Env> {
   readonly contextHealth: ContextHealth;
   readonly knocks: KnockStore;
   readonly chat: ChatLog;
+  readonly widgets: WidgetStore;
   private chatSocket?: ChatSocket;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -337,6 +339,9 @@ export class Assistant extends Agent<Env> {
     this.contextHealth = new ContextHealth(this.store.db);
     this.knocks = new KnockStore(this.store.db);
     this.chat = new ChatLog(this.store.db);
+    this.widgets = new WidgetStore(this.store.db);
+    // A widget Umpi chose wakes the phone like other owner changes, so the home screen follows.
+    this.companion.extraState = () => this.widgets.current()?.setAt ?? null;
     this.store.chat = this.chat;
     this.chat.appended = entry => { this.chatSocket?.changed(entry.seq); };
     this.chat.changed = latest => { this.chatSocket?.changed(latest); };
@@ -415,7 +420,7 @@ export class Assistant extends Agent<Env> {
       track: work => this.lifecycle.trackAlarmWork(work),
     });
     const browserProfile = browserExtension(this.browserRuntime);
-    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...activityTools(this.store, this.activity, this.timezone, () => this.notifyExecutor()), ...journalTools(this.journal, id => this.store.isBackgroundSession(id)), ...web, ...decision, ...historyTools(this.dream, this.history, id => this.store.isBackgroundSession(id)), ...contextTools(this.contextHealth, id => !this.store.isBackgroundSession(id)), ...delegation.tools ?? []];
+    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...activityTools(this.store, this.activity, this.timezone, () => this.notifyExecutor()), ...journalTools(this.journal, id => this.store.isBackgroundSession(id)), ...widgetTools(this.widgets, () => this.coordinator.wake()), ...web, ...decision, ...historyTools(this.dream, this.history, id => this.store.isBackgroundSession(id)), ...contextTools(this.contextHealth, id => !this.store.isBackgroundSession(id)), ...delegation.tools ?? []];
     const guardedProactiveTools = guardDreamReviewTools(guardBriefReviewTools(guardMailReviewTools(guardPlanningReviewTools(proactiveTools(this.proactive, () => this.coordinator.wake()), this.planningRuntime), this.mailRuntime), this.brief), this.dream);
     const briefSources = { brief: this.brief, situation: this.situation, mail: this.mail, planning: this.planningRuntime, calendarCredentials: () => this.config.UMPI_CALENDAR_CREDENTIALS, activity: this.activity, dream: this.dream };
     const ownerSessions = () => (["telegram", "control"] as const).flatMap(channel => { const session = this.store.session(channel); return session ? [{ channel, session }] : []; });
@@ -718,6 +723,23 @@ export class Assistant extends Agent<Env> {
     return result;
   }
 
+  /** What the phone widgets show: Umpi's chosen items, or today's open tasks, the next reminders, and what is waiting. */
+  private async widgetContent(): Promise<WidgetContent> {
+    const chosen = this.widgets.current();
+    if (chosen) return { items: chosen.items, source: "umpi", updatedAt: chosen.setAt, ...(chosen.note ? { note: chosen.note } : {}) };
+    const items: WidgetItem[] = [];
+    const waiting = this.store.jobs().filter(job => job.status === "pending_approval").length + this.store.choices().filter(choice => choice.status === "pending").length;
+    if (waiting) items.push({ title: waiting === 1 ? "1 thing needs you" : `${waiting} things need you`, symbol: "hand.raised", link: "work" });
+    try {
+      if (this.obsyVault) for (const task of openTasks((await this.obsyVault.readDay(this.planningRuntime.today())).text).slice(0, 6)) items.push({ title: task, symbol: "circle", link: "today" });
+    } catch { /* The widget still shows reminders and waiting work. */ }
+    const time = new Intl.DateTimeFormat("en-GB", { timeZone: this.timezone, hour: "2-digit", minute: "2-digit", weekday: "short" });
+    for (const reminder of this.store.reminders().filter(item => item.status === "scheduled").sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt)).slice(0, 2)) {
+      items.push({ title: reminder.text, detail: time.format(new Date(reminder.dueAt)), symbol: "bell", link: "work" });
+    }
+    return { items: items.slice(0, 8), source: "default", updatedAt: new Date().toISOString() };
+  }
+
   /** An app message joins the Telegram conversation; its reply stays in the app. */
   private async admitApp(id: string, deviceId: string, message: AppMessage): Promise<Operation> {
     const kind = message.images ? "app-image" : message.document ? "app-file" : message.voice ? "app-voice" : "app-text";
@@ -833,6 +855,7 @@ export class Assistant extends Agent<Env> {
           if (!this.obsyVault) throw new StateError(503, this.obsyIssue ?? "No notes vault is configured");
           return this.obsyVault.readDay(day ?? this.planningRuntime.today());
         },
+        widget: () => this.widgetContent(),
         setTask: async (day, line, expected, checked) => {
           if (!this.obsyVault) throw new StateError(503, this.obsyIssue ?? "No notes vault is configured");
           return this.obsyVault.setTask(day, line, expected, checked, `app-task-${crypto.randomUUID()}`);
