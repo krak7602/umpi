@@ -62,6 +62,7 @@ struct WorkflowListView: View {
                 Toggle("Show archived workflows", isOn: $showArchived)
             }
         }
+        .softScrollEdges()
         .navigationTitle("Workflows")
         .refreshable { await store.synchronize() }
         .toolbar {

@@ -76,6 +76,7 @@ struct SettingsView: View {
                 Text("Disconnect attempts to revoke this device at the coordinator, then removes its local session and cached data. If offline, also revoke this device with the coordinator's owner controls. Existing scheduled OS effects may remain.")
             }
         }
+        .softScrollEdges()
         .navigationTitle("Settings")
         .confirmationDialog("Allow remote device effects?", isPresented: $confirmRemoteEffects, titleVisibility: .visible) {
             Button("Allow remote device effects") {

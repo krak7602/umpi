@@ -1,6 +1,7 @@
 import { InputError, boundedText, identifier, record, timestamp } from "../shared/protocol.js";
 import { MAX_IMAGES_PER_MESSAGE, VoiceNoteError, type TelegramDocument, type TelegramImage } from "../shared/voice-note.js";
 import type { ChatLog } from "./chat.js";
+import { KNOCK_SNOOZE_MINUTES } from "../shared/knock.js";
 import { exactKeys, parsePairClaim } from "../shared/companion.js";
 import { CompanionStore, companionHash } from "./companion-store.js";
 import { companionRole } from "./companion-routes.js";
@@ -18,7 +19,9 @@ export interface CompanionHttpContext {
   readFile(name: string, bytes: Uint8Array): Promise<TelegramDocument>;
   press(seq: number, data: string): Promise<{ text: string }>;
 }
-export interface AppMessage { text: string; sentAt?: string; voice?: true; images?: TelegramImage[]; document?: TelegramDocument }
+/** What an attachment was, for the history to show: the app sends its preview separately, never through the chat. */
+export interface AppMedia { kind: "photos" | "video" | "audio" | "file" | "voice"; name?: string; seconds?: number; count?: number }
+export interface AppMessage { text: string; sentAt?: string; voice?: true; images?: TelegramImage[]; document?: TelegramDocument; context?: string; media?: AppMedia }
 
 const MAX_APP_MESSAGE_BYTES = 15_000_000;
 function chatPosition(value: string | null): number | undefined {
@@ -27,7 +30,18 @@ function chatPosition(value: string | null): number | undefined {
   return Number(value);
 }
 async function appMessage(body: unknown, readFile: CompanionHttpContext["readFile"]): Promise<{ id: string; message: AppMessage }> {
-  const input = record(body); exactKeys(input, ["id", "text", "sentAt", "voice", "images", "file"]);
+  const input = record(body); exactKeys(input, ["id", "text", "sentAt", "voice", "images", "file", "context", "media"]);
+  // Text for Umpi only, such as a video's frames note and transcript; the history shows the owner's own words.
+  const context = input.context === undefined ? undefined : boundedText(input.context, 13_000, "message context");
+  let media: AppMedia | undefined;
+  if (input.media !== undefined) {
+    const value = record(input.media); exactKeys(value, ["kind", "name", "seconds", "count"]);
+    if (!["photos", "video", "audio", "file", "voice"].includes(String(value.kind))) throw new InputError("Unknown media kind");
+    media = { kind: value.kind as AppMedia["kind"],
+      ...(value.name !== undefined ? { name: boundedText(value.name, 120, "media name") } : {}),
+      ...(value.seconds !== undefined ? { seconds: typeof value.seconds === "number" && value.seconds >= 0 && value.seconds <= 86_400 ? Math.round(value.seconds) : (() => { throw new InputError("Invalid media length"); })() } : {}),
+      ...(value.count !== undefined ? { count: Number.isSafeInteger(value.count) && Number(value.count) > 0 && Number(value.count) <= 10 ? Number(value.count) : (() => { throw new InputError("Invalid media count"); })() } : {}) };
+  }
   if (input.voice !== undefined && input.voice !== true) throw new InputError("voice must be true when present");
   const id = identifier(input.id, "message ID");
   const text = input.text === undefined || input.text === "" ? "" : boundedText(input.text, 16_384, "message");
@@ -52,9 +66,9 @@ async function appMessage(body: unknown, readFile: CompanionHttpContext["readFil
     }
   }
   if (images && document) throw new InputError("Send images and a file as separate messages");
-  if (!text.trim() && !images && !document) throw new InputError("Message needs text, images, or a file");
+  if (!text.trim() && !images && !document && !context) throw new InputError("Message needs text, images, or a file");
   if (input.voice === true && (!text.trim() || images || document)) throw new InputError("A voice message is its transcript only");
-  return { id, message: { text, ...(sentAt ? { sentAt } : {}), ...(input.voice === true ? { voice: true as const } : {}), ...(images ? { images } : {}), ...(document ? { document } : {}) } };
+  return { id, message: { text, ...(sentAt ? { sentAt } : {}), ...(context ? { context } : {}), ...(media ? { media } : {}), ...(input.voice === true ? { voice: true as const } : {}), ...(images ? { images } : {}), ...(document ? { document } : {}) } };
 }
 /** Returns undefined only for routes outside the narrow companion surface. Auth precedes every body read. */
 export async function companionRequest(request: Request, context: CompanionHttpContext): Promise<Response | undefined> {
@@ -108,6 +122,9 @@ export async function companionRequest(request: Request, context: CompanionHttpC
     const result = await context.press(input.seq, boundedText(input.data, 64, "button"));
     return Response.json({ text: result.text });
   }
+  if (path === "/api/device/knocks") return Response.json(companion.owner.recordPhoneKnocks(device.id, body));
+  const knock = /^\/api\/device\/reminders\/([^/]+)\/answer$/.exec(path);
+  if (knock) return Response.json(companion.owner.answerPhoneKnock(knock[1]!, body, KNOCK_SNOOZE_MINUTES));
   if (path === "/api/device/register") return Response.json(companion.register(device.id, body));
   if (path === "/api/device/changes") return Response.json(companion.mutate(body, `device:${device.id}`));
   if (path === "/api/device/actions") return Response.json(companion.requestAction(body, device.id));

@@ -34,6 +34,7 @@ function fixture(t: TestContext) {
     async admitApp(id, deviceId, message) {
       companion.requireDevice(deviceId);
       return owner.admit(id, message.text || "[attachment]", "telegram", "telegram-session", { kind: message.images ? "app-image" : message.document ? "app-file" : message.voice ? "app-voice" : "app-text",
+        ...(message.context ? { note: message.context } : {}), ...(message.media ? { media: message.media } : {}),
         ...(message.document ? { file: { name: message.document.name, characters: message.document.text.length } } : {}) }, message.images, message.document);
     },
     async readFile(name, bytes) { return { name, text: new TextDecoder().decode(bytes), truncated: false }; },
@@ -120,13 +121,20 @@ test("the app reads history in pages, changes the notification setting, and send
   assert.equal(record(await again!.json()).id, op.id, "a resent message is admitted once");
   const file = await companionRequest(request("/api/device/messages", token, { id: "m2", file: { name: "plan.md", data: Buffer.from("Rice once a day.").toString("base64") } }), f.context);
   assert.match(String(f.owner.modelContent(f.owner.operation(String(record(await file!.json()).id))!)), /<owner-file name="plan\.md">\nRice once a day\.\n<\/owner-file>$/);
+  const video = await companionRequest(request("/api/device/messages", token, { id: "mv", text: "Look at this", images: [{ data: Buffer.from([0xff, 0xd8, 0xff, 0xe0]).toString("base64"), mimeType: "image/jpeg" }],
+    context: "Video: 4 frames attached. Speech: water the plants.", media: { kind: "video", seconds: 4, count: 4 } }), f.context);
+  const videoOp = f.owner.operation(String(record(await video!.json()).id))!;
+  assert.match(JSON.stringify(f.owner.modelContent(videoOp)), /Look at this\\n\\nVideo: 4 frames attached\. Speech: water the plants\./, "the note reaches the model after the owner's words");
+  assert.equal((String((f.owner.modelContent(videoOp) as { text: string }[])[0]!.text).match(/water the plants/g) ?? []).length, 1, "the note is not repeated in the header");
+  const shown = f.chat.page().entries.at(-1)!;
+  assert.equal(shown.text, "Look at this"); assert.deepEqual(shown.media, { kind: "video", seconds: 4, count: 4 });
   await companionRequest(request("/api/device/messages", token, { id: "m0", voice: true, text: "Remember to buy eggs" }), f.context);
   assert.equal(f.chat.page().entries.at(-1)!.kind, "voice", "a voice message is marked as one");
   const image = { data: Buffer.from([0xff, 0xd8, 0xff, 0xe0]).toString("base64"), mimeType: "image/jpeg" };
   await companionRequest(request("/api/device/messages", token, { id: "m3", text: "What is this?", images: [image] }), f.context);
   const latest = (await page("?after=5")).entries as ChatEntry[];
   assert.deepEqual(latest.map(entry => [entry.surface, entry.kind, entry.text, entry.file ?? entry.images ?? null]),
-    [["app", "text", "Hi from the phone", null], ["app", "file", "[attachment]", "plan.md"], ["app", "voice", "Remember to buy eggs", null], ["app", "image", "What is this?", 1]]);
+    [["app", "text", "Hi from the phone", null], ["app", "file", "[attachment]", "plan.md"], ["app", "image", "Look at this", 1], ["app", "voice", "Remember to buy eggs", null], ["app", "image", "What is this?", 1]]);
   await assert.rejects(companionRequest(request("/api/device/messages", token, { id: "m4" }), f.context), /needs text, images, or a file/);
   await assert.rejects(companionRequest(request("/api/device/messages", token, { id: "m6", voice: true, text: "x", images: [image] }), f.context), /transcript only/);
   await assert.rejects(companionRequest(request("/api/device/messages", token, { id: "m5", file: { name: "x", data: "not base64!" } }), f.context), /base64/);
@@ -169,4 +177,28 @@ test("a button pressed in the app answers the same approval as Telegram's, and t
   await assert.rejects(companionRequest(request("/api/device/chat/press", token, { seq: other.seq, data: approve.data }), f.context), /no longer available|does not belong/, "a button is bound to its own message");
   f.owner.enqueue("proactive:x", "telegram", "Mail", { inline_keyboard: [[{ text: "Draft", callback_data: "mail:draft:1" }]] });
   await assert.rejects(companionRequest(request("/api/device/chat/press", token, { seq: f.chat.latest(), data: "mail:draft:1" }), f.context), /only be answered in Telegram/);
+});
+
+test("a knock scheduled on the phone is the alert: the reminder message is silent, not pushed, and the phone answers it", async t => {
+  const f = fixture(t);
+  const token = pair(f.companion);
+  f.chat.configure({ expectedVersion: 1, notify: "app" });
+  const due = new Date(Date.now() + 60_000).toISOString();
+  f.owner.createReminder("r1", "Stretch", due, "telegram");
+  f.owner.createReminder("r2", "Water plants", due, "telegram");
+  await companionRequest(request("/api/device/knocks", token, { scheduled: [{ id: "r1", version: 1 }] }), f.context);
+  f.owner.fireReminders(Date.now() + 61_000);
+  assert.equal(f.owner.deliveries("reminder:r1:1")[0]!.silent, true, "the knocked reminder is silent in Telegram");
+  const pushed: string[] = [];
+  for (let next = f.chat.nextPush(); next; next = f.chat.nextPush()) { pushed.push(next.text); f.chat.finishPush(next.seq, "accepted"); }
+  assert.deepEqual(pushed, ["Reminder: Water plants"], "only the reminder the phone did not knock is pushed");
+  const answer = async (id: string, body: unknown) => record(await (await companionRequest(request(`/api/device/reminders/${id}/answer`, token, body), f.context))!.json());
+  assert.equal((await answer("r1", { version: 1, action: "done" })).answer && f.owner.reminder("r1")!.answer!.outcome, "done");
+  const snoozed = await answer("r2", { version: 1, action: "snooze" });
+  assert.equal(snoozed.status, "scheduled"); assert.equal(snoozed.version, 2);
+  await assert.rejects(companionRequest(request("/api/device/reminders/r2/answer", token, { version: 1, action: "later" }), f.context), /changed after the knock/);
+  f.owner.createReminder("r3", "Early", new Date(Date.now() + 30_000).toISOString(), "telegram");
+  assert.equal((await answer("r3", { version: 1, action: "later" })).status, "fired", "a knock a few seconds early is answered and fires the reminder once");
+  f.owner.fireReminders(Date.now() + 31_000);
+  assert.equal(f.owner.deliveries("reminder:r3:1").length, 0, "no second message after the answer");
 });

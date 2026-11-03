@@ -21,6 +21,8 @@ export interface ChatEntry {
   text: string;
   images?: number;
   file?: string;
+  /** What an app attachment was, such as a video and its length. */
+  media?: { kind: string; name?: string; seconds?: number; count?: number };
   operationId?: string;
   buttons?: ChatButton[][];
 }
@@ -76,7 +78,7 @@ export class ChatLog {
     return full;
   }
   /** An owner message admitted to the shared conversation. */
-  owner(operationId: string, text: string, surface: ChatSurface, kind: ChatEntry["kind"], extra: { images?: number; file?: string } = {}): void {
+  owner(operationId: string, text: string, surface: ChatSurface, kind: ChatEntry["kind"], extra: { images?: number; file?: string; media?: ChatEntry["media"] } = {}): void {
     this.add({ id: `owner:${operationId}`, role: "owner", surface, kind, text, operationId, ...extra });
   }
   /** Umpi's reply to an app message: shown and announced in the app only. */
@@ -87,12 +89,13 @@ export class ChatLog {
    * A message queued for Telegram. Returns whether Telegram should deliver it silently because the app announces it.
    * Replies to the owner in Telegram stay normal there and are not pushed to the app.
    */
-  telegram(groupId: string, text: string, markup?: TelegramMarkup): { silent: boolean } {
+  telegram(groupId: string, text: string, markup?: TelegramMarkup, options?: { quiet: true }): { silent: boolean } {
     if (PANEL.test(groupId)) return { silent: false };
     const reply = REPLY.test(groupId);
     const buttons = chatButtons(markup);
     const entry = this.add({ id: `umpi:${groupId}`, role: "umpi", surface: "telegram", kind: reply ? "reply" : "message", text, ...(buttons ? { buttons } : {}) });
-    if (reply || this.settings().notify !== "app") return { silent: false };
+    // A quiet message already alerted the owner another way, such as a knock on the phone.
+    if (reply || options?.quiet || this.settings().notify !== "app") return { silent: false };
     if (entry) this.queuePush(entry.id);
     return { silent: true };
   }
