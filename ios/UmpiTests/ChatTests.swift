@@ -109,5 +109,8 @@ final class NoteMarkupTests: XCTestCase {
         XCTAssertEqual(String(first.characters), "Target 06:30 workout")
         XCTAssertEqual(items[1].line, 2, "line numbers still match the note")
         XCTAssertEqual(MarkdownBlock.withoutComments("a <!-- x\ny --> b\nc"), "a\n b\nc")
+        guard case .list(_, _, let tasks) = MarkdownBlock.parse("## Tasks\n- [ ] \n- [ ] Real task\n- [x] ")[1] else { return XCTFail("tasks") }
+        XCTAssertEqual(tasks.count, 1, "blank template items are not shown")
+        XCTAssertEqual(tasks.first?.line, 3)
     }
 }
