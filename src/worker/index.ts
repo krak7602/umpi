@@ -83,6 +83,7 @@ import { documentFromBytes, readTelegramFile, type DocumentConverter } from "./t
 import { ChatLog, type ChatEntry } from "./chat.js";
 import { ChatSocket } from "./chat-socket.js";
 import { openTasks, WidgetStore, widgetTools, type WidgetContent, type WidgetItem } from "./widget.js";
+import { IdeaStore } from "./ideas.js";
 import type { AppMessage } from "./companion-http.js";
 type ButtonResult = { text: string; replyMarkup?: TelegramMarkup };
 import { SUBSCRIPTION_TRANSCRIPTION_MODEL, transcribeSubscriptionAudio } from "./subscription-transcription.js";
@@ -292,6 +293,7 @@ export class Assistant extends Agent<Env> {
   readonly knocks: KnockStore;
   readonly chat: ChatLog;
   readonly widgets: WidgetStore;
+  readonly ideas: IdeaStore;
   private chatSocket?: ChatSocket;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -341,7 +343,8 @@ export class Assistant extends Agent<Env> {
     this.chat = new ChatLog(this.store.db);
     this.widgets = new WidgetStore(this.store.db);
     // A widget Umpi chose wakes the phone like other owner changes, so the home screen follows.
-    this.companion.extraState = () => this.widgets.current()?.setAt ?? null;
+    this.companion.extraState = () => ({ widget: this.widgets.current()?.setAt ?? null, actions: this.widgets.actions() });
+    this.ideas = new IdeaStore(this.store.db);
     this.store.chat = this.chat;
     this.chat.appended = entry => { this.chatSocket?.changed(entry.seq); };
     this.chat.changed = latest => { this.chatSocket?.changed(latest); };
@@ -726,7 +729,8 @@ export class Assistant extends Agent<Env> {
   /** What the phone widgets show: Umpi's chosen items, or today's open tasks, the next reminders, and what is waiting. */
   private async widgetContent(): Promise<WidgetContent> {
     const chosen = this.widgets.current();
-    if (chosen) return { items: chosen.items, source: "umpi", updatedAt: chosen.setAt, ...(chosen.note ? { note: chosen.note } : {}) };
+    const actions = this.widgets.actions();
+    if (chosen) return { items: chosen.items, source: "umpi", updatedAt: chosen.setAt, actions, ...(chosen.note ? { note: chosen.note } : {}) };
     const items: WidgetItem[] = [];
     const waiting = this.store.jobs().filter(job => job.status === "pending_approval").length + this.store.choices().filter(choice => choice.status === "pending").length;
     if (waiting) items.push({ title: waiting === 1 ? "1 thing needs you" : `${waiting} things need you`, symbol: "hand.raised", link: "work" });
@@ -737,7 +741,19 @@ export class Assistant extends Agent<Env> {
     for (const reminder of this.store.reminders().filter(item => item.status === "scheduled").sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt)).slice(0, 2)) {
       items.push({ title: reminder.text, detail: time.format(new Date(reminder.dueAt)), symbol: "bell", link: "work" });
     }
-    return { items: items.slice(0, 8), source: "default", updatedAt: new Date().toISOString() };
+    return { items: items.slice(0, 8), source: "default", updatedAt: new Date().toISOString(), actions };
+  }
+
+  /** A spoken idea: saved, added to today's note under Notes, and made searchable in history. No model turn. */
+  private async addIdea(value: unknown): Promise<object> {
+    const { idea, created } = this.ideas.add(value);
+    if (created) {
+      const day = this.planningRuntime.today();
+      try { this.journal.add(day, "notes", `Idea: ${idea.text.replace(/\s+/g, " ").slice(0, 230)}`); } catch { /* The idea is saved even when the note cannot take it. */ }
+      this.history.put([{ id: `idea:${idea.id}`, source: "digest", period: day, at: Date.parse(idea.at), text: `Idea captured ${day}: ${idea.text}` }]);
+      await this.coordinator.wake();
+    }
+    return { idea, created };
   }
 
   /** An app message joins the Telegram conversation; its reply stays in the app. */
@@ -856,6 +872,9 @@ export class Assistant extends Agent<Env> {
           return this.obsyVault.readDay(day ?? this.planningRuntime.today());
         },
         widget: () => this.widgetContent(),
+        setWidgetActions: async value => ({ actions: this.widgets.setActions(value) }),
+        ideas: async query => ({ ideas: this.ideas.list(query), total: this.ideas.count() }),
+        addIdea: async value => this.addIdea(value),
         setTask: async (day, line, expected, checked) => {
           if (!this.obsyVault) throw new StateError(503, this.obsyIssue ?? "No notes vault is configured");
           return this.obsyVault.setTask(day, line, expected, checked, `app-task-${crypto.randomUUID()}`);

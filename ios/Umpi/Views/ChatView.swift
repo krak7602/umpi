@@ -107,6 +107,10 @@ struct ChatView: View {
             }
         }
         .task { await chat.stayLive(store) }
+        .onReceive(NotificationCenter.default.publisher(for: .umpiStartDraft)) { note in
+            if let text = note.object as? String, draft.isEmpty { draft = text }
+            composing = true
+        }
         .onReceive(NotificationCenter.default.publisher(for: .umpiCaptureIdea)) { _ in
             guard !recorder.isRecording else { return }
             capturing = true
@@ -266,9 +270,18 @@ struct ChatView: View {
             defer { preparing = nil; try? FileManager.default.removeItem(at: url) }
             do {
                 let transcript = try await MediaPrep.transcribe(url)
-                let idea = capturing ? "Captured with the quick-capture button: this is an idea. File it in today's daily note (notes section) with add_to_daily_note, then confirm in one short line." : nil
-                capturing = false
-                if await store.sendChat(text: transcript, voice: true, context: idea, media: MediaInfo(kind: "voice", seconds: seconds), previews: LocalMedia(seconds: seconds)) {
+                if capturing {
+                    // An idea is saved as spoken, without a model turn: listed in Ideas, added to today's note, searchable.
+                    capturing = false
+                    struct Capture: Encodable { var id: String; var text: String; var seconds: Int? }
+                    let body = try? JSONEncoder().encode(Capture(id: UUID().uuidString, text: transcript, seconds: seconds))
+                    if let body, (try? await store.chatTransport?.send(path: "/api/device/ideas", method: "POST", body: body)) != nil {
+                        chat.show("Idea saved")
+                    } else if await store.sendChat(text: transcript, voice: true, context: "Captured as an idea while offline: file it in today's note with add_to_daily_note (notes) and confirm in one line.",
+                                                   media: MediaInfo(kind: "voice", seconds: seconds), previews: LocalMedia(seconds: seconds)) {
+                        chat.show("Offline: the idea will be sent to Umpi")
+                    }
+                } else if await store.sendChat(text: transcript, voice: true, media: MediaInfo(kind: "voice", seconds: seconds), previews: LocalMedia(seconds: seconds)) {
                     await chat.refresh(store)
                 }
             } catch { chat.show((error as? LocalizedError)?.errorDescription ?? "The voice note could not be transcribed.") }

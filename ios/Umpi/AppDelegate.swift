@@ -58,7 +58,7 @@ final class UmpiAppDelegate: NSObject, UIApplicationDelegate, UNUserNotification
               let data = try? await transport.send(path: "/api/device/widget", method: "GET", body: nil),
               let content = try? JSONDecoder().decode(WidgetContent.self, from: data) else { return }
         let previous = WidgetContent.load()
-        guard previous?.items != content.items || previous?.note != content.note || previous?.source != content.source else { return }
+        guard previous != content || previous?.actions != content.actions else { return }
         content.save()
         WidgetCenter.shared.reloadAllTimelines()
     }

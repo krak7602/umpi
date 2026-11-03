@@ -46,9 +46,11 @@ The app's tabs are **Chat**, **Today**, **Work**, and **Settings**. **Today** (`
 
 ### Widgets and quick capture
 
-`WidgetStore` (`widget.ts`) holds what the phone widgets show. Umpi can choose 1 to 8 items with `set_widget` (title, optional detail, SF Symbol, and a link to chat, today, or work) for up to 48 hours, or return to the default with `clear_widget`. The default, built on each request, is what is waiting on the owner, the open tasks of today's note (Markdown marks removed), and the next two reminders. `GET /api/device/widget` returns `{items, source, updatedAt, note?}`. A change Umpi makes is part of the owner state hash, so it wakes the phone like other changes.
+The widget is a launcher. Its buttons are stored state (`WidgetStore.actions`): 1 to 4 of `idea` (record a spoken idea), `today`, `chat`, `ideas`, `work`, and `remind` (the chat, ready to finish "Remind me …"), by default idea, today, chat, ideas. The owner picks them in Settings › Widget (`PUT /api/device/widget/actions`), and Umpi can change them with `set_widget_actions`; a change wakes the phone like other owner state. The small widget and the circular lock-screen widget show the first button; the medium widget all of them as icons with names; the large widget the buttons and what's next below. `umpi://<action>` opens each.
 
-After each sync the app copies the content into its App Group (`group.` plus the app identifier, in both targets' entitlements) and reloads the widgets when it changed. The `UmpiHome` widget shows the first item small, four medium, eight large, and two on the lock screen; taps open the linked tab. A medium or large widget has a capture button, and the `UmpiCapture` control (Control Center or the Action Button) opens `umpi://capture`: the chat starts recording, and the transcript goes to Umpi as an idea to file in today's note with `add_to_daily_note`. `umpi://chat`, `umpi://today`, and `umpi://work` open those tabs.
+What's next is the other half of the content: Umpi can choose 1 to 8 items with `set_widget` (title, optional detail, SF Symbol, and a link) for up to 48 hours, or return to the default with `clear_widget`. The default is what is waiting on the owner, the open tasks of today's note (Markdown marks removed), and the next two reminders. `GET /api/device/widget` returns `{items, source, updatedAt, note?, actions}`. After each sync the app copies it into its App Group (`group.` plus the app identifier, in both targets' entitlements) and reloads the widgets when it changed.
+
+**Ideas.** The idea button, the `UmpiCapture` control (Control Center or the Action Button), and `umpi://idea` open the chat recording. The transcript is saved as an idea through `POST /api/device/ideas {id, text, seconds?}` with no model turn (`IdeaStore`, `ideas.ts`): it is listed in the Ideas view (from Today's toolbar or `umpi://ideas`; newest first, `GET /api/device/ideas?q=` keeps ideas with every word), added to today's note under Notes as "Idea: …", and indexed for history search. A resent capture is saved once. Offline, the transcript goes to the chat through the outbox instead, for Umpi to file.
 
 The simulator verified the content path; the widget's look at each size and the control need checking on the phone.
 
@@ -175,7 +177,9 @@ The agent tools are `read_companion_state`, `update_companion`, and `request_dev
 | `POST /api/device/chat/press` | Device credential; `{seq, data}` presses a button on a chat message |
 | `GET /api/device/today` | Device credential; the day's note, `?day=YYYY-MM-DD` optional |
 | `POST /api/device/today/task` | Device credential; `{day, line, text, checked}` ticks one checklist line |
-| `GET /api/device/widget` | Device credential; what the widgets show |
+| `GET /api/device/widget` | Device credential; what the widgets show and their buttons |
+| `PUT /api/device/widget/actions` | Device credential; `{actions}` the widget's buttons |
+| `GET`, `POST /api/device/ideas` | Device credential; list (`?q=`) or save a spoken idea |
 | `POST /api/device/knocks` | Device credential; `{scheduled}` reminders this phone has set as knocks |
 | `POST /api/device/reminders/:id/answer` | Device credential; `{version, action}` with done, snooze, or later |
 | `DELETE /api/device/session` | Device credential; revoke itself |

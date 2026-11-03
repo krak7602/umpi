@@ -46,7 +46,10 @@ function fixture(t: TestContext) {
     },
     async today(day) { return { day: day ?? "2026-11-03", text: null, revision: "none" }; },
     async setTask() { return { status: "synced" }; },
-    async widget() { return { items: [], source: "default", updatedAt: "" }; } };
+    async widget() { return { items: [], source: "default", updatedAt: "" }; },
+    async setWidgetActions(value) { return { actions: value }; },
+    async ideas() { return { ideas: [] }; },
+    async addIdea(value) { return { idea: value, created: true }; } };
   return { db, owner, chat, appended, companion, context };
 }
 function pair(companion: CompanionStore) {
