@@ -9,7 +9,6 @@ struct TodayView: View {
     @State private var loading = false
     @State private var problem: String?
     @State private var notice: String?
-    @State private var showIdeas = false
 
     struct DayNote: Decodable, Equatable { var day: String; var text: String?; var revision: String }
     struct TaskResult: Decodable { var status: String; var text: String?; var revision: String }
@@ -29,7 +28,6 @@ struct TodayView: View {
                 Button { shift(-1) } label: { Image(systemName: "chevron.left") }.accessibilityLabel("Previous day")
                 Button { shift(1) } label: { Image(systemName: "chevron.right") }.accessibilityLabel("Next day")
             }
-            ToolbarItem(placement: .topBarTrailing) { Button { showIdeas = true } label: { Image(systemName: "lightbulb") }.accessibilityLabel("Ideas") }
             if day != TodayView.today() {
                 ToolbarItem(placement: .topBarTrailing) { Button("Today") { day = TodayView.today() } }
             }
@@ -41,7 +39,6 @@ struct TodayView: View {
             }
         }
         .task(id: day) { await load() }
-        .sheet(isPresented: $showIdeas) { NavigationStack { IdeasView() } }
     }
 
     @ViewBuilder private var content: some View {

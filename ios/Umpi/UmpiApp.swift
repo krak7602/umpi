@@ -33,7 +33,6 @@ private struct RootView: View {
     @State private var pairingCode = ""
     @State private var selectedTab = 0
     @State private var linkMessage: String?
-    @State private var showIdeas = false
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -73,7 +72,6 @@ private struct RootView: View {
                 route(url.host ?? "work")
             }
         }
-        .sheet(isPresented: $showIdeas) { NavigationStack { IdeasView() } }
         // Widget buttons and the control open the app through OpenUmpiAction; a request made before this view
         // existed waits in UmpiRoute.
         .onReceive(NotificationCenter.default.publisher(for: UmpiRoute.notification)) { note in
@@ -101,16 +99,15 @@ private struct RootView: View {
 
 
 extension RootView {
-    /// Opens one of the widget's actions: chat, today, work, ideas, remind, or idea (record an idea).
+    /// Opens one of the widget's actions: chat, today, work, remind, or voice (record a voice message).
     func route(_ action: String) {
         switch action {
         case "chat": selectedTab = 0
         case "today": selectedTab = 1
-        case "ideas": showIdeas = true
         case "remind":
             selectedTab = 0
             ChatRequests.shared.draft = "Remind me "
-        case "idea", "capture":
+        case "voice", "idea", "capture":
             selectedTab = 0
             ChatRequests.shared.capture = true
         default: selectedTab = 2

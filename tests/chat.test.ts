@@ -48,8 +48,7 @@ function fixture(t: TestContext) {
     async setTask() { return { status: "synced" }; },
     async widget() { return { items: [], source: "default", updatedAt: "" }; },
     async setWidgetActions(value) { return { actions: value }; },
-    async ideas() { return { ideas: [] }; },
-    async addIdea(value) { return { idea: value, created: true }; } };
+    };
   return { db, owner, chat, appended, companion, context };
 }
 function pair(companion: CompanionStore) {

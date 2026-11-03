@@ -23,8 +23,6 @@ export interface CompanionHttpContext {
   setTask(day: string, line: number, expected: string, checked: boolean): Promise<object>;
   widget(): Promise<object>;
   setWidgetActions(value: unknown): Promise<object>;
-  ideas(query?: string): Promise<object>;
-  addIdea(value: unknown): Promise<object>;
 }
 /** What an attachment was, for the history to show: the app sends its preview separately, never through the chat. */
 export interface AppMedia { kind: "photos" | "video" | "audio" | "file" | "voice"; name?: string; seconds?: number; count?: number }
@@ -113,10 +111,6 @@ export async function companionRequest(request: Request, context: CompanionHttpC
       ...(chatPosition(query.get("after")) !== undefined ? { after: chatPosition(query.get("after"))! } : {}), ...(limit !== null ? { limit: Number(limit) } : {}) }));
   }
   if (path === "/api/device/widget") return Response.json(await context.widget());
-  if (path === "/api/device/ideas" && request.method === "GET") {
-    const query = new URL(request.url).searchParams.get("q");
-    return Response.json(await context.ideas(query === null ? undefined : boundedText(query, 200, "search")));
-  }
   if (path === "/api/device/today" && request.method === "GET") {
     const day = new URL(request.url).searchParams.get("day");
     if (day !== null && !/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new InputError("Invalid day");
@@ -134,7 +128,6 @@ export async function companionRequest(request: Request, context: CompanionHttpC
   companion.requireDevice(device.id);
   if (path === "/api/device/chat/settings") return Response.json(context.chat.configure(body));
   if (path === "/api/device/widget/actions") return Response.json(await context.setWidgetActions(record(body).actions));
-  if (path === "/api/device/ideas") return Response.json(await context.addIdea(body));
   if (path === "/api/device/chat/test-alert") { const entry = context.chat.testAlert(); await context.wake(); return Response.json({ seq: entry.seq }); }
   if (path === "/api/device/chat/press") {
     const input = record(body); exactKeys(input, ["seq", "data"]);

@@ -10,7 +10,7 @@ struct HomeWidget: Widget {
             HomeWidgetView(entry: entry).containerBackground(.fill.tertiary, for: .widget)
         }
         .configurationDisplayName("Umpi")
-        .description("Quick buttons for an idea, today, and chat; choose them in Umpi's Settings.")
+        .description("Quick buttons for voice, today, and chat; choose them in Umpi's Settings.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge, .accessoryCircular, .accessoryRectangular])
     }
 }
@@ -147,11 +147,11 @@ struct ButtonsWidgetView: View {
 struct CaptureControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: "UmpiCapture") {
-            ControlWidgetButton(action: OpenUmpiAction(action: "idea")) {
-                Label("Capture idea", systemImage: "mic")
+            ControlWidgetButton(action: OpenUmpiAction(action: "voice")) {
+                Label("Talk to Umpi", systemImage: "mic")
             }
         }
-        .displayName("Capture idea")
-        .description("Record an idea; Umpi files it in your notes.")
+        .displayName("Talk to Umpi")
+        .description("Say anything: an idea, a task, a reminder, or a question. Umpi handles it.")
     }
 }

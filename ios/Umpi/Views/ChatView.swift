@@ -113,7 +113,11 @@ struct ChatView: View {
             requests.capture = false
             guard !recorder.isRecording else { return }
             capturing = true
-            Task { await startRecording() }
+            // iOS refuses the microphone while the app is still coming to the front from a widget; wait until it is.
+            Task {
+                for _ in 0..<30 where UIApplication.shared.applicationState != .active { try? await Task.sleep(for: .milliseconds(100)) }
+                await startRecording()
+            }
         }
         .onChange(of: requests.draft, initial: true) { _, text in
             guard let text else { return }
@@ -266,7 +270,10 @@ struct ChatView: View {
         }
     }
     private func startRecording() async {
-        do { try await recorder.start() } catch { chat.show((error as? LocalizedError)?.errorDescription ?? "Recording could not start.") }
+        do { try await recorder.start() } catch {
+            capturing = false
+            chat.show((error as? LocalizedError)?.errorDescription ?? "Recording could not start: \(error.localizedDescription)")
+        }
     }
     /// A voice note is transcribed on the phone and sent as its transcript, like a Telegram voice note.
     private func finishRecording() {
@@ -277,20 +284,13 @@ struct ChatView: View {
             defer { preparing = nil; try? FileManager.default.removeItem(at: url) }
             do {
                 let transcript = try await MediaPrep.transcribe(url)
-                if capturing {
-                    // An idea is saved as spoken, without a model turn: listed in Ideas, added to today's note, searchable.
-                    capturing = false
-                    struct Capture: Encodable { var id: String; var text: String; var seconds: Int? }
-                    let body = try? JSONEncoder().encode(Capture(id: UUID().uuidString, text: transcript, seconds: seconds))
-                    if let body, (try? await store.chatTransport?.send(path: "/api/device/ideas", method: "POST", body: body)) != nil {
-                        chat.show("Idea saved")
-                    } else if await store.sendChat(text: transcript, voice: true, context: "Captured as an idea while offline: file it in today's note with add_to_daily_note (notes) and confirm in one line.",
-                                                   media: MediaInfo(kind: "voice", seconds: seconds), previews: LocalMedia(seconds: seconds)) {
-                        chat.show("Offline: the idea will be sent to Umpi")
-                    }
-                } else if await store.sendChat(text: transcript, voice: true, media: MediaInfo(kind: "voice", seconds: seconds), previews: LocalMedia(seconds: seconds)) {
+                // From the Voice button: Umpi works out what was said and handles it.
+                let context = capturing ? "Sent with the Voice button, often in passing. Work out what it is and handle it: an idea or note goes in today's note under notes, a task under tasks (add_to_daily_note), something with a time becomes a reminder, a question gets an answer. Then confirm in one short line." : nil
+                capturing = false
+                if await store.sendChat(text: transcript, voice: true, context: context, media: MediaInfo(kind: "voice", seconds: seconds), previews: LocalMedia(seconds: seconds)) {
                     await chat.refresh(store)
                 }
+
             } catch { chat.show((error as? LocalizedError)?.errorDescription ?? "The voice note could not be transcribed.") }
         }
     }

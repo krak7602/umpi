@@ -11,9 +11,9 @@ import { StateError, type Database } from "./store.js";
 export interface WidgetItem { title: string; detail?: string; symbol?: string; link?: "chat" | "today" | "work" }
 export interface WidgetContent { items: WidgetItem[]; source: "umpi" | "default"; updatedAt: string; note?: string; actions: WidgetAction[] }
 /** The widget's buttons: what each opens in the app. */
-export const WIDGET_ACTIONS = ["idea", "today", "chat", "ideas", "work", "remind"] as const;
+export const WIDGET_ACTIONS = ["voice", "today", "chat", "work", "remind"] as const;
 export type WidgetAction = (typeof WIDGET_ACTIONS)[number];
-export const DEFAULT_WIDGET_ACTIONS: WidgetAction[] = ["idea", "today", "chat", "ideas"];
+export const DEFAULT_WIDGET_ACTIONS: WidgetAction[] = ["voice", "today", "chat", "work"];
 export function parseWidgetActions(value: unknown): WidgetAction[] {
   if (!Array.isArray(value) || value.length < 1 || value.length > 4) throw new InputError("actions must be a list of 1 to 4");
   const actions = value.map(action => {
@@ -65,7 +65,11 @@ export class WidgetStore {
   /** The widget's buttons, in order: the first is the small widget's only button. */
   actions(): WidgetAction[] {
     const row = this.db.all<{ data: string }>("SELECT data FROM umpi_widget WHERE id=2")[0];
-    return row ? JSON.parse(row.data) as WidgetAction[] : DEFAULT_WIDGET_ACTIONS;
+    if (!row) return DEFAULT_WIDGET_ACTIONS;
+    // The earlier "idea" button is now "voice"; "ideas" is gone.
+    const stored = (JSON.parse(row.data) as string[]).map(action => action === "idea" ? "voice" : action)
+      .filter((action, index, all): action is WidgetAction => (WIDGET_ACTIONS as readonly string[]).includes(action) && all.indexOf(action) === index);
+    return stored.length ? stored : DEFAULT_WIDGET_ACTIONS;
   }
   setActions(value: unknown): WidgetAction[] {
     const actions = parseWidgetActions(value);
@@ -94,7 +98,7 @@ export function widgetTools(store: WidgetStore, wake: () => Promise<void>): Tool
         hours: Type.Optional(Type.Number({ minimum: 0.25, maximum: 48 })), note: Type.Optional(Type.String({ maxLength: 200 })),
       }, { additionalProperties: false }), replay: "safe",
       async execute(input) { return result(() => store.set(input)); } }),
-    defineTool({ name: "set_widget_actions", description: `Set the buttons on the owner's phone widget, in order, when they ask to change them: 1 to 4 of ${WIDGET_ACTIONS.join(", ")}. idea records a spoken idea; today, chat, ideas, and work open those views; remind opens the chat ready to set a reminder. The first is the small widget's button.`,
+    defineTool({ name: "set_widget_actions", description: `Set the buttons on the owner's phone widget, in order, when they ask to change them: 1 to 4 of ${WIDGET_ACTIONS.join(", ")}. voice records a voice message to Umpi; today, chat, and work open those views; remind opens the chat ready to set a reminder. The first is the small widget's button.`,
       parameters: Type.Object({ actions: Type.Array(Type.Union(WIDGET_ACTIONS.map(action => Type.Literal(action))), { minItems: 1, maxItems: 4 }) }, { additionalProperties: false }), replay: "safe",
       async execute(input) { return result(() => ({ actions: store.setActions(record(input).actions) })); } }),
     defineTool({ name: "clear_widget", description: "Return the owner's phone widgets to the default view (today's open tasks, next reminders, what is waiting).",

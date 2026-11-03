@@ -38,13 +38,14 @@ struct WidgetAction: Identifiable, Hashable, Sendable {
     var url: URL { URL(string: "umpi://\(id)")! }
 
     static let all: [WidgetAction] = [
-        .init(id: "idea", label: "Idea", symbol: "mic.fill"),
+        .init(id: "voice", label: "Voice", symbol: "mic.fill"),
         .init(id: "today", label: "Today", symbol: "sun.max.fill"),
         .init(id: "chat", label: "Chat", symbol: "bubble.left.and.bubble.right.fill"),
-        .init(id: "ideas", label: "Ideas", symbol: "lightbulb.fill"),
         .init(id: "work", label: "Work", symbol: "tray.full.fill"),
         .init(id: "remind", label: "Remind me", symbol: "bell.badge.fill"),
     ]
-    static let defaults = ["idea", "today", "chat", "ideas"]
-    static func list(_ ids: [String]?) -> [WidgetAction] { (ids ?? defaults).compactMap { id in all.first { $0.id == id } } }
+    static let defaults = ["voice", "today", "chat", "work"]
+    static func list(_ ids: [String]?) -> [WidgetAction] {
+        (ids ?? defaults).map { $0 == "idea" ? "voice" : $0 }.compactMap { id in all.first { $0.id == id } }
+    }
 }

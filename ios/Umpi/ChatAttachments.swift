@@ -150,7 +150,10 @@ final class VoiceRecorder {
         try session.setActive(true)
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("voice-\(UUID().uuidString).m4a")
         let recorder = try AVAudioRecorder(url: url, settings: [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 16_000, AVNumberOfChannelsKey: 1])
-        guard recorder.record(forDuration: 300) else { throw MediaError.speech("Recording could not start.") }
+        guard recorder.record(forDuration: 300) else {
+            try? session.setActive(false)
+            throw MediaError.speech("Recording could not start. Another app may be using the microphone.")
+        }
         self.recorder = recorder
         isRecording = true; startedAt = Date()
     }
