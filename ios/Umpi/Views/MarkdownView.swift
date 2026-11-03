@@ -95,9 +95,16 @@ indirect enum MarkdownBlock: Equatable {
     private static func block(_ markup: Markup) -> MarkdownBlock? {
         switch markup {
         case let heading as Heading: return .heading(level: heading.level, text: inline(heading.children))
-        case let paragraph as Paragraph: return .paragraph(inline(paragraph.children))
-        case let list as UnorderedList: return .list(ordered: false, start: 1, items: list.listItems.map(item))
-        case let list as OrderedList: return .list(ordered: true, start: Int(list.startIndex), items: list.listItems.map(item))
+        case let paragraph as Paragraph:
+            let text = inline(paragraph.children)
+            return text.characters.allSatisfy(\.isWhitespace) ? nil : .paragraph(text)
+        // Empty items, such as a template's blank "- [ ]", are left out; the note itself keeps them.
+        case let list as UnorderedList:
+            let items = Array(list.listItems.map(item)).filter { !$0.blocks.isEmpty }
+            return items.isEmpty ? nil : .list(ordered: false, start: 1, items: items)
+        case let list as OrderedList:
+            let items = Array(list.listItems.map(item)).filter { !$0.blocks.isEmpty }
+            return items.isEmpty ? nil : .list(ordered: true, start: Int(list.startIndex), items: items)
         case let quote as BlockQuote: return callout(quote) ?? .quote(quote.children.compactMap(block))
         case let code as CodeBlock:
             let body = code.code.hasSuffix("\n") ? String(code.code.dropLast()) : code.code
