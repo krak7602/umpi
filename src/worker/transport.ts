@@ -279,9 +279,9 @@ export function isExecutorWakeUpgrade(request: Request): boolean {
 /** The only admitted HTTP surfaces; control and executor privileges are deliberately disjoint. */
 export async function authorize(request: Request, env: TelegramConfig & { UMPI_CONTROL_TOKEN?: string; UMPI_EXECUTOR_TOKEN?: string; UMPI_BROWSER_SYNC_TOKEN?: string }, deviceVerifier?: ((authorization: string | null) => unknown) | "forward-device"): Promise<void> {
   const path = new URL(request.url).pathname;
-  // The executor wake socket is the only accepted upgrade; it carries no work, only "poll now".
+  // Two upgrades are accepted, and both carry no work: the executor's "poll now" and a paired app's "chat changed".
   const wakeSocket = isExecutorWakeUpgrade(request);
-  if (request.headers.has("upgrade") && !wakeSocket) throw new StateError(404, "Not found");
+  if (request.headers.has("upgrade") && !wakeSocket && !isChatSocketUpgrade(request)) throw new StateError(404, "Not found");
   if (path === "/telegram/webhook" && request.method === "POST") {
     const missing = telegramMissing(env);
     if (missing.length) throw new StateError(503, `Telegram is not configured: ${missing.join(", ")}`);
