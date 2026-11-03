@@ -205,3 +205,13 @@ test("a knock scheduled on the phone is the alert: the reminder message is silen
   f.owner.fireReminders(Date.now() + 31_000);
   assert.equal(f.owner.deliveries("reminder:r3:1").length, 0, "no second message after the answer");
 });
+
+test("a test alert goes to the app only and is pushed", async t => {
+  const f = fixture(t);
+  const token = pair(f.companion);
+  const sent = await companionRequest(request("/api/device/chat/test-alert", token, {}), f.context);
+  const seq = Number(record(await sent!.json()).seq);
+  assert.equal(f.chat.entry(seq)!.surface, "app");
+  assert.equal(f.chat.nextPush()!.seq, seq);
+  assert.equal(f.owner.deliveries().length, 0, "nothing goes to Telegram");
+});

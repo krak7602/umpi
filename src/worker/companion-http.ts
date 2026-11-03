@@ -126,6 +126,7 @@ export async function companionRequest(request: Request, context: CompanionHttpC
   await context.wake();
   companion.requireDevice(device.id);
   if (path === "/api/device/chat/settings") return Response.json(context.chat.configure(body));
+  if (path === "/api/device/chat/test-alert") { const entry = context.chat.testAlert(); await context.wake(); return Response.json({ seq: entry.seq }); }
   if (path === "/api/device/chat/press") {
     const input = record(body); exactKeys(input, ["seq", "data"]);
     if (typeof input.seq !== "number" || !Number.isSafeInteger(input.seq) || input.seq < 1) throw new InputError("Invalid chat position");

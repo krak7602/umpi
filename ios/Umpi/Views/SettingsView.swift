@@ -10,6 +10,7 @@ struct SettingsView: View {
     @State private var disconnecting = false
 
     @State private var notify: String?
+    @State private var testAlert: String?
     @State private var notifyVersion = 1
 
     private func status(_ id: String) -> String? { effects.descriptors.first { $0.id == id }?.status }
@@ -33,6 +34,14 @@ struct SettingsView: View {
                 LabeledContent("Reminder knocks") {
                     Text(notificationsAllowed ? "On this phone" : "Needs notifications").foregroundStyle(.secondary)
                 }
+                Button(testAlert ?? "Send a test alert") {
+                    Task {
+                        testAlert = "Sending…"
+                        let sent = (try? await store.chatTransport?.send(path: "/api/device/chat/test-alert", method: "POST", body: Data("{}".utf8))) != nil
+                        testAlert = sent ? "Sent. Lock the phone to see it arrive." : "Could not send. Check the connection."
+                    }
+                }
+                .disabled(!notificationsAllowed)
                 if let notify {
                     Picker("Umpi's messages alert on", selection: Binding(get: { notify }, set: { value in Task { await setNotify(value) } })) {
                         Text("Telegram").tag("telegram")

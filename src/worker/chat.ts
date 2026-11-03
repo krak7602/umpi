@@ -99,6 +99,12 @@ export class ChatLog {
     if (entry) this.queuePush(entry.id);
     return { silent: true };
   }
+  /** A test alert for the app only, never Telegram, so the owner can see push work before switching to it. */
+  testAlert(): ChatEntry {
+    const entry = this.add({ id: `umpi:test-alert:${this.now()}`, role: "umpi", surface: "app", kind: "message", text: "Test alert from Umpi. If this arrived as a notification, alerts in this app work." })!;
+    this.queuePush(entry.id);
+    return entry;
+  }
   private queuePush(id: string): void {
     const seq = this.db.all<{ seq: number }>("SELECT seq FROM umpi_chat WHERE id=?", id)[0]?.seq;
     if (seq !== undefined) this.db.all("INSERT INTO umpi_chat_push (seq, status) VALUES (?, 'pending') ON CONFLICT(seq) DO NOTHING", seq);
