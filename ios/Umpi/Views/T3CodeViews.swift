@@ -28,7 +28,7 @@ struct T3MachinesSection: View {
             Button { adding = true } label: { Label("Add a machine", systemImage: "plus") }
             if let message { Text(message).font(.footnote).foregroundStyle(.secondary) }
         } header: { Text("T3 Code") } footer: {
-            Text("Umpi reads your coding threads through T3 Connect; nothing runs on the machine. Approval lasts 30 days.")
+            Text("Umpi reads your coding threads through your tailnet or T3 Connect; nothing runs on the machine. Approval lasts 30 days.")
         }
         .task { await t3.loadMachines(store) }
         // Back from the approval page in Safari: show the new state.
@@ -61,7 +61,7 @@ struct T3AddMachineView: View {
                         .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                     TextField("Name (optional)", text: $name)
                 } header: { Text("MCP address") } footer: {
-                    Text("On the machine, in T3 Code: Settings → Environments → Copy MCP URL. Use the T3 Connect address so Umpi can reach it from anywhere.")
+                    Text("On the machine, in T3 Code: Settings → Environments → Copy MCP URL. Its Tailscale address (…ts.net/mcp) or its T3 Connect address both work.")
                 }
                 Section {
                     Label("Approve on the next page with a pairing code from T3 Code: Settings → Sharing & access.", systemImage: "1.circle")

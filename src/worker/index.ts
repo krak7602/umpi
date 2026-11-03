@@ -65,6 +65,8 @@ import { codingExtension, codingSubagentExtension, codingOwnerTools, CODING_OWNE
 import { codingRequest, codingExecutorRequest } from "./coding-http.js";
 import { enqueueCodingControls, handleCodingCallback } from "./coding-telegram.js";
 import { CodingWorker } from "./coding-worker.js";
+import { TailnetBridge } from "./tailnet-bridge.js";
+import { tailnetFetch } from "./tailnet-fetch.js";
 import { BrowserWorker } from "./browser-cloud.js";
 import type { BrowserCloudClient, BrowserWorkerEnvironment } from "./browser-cloud.js";
 import { BrowserStore } from "./browser-store.js";
@@ -92,7 +94,7 @@ import { MAX_VOICE_NOTE_BYTES, MAX_VOICE_NOTE_SECONDS, VoiceNoteError, type Tele
 import { classifyModelError, describeModelFailure, type ModelFailure } from "../model/failure.js";
 import { ModelFallback } from "./model-fallback.js";
 
-export { CodingWorker, BrowserWorker };
+export { CodingWorker, BrowserWorker, TailnetBridge };
 
 registerBunOAuthFlows();
 /** Owner-facing conversations; subagents inherit it, coding and browser runs set their own. */
@@ -106,6 +108,9 @@ export interface Env extends TelegramConfig, CompanionPushConfig {
   OBSY_LIBRARY?: R2Bucket;
   UMPI_OBSY_PREFIX?: string;
   CODING_WORKER?: { getByName(name: string): CodingCloudClient };
+  /** The on-demand container that reaches the owner's tailnet, and the Tailscale OAuth client secret it joins with. */
+  TAILNET_BRIDGE?: { getByName(name: string): { fetch(request: Request): Promise<Response> } };
+  UMPI_TAILSCALE_AUTHKEY?: string;
   CODING_ARCHIVE?: R2Bucket;
   BROWSER_WORKER?: { getByName(name: string): BrowserCloudClient };
   BROWSER_ARCHIVE?: R2Bucket;
@@ -318,7 +323,9 @@ export class Assistant extends Agent<Env> {
     this.companion = new CompanionStore(this.store);
     this.store.setSession("control", "1");
     this.credentials = new DurableCredentials(this.store.db);
-    this.t3 = new T3CodeStore(this.store.db);
+    // One bridge for every machine: tailnet addresses go through it, T3 Connect addresses go direct.
+    const bridge = env.TAILNET_BRIDGE && env.UMPI_TAILSCALE_AUTHKEY ? () => env.TAILNET_BRIDGE!.getByName("tailnet") : undefined;
+    this.t3 = new T3CodeStore(this.store.db, tailnetFetch(bridge));
     this.providerId = env.UMPI_MODEL_PROVIDER || DEFAULT_PROVIDER;
     this.modelId = env.UMPI_MODEL_ID || DEFAULT_MODEL;
     this.timezone = env.UMPI_TIMEZONE || "UTC";

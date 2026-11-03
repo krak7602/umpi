@@ -17,7 +17,8 @@
     "bindings": [
       { "name": "ASSISTANT", "class_name": "Assistant" },
       { "name": "CODING_WORKER", "class_name": "CodingWorker" },
-      { "name": "BROWSER_WORKER", "class_name": "BrowserWorker" }
+      { "name": "BROWSER_WORKER", "class_name": "BrowserWorker" },
+      { "name": "TAILNET_BRIDGE", "class_name": "TailnetBridge" }
     ]
   },
   "migrations": [
@@ -25,13 +26,20 @@
     { "tag": "v2-vault-sync", "new_sqlite_classes": ["VaultSync"] },
     { "tag": "v3-coding-worker", "new_sqlite_classes": ["CodingWorker"] },
     { "tag": "v4-browser-worker", "new_sqlite_classes": ["BrowserWorker"] },
-    { "tag": "v5-retire-vault-sync", "deleted_classes": ["VaultSync"] }
+    { "tag": "v5-retire-vault-sync", "deleted_classes": ["VaultSync"] },
+    { "tag": "v6-tailnet-bridge", "new_sqlite_classes": ["TailnetBridge"] }
   ],
   "containers": [{
     "class_name": "CodingWorker",
     "image": "./containers/coding/Dockerfile",
     "image_build_context": ".",
     "instance_type": "basic",
+    "max_instances": 1
+  }, {
+    "class_name": "TailnetBridge",
+    "image": "./containers/tailnet/Dockerfile",
+    "image_build_context": ".",
+    "instance_type": "lite",
     "max_instances": 1
   }],
   "r2_buckets": [

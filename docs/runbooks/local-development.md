@@ -172,6 +172,18 @@ On first deployment, [Cloudflare can serve Worker routes before container provis
 
 Only after authorized deployment verify the actual live owner routes and menu, then run an explicitly approved bounded generic live-model smoke. Check real source receipt/digest, executed exit-zero check, retained review patch/checkpoint, unchanged original, and actual runner stop. Inspect billed active lifetime, including model thinking. Local Docker/source/CLI evidence is not hosted-model or Telegram visual verification. Do not upload real private source, copy hosted OAuth into a runner/local Worker, overwrite installed Mac config, or enable installed coding merely because build or local checks passed.
 
+### Connect T3 Code machines
+
+Umpi reaches T3 Code on the owner's machines in one of two ways. The [runtime section](../subsystems/assistant-runtime.md#t3-code-threads) owns the contract.
+
+- **T3 Connect address.** Nothing to set up in Umpi. Add the machine's T3 Connect MCP address in the app.
+- **Tailscale HTTPS address** (`https://<name>.<tailnet>.ts.net/mcp`, from `tailscale serve`). Umpi reaches these through the `TailnetBridge` container. Set it up once:
+  1. In the Tailscale policy file, add `"tagOwners": {"tag:umpi": ["autogroup:admin"]}`. Replace a default `{"src": ["*"], "dst": ["*"], "ip": ["*"]}` grant with `{"src": ["autogroup:member"], "dst": ["*"], "ip": ["*"]}`, then add `{"src": ["tag:umpi"], "dst": ["<machine Tailscale IP>", …], "ip": ["tcp:443"]}` for the T3 machines only. Do not tag the T3 machines themselves.
+  2. In Settings → Trust credentials, create an OAuth client with only **Keys → Auth Keys: Write** and tag `tag:umpi`.
+  3. Store its client secret without echoing it: `npx wrangler secret put UMPI_TAILSCALE_AUTHKEY --config wrangler.local.jsonc`, reading the value from standard input. For a local copy, add the same name to its private `.dev.vars` and turn on `dev.enable_containers`.
+
+The bridge joins as an ephemeral `tag:umpi` device named `umpi-bridge` when Umpi first needs a tailnet machine, and sleeps after five idle minutes. Docker must be running for a build or deployment, because the container image is built locally.
+
 ### Operate subagents
 
 Native background delegation supports focused foreground assistant work and approved coding. Ask for focused independent work and give concrete goals; the parent decides whether delegation is useful. No new Telegram command, provider login, or Mac opt-in is required beyond a correctly deployed coordinator. [The delegation contract](../subsystems/assistant-runtime.md#subagents) owns capability, deadline, and recovery boundaries; [evidence](../learning/assistant-core-verification.md#subagent-verification) records exercised behavior.
