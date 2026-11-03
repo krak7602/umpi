@@ -827,7 +827,10 @@ export class Assistant extends Agent<Env> {
     const targets = this.companion.alertTargets();
     if (!targets.length) return "unconfigured";
     const body = entry.text.replace(/[*_`#>]+/g, "").replace(/\s+/g, " ").trim() || "New message";
-    const results = await Promise.all(targets.map(target => sendCompanionPush(target, { revision: 0, jobs: [], message: { body, seq: entry.seq } }, this.config)));
+    // A T3 Code action waiting for the owner carries its two buttons, so it can be answered from the notification.
+    const request = /^umpi:t3-request:([^:]+)$/.exec(entry.id)?.[1];
+    const approval = request && entry.buttons?.length ? { request } : undefined;
+    const results = await Promise.all(targets.map(target => sendCompanionPush(target, { revision: 0, jobs: [], message: { body, seq: entry.seq, ...(approval ? { approval } : {}) } }, this.config)));
     return results.some(result => result.status === "accepted") ? "accepted" : results.some(result => result.status === "uncertain") ? "uncertain"
       : results.every(result => result.status === "unconfigured") ? "unconfigured" : "failed";
   }
@@ -894,6 +897,13 @@ export class Assistant extends Agent<Env> {
         },
         widget: () => this.widgetContent(),
         t3: this.t3,
+        t3Requests: () => this.t3Requests.recent(),
+        decideT3: async (id, approve) => {
+          const button = this.t3Requests.button(id, approve);
+          const seq = this.chat.seqOf(button.groupId);
+          const result = seq !== undefined ? await this.pressChatButton(seq, button.data) : await this.pressButton(button.data, undefined, button.groupId);
+          return { text: result.text };
+        },
         setWidgetActions: async value => ({ actions: this.widgets.setActions(value) }),
         setTask: async (day, line, expected, checked) => {
           if (!this.obsyVault) throw new StateError(503, this.obsyIssue ?? "No notes vault is configured");

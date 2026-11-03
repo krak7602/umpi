@@ -8,6 +8,7 @@ final class UmpiAppDelegate: NSObject, UIApplicationDelegate, UNUserNotification
     // Created before didFinishLaunching so silent-push/BG launches do not depend on a SwiftUI scene.
     let store = CompanionStore()
     let capabilities = DeviceCapabilities()
+    let t3 = T3CodeModel()
     private let backgroundSync = BackgroundSync()
     private var attached = false
 
@@ -15,6 +16,7 @@ final class UmpiAppDelegate: NSObject, UIApplicationDelegate, UNUserNotification
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         UNUserNotificationCenter.current().delegate = self
         KnockScheduler.registerCategory()
+        KnockScheduler.registerApprovalCategory()
         attach(store: store, capabilities: capabilities)
         backgroundSync.register()
         application.registerForRemoteNotifications()
@@ -101,18 +103,26 @@ final class UmpiAppDelegate: NSObject, UIApplicationDelegate, UNUserNotification
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
-        // No approve/cancel notification actions: protected reviews live in trusted app UI only. Knock answers are
+        // Mac command approvals live in trusted app UI only. A T3 Code action Umpi decided on can be approved from the
+        // notification: Approve requires Face ID or the passcode (`.authenticationRequired`). Knock answers are
         // reminder outcomes, not approvals.
         let content = response.notification.request.content
         let action = response.actionIdentifier
         let isKnock = content.categoryIdentifier == KnockScheduler.category
         let reminderID = content.userInfo["reminderId"] as? String
         let version = content.userInfo["version"] as? Int
+        let approvalID = (content.userInfo["approval"] as? [String: Any])?["request"] as? String
+        let isApproval = content.categoryIdentifier == KnockScheduler.approvalCategory && approvalID != nil
         // The answer is written to the durable outbox right away; sending it may finish after this returns.
         completionHandler()
         Task { @MainActor [weak self] in
             guard let self else { return }
-            if isKnock, let reminderID, let version {
+            if isApproval, let approvalID, action == KnockScheduler.ApprovalAction.approve.rawValue || action == KnockScheduler.ApprovalAction.decline.rawValue {
+                // Finish the answer even if the app goes back to the background.
+                let task = UIApplication.shared.beginBackgroundTask(withName: "approval")
+                await self.t3.decide(self.store, approvalID, approve: action == KnockScheduler.ApprovalAction.approve.rawValue)
+                UIApplication.shared.endBackgroundTask(task)
+            } else if isKnock, let reminderID, let version {
                 switch action {
                 case KnockScheduler.Action.done.rawValue: await self.store.answerKnock(id: reminderID, version: version, action: "done")
                 case KnockScheduler.Action.snooze.rawValue: await self.store.answerKnock(id: reminderID, version: version, action: "snooze")

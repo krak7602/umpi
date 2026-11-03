@@ -38,7 +38,9 @@ function fakeT3(options: { expiresIn?: number } = {}) {
       return { ok: true };
     }
     if (name === "t3_pending_request" && args.action === "list") return { requestIds: ["q1"] };
-    if (name === "t3_pending_request" && args.action === "read") return { requestId: args.requestId, questions: [{ id: "choice", question: "Which DB?", options: ["sqlite", "postgres"] }] };
+    if (name === "t3_pending_request" && args.action === "read") return args.threadId === "th-2"
+      ? { requestId: args.requestId, questions: [{ id: "db", header: "DB", question: "Which DB?", options: [{ label: "SQLite in memory", description: "Fast", value: "sqlite" }, { label: "Postgres", description: "" }] }] }
+      : { requestId: args.requestId, questions: [{ id: "choice", question: "Which DB?", options: [] }] };
     if (name === "t3_thread_search") return { matches: [{ threadId: "th-1", projectId: "p1", title: "Fix the widget", snippet: "…the widget…", messageCreatedAt: "2026-11-03T09:00:00Z" }] };
     if (name === "t3_thread_read") {
       const after = Number(args.afterPosition ?? -1);
@@ -270,8 +272,8 @@ test("thread actions reach T3 Code with an idempotency key; projects resolve by 
   assert.equal(t3.acted[1]!.args.stop, true);
   assert.deepEqual(t3.acted[2]!.args, { title: "Fix login", message: "Fix the login bug", clientRequestId: "umpi-call-3", projectId: "p1", workspaceStrategy: { type: "worktree", branch: "fix/login" } });
   await assert.rejects(store.act(id, { kind: "start", title: "x", message: "y", project: "nope" }, "umpi-call-5"), /No project called "nope"\. Projects: umpi/);
-  const questions = await store.questions(id, "th-1") as { questions: unknown[] };
-  assert.equal(questions.questions.length, 1);
+  const questions = await store.questions(id, "th-1");
+  assert.deepEqual(questions.requests, [{ requestId: "q1", questions: [{ id: "choice", question: "Which DB?", options: [] }] }]);
 });
 
 test("an action Umpi decided on waits for Approve; Decline and second presses change nothing", async t => {
@@ -312,4 +314,25 @@ test("background reviews may read T3 Code and request actions, not act directly"
 test("the app's own thread actions are device routes", () => {
   assert.equal(companionRole("/api/device/t3/act", "POST"), "device");
   assert.equal(companionRole("/api/device/t3/act", "GET"), undefined);
+});
+
+test("an approval push carries its category and both buttons", async () => {
+  const { generateKeyPairSync } = await import("node:crypto");
+  const { sendCompanionPush } = await import("../src/worker/companion-push.js");
+  const keys = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const config = { APNS_TEAM_ID: "TESTTEAM00", APNS_KEY_ID: "TESTKEY000", APNS_PRIVATE_KEY: keys.privateKey.export({ format: "pem", type: "pkcs8" }).toString(), APNS_BUNDLE_ID: "com.example.umpi" };
+  const sent: Record<string, unknown>[] = [];
+  const transport = (async (_url: string | URL, init?: RequestInit) => { sent.push(JSON.parse(String(init!.body))); return new Response(null, { status: 200, headers: { "apns-id": "123e4567-e89b-12d3-a456-426614174000" } }); }) as typeof fetch;
+  await sendCompanionPush({ deviceId: "phone-1", apnsToken: "ab".repeat(32), apnsEnvironment: "sandbox" },
+    { revision: 0, jobs: [], message: { body: "T3 Code: may Umpi do this?", seq: 7, approval: { request: "t3r-1" } } }, config, { fetch: transport });
+  assert.equal((sent[0]!.aps as Record<string, unknown>).category, "UMPI_APPROVAL");
+  assert.deepEqual(sent[0]!.approval, { request: "t3r-1" });
+  assert.equal(sent[0]!.chat, 7);
+});
+
+test("pending questions keep their choices", async t => {
+  const { store, id } = await connected(t);
+  const read = await store.questions(id, "th-2");
+  assert.deepEqual(read.requests[0]!.questions[0]!.options, [{ label: "SQLite in memory", description: "Fast", value: "sqlite" }, { label: "Postgres" }]);
+  assert.equal(read.requests[0]!.questions[0]!.header, "DB");
 });

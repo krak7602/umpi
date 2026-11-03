@@ -94,58 +94,113 @@ struct T3AddMachineView: View {
     }
 }
 
-/// Work: what the coding agents on each machine are doing. Active threads first, then the latest few.
-struct T3WorkSection: View {
-    @Environment(T3CodeModel.self) private var t3
-
-    var body: some View {
-        ForEach(t3.machines.filter { $0.connected || $0.problem != nil || $0.threads != nil }) { machine in
-            Section {
-                if let problem = machine.problem {
-                    Label(problem, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange)
-                }
-                ForEach(T3WorkSection.shown(machine.threads ?? [])) { thread in
-                    NavigationLink { T3ThreadView(machine: machine, thread: thread) } label: { T3ThreadRow(thread: thread) }
-                }
-                if machine.connected, let threads = machine.threads, T3WorkSection.shown(threads).isEmpty, machine.problem == nil {
-                    Text("Nothing running").foregroundStyle(.secondary)
-                }
-            } header: {
-                Text(t3.machines.count > 1 ? "Coding · \(machine.label)" : "Coding")
-            }
+extension T3Thread {
+    /// Colour only says status: blue working, orange waiting on you, green done, red failed.
+    var tint: Color {
+        switch status {
+        case "running", "starting", "preparing", "queued": .accentColor
+        case "waiting": .orange
+        case "completed": .green
+        case "failed": .red
+        default: .secondary
         }
-    }
-
-    /// Working first, then the most recent unsettled ones; six at most. Threads waiting on the owner show under Needs you.
-    static func shown(_ threads: [T3Thread]) -> [T3Thread] {
-        let top = threads.filter { $0.subagent != true && $0.status != "waiting" }
-        let active = top.filter(\.active)
-        let rest = top.filter { !$0.active && !$0.settled }
-        return Array((active + rest).prefix(6))
     }
 }
 
+/// A thread in a list: a status dot, its title, and one quiet line of where and when.
 struct T3ThreadRow: View {
     let thread: T3Thread
+    var machine: String?
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Image(systemName: thread.symbol)
-                .foregroundStyle(thread.status == "waiting" ? Color.orange : thread.status == "failed" ? Color.red : Color.accentColor)
-                .symbolEffect(.pulse, isActive: thread.status == "running")
-            VStack(alignment: .leading, spacing: 3) {
+        HStack(spacing: 12) {
+            Circle().fill(thread.tint).frame(width: 8, height: 8)
+                .overlay { if thread.status == "running" { Circle().stroke(thread.tint.opacity(0.35), lineWidth: 4).frame(width: 16, height: 16) } }
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
                 Text(thread.title).lineLimit(1)
-                HStack(spacing: 4) {
-                    Text(thread.statusText)
-                    if let project = thread.project { Text("· \(project)") }
-                    if let updated = thread.updated { Text("· \(updated, format: .relative(presentation: .named))") }
-                }
-                .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                Text([thread.statusText, thread.project].compactMap { $0 }.joined(separator: " · ")).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 2) {
+                if let updated = thread.updated { Text(updated, format: .relative(presentation: .numeric, unitsStyle: .narrow)).font(.caption).foregroundStyle(.secondary) }
+                if let machine { Text(machine).font(.caption2).foregroundStyle(.tertiary).lineLimit(1) }
             }
         }
     }
 }
 
-/// A thread's latest messages: the owner's requests in a quiet box, the agent's answers as notes.
+/// An action Umpi decided on and asks the owner to approve. The same card shows in the chat and in Work, and it
+/// changes in place once it is answered.
+struct T3ApprovalCard: View {
+    let request: T3Request
+    /// The message's buttons, Approve then Decline; nil where the card cannot be answered.
+    var answer: ((Bool) -> Void)?
+    @State private var working = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: "hand.raised.fill").font(.system(size: 14, weight: .semibold)).foregroundStyle(.orange)
+                    .frame(width: 30, height: 30).background(Color.orange.opacity(0.16), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(request.pending ? "NEEDS YOUR OK" : "UMPI ASKED").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                    Text(request.headline).font(.body.weight(.semibold)).lineLimit(2)
+                }
+            }
+            Text(request.place).font(.footnote).foregroundStyle(.secondary)
+            if let quoted = request.quoted, !quoted.isEmpty {
+                Text(quoted).lineLimit(8).textSelection(.enabled)
+                    .padding(.horizontal, 12).padding(.vertical, 9).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            if let why = request.why { (Text("Why  ").fontWeight(.semibold).foregroundStyle(.primary) + Text(why)).font(.footnote).foregroundStyle(.secondary) }
+            state
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .onChange(of: request.status) { _, _ in working = false }
+    }
+
+    @ViewBuilder private var state: some View {
+        if request.pending && working {
+            HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Sending to \(request.machineLabel)…") }.font(.subheadline).padding(.top, 2)
+        } else if request.pending, let answer {
+            HStack(spacing: 8) {
+                Button { working = true; answer(false) } label: { Text("Decline").foregroundStyle(.primary).frame(maxWidth: .infinity) }
+                    .buttonStyle(.bordered).tint(Color(.systemGray))
+                Button { working = true; answer(true) } label: { Text("Approve").fontWeight(.semibold).frame(maxWidth: .infinity) }
+                    .buttonStyle(.borderedProminent)
+            }
+            .controlSize(.large).padding(.top, 2)
+            if let expires = request.expires {
+                Text("Runs once · expires \(expires, format: .relative(presentation: .named))").font(.caption2).foregroundStyle(.tertiary).frame(maxWidth: .infinity)
+            }
+        } else {
+            HStack(spacing: 6) {
+                switch request.status {
+                case "done":
+                    Image(systemName: "checkmark").foregroundStyle(.green)
+                    Text("Done").foregroundStyle(.primary)
+                    if let decided = request.decided { Text(decided, format: .dateTime.hour().minute()).foregroundStyle(.secondary) }
+                case "failed":
+                    Image(systemName: "exclamationmark.triangle").foregroundStyle(.red)
+                    Text(request.outcome ?? "It did not work").foregroundStyle(.secondary).lineLimit(2)
+                case "declined":
+                    Image(systemName: "xmark").foregroundStyle(.secondary); Text("Declined · nothing changed").foregroundStyle(.secondary)
+                case "expired":
+                    Image(systemName: "hourglass").foregroundStyle(.tertiary); Text("Expired").foregroundStyle(.tertiary)
+                default:
+                    Text("Waiting").foregroundStyle(.secondary)
+                }
+            }
+            .font(.subheadline).padding(.top, 2)
+        }
+    }
+}
+
+/// A thread: its status at the top, the latest messages, what the agent asks, and a reply. Deeper work belongs in
+/// T3 Code itself.
 struct T3ThreadView: View {
     @Environment(CompanionStore.self) private var store
     @Environment(T3CodeModel.self) private var t3
@@ -153,29 +208,44 @@ struct T3ThreadView: View {
     let thread: T3Thread
     @State private var read: T3ThreadRead?
     @State private var problem: String?
+    @State private var questions: [T3QuestionSet] = []
     @State private var draft = ""
     @State private var sending = false
     @State private var notice: String?
     @State private var confirmStop = false
     @FocusState private var composing: Bool
 
+    private var current: T3Thread { read?.thread.map { fresh in var merged = thread; merged.status = fresh.status; return merged } ?? thread }
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 16) {
                     header
                     if let read {
                         if read.messages.isEmpty { Text("No messages yet").foregroundStyle(.secondary) }
                         ForEach(read.messages) { message in
                             if message.fromOwner {
-                                Text(message.text).textSelection(.enabled).lineLimit(12)
-                                    .padding(12).frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                Text(message.text).lineLimit(14).textSelection(.enabled)
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 14).padding(.vertical, 9)
+                                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                                    .frame(maxWidth: .infinity, alignment: .trailing).padding(.leading, 48)
                                     .id(message.position)
                             } else {
                                 MarkdownView(message.text).textSelection(.enabled).id(message.position)
                             }
                         }
+                        ForEach(questions) { set in
+                            ForEach(set.questions) { question in
+                                T3QuestionCard(question: question) { value in Task { await answer(set, question, value) } }
+                            }
+                        }
+                        if current.status == "waiting" && questions.isEmpty {
+                            Label("It may be waiting for a permission. Answer that in T3 Code.", systemImage: "hand.raised")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+                        Color.clear.frame(height: 1).id("end")
                     } else if let problem {
                         ContentUnavailableView("Couldn't read the thread", systemImage: "exclamationmark.triangle", description: Text(problem))
                     } else {
@@ -187,8 +257,8 @@ struct T3ThreadView: View {
             .softScrollEdges()
             .scrollDismissesKeyboard(.interactively)
             .refreshable { await load() }
-            .task { await load(); if let last = read?.messages.last { proxy.scrollTo(last.position, anchor: .bottom) } }
-            .onChange(of: read?.messages.last?.position) { _, last in if let last { withAnimation { proxy.scrollTo(last, anchor: .bottom) } } }
+            .task { await load(); proxy.scrollTo("end", anchor: .bottom) }
+            .onChange(of: read?.messages.last?.position) { _, _ in withAnimation { proxy.scrollTo("end", anchor: .bottom) } }
         }
         .safeAreaInset(edge: .bottom) { composer }
         .overlay(alignment: .top) {
@@ -200,9 +270,9 @@ struct T3ThreadView: View {
         .navigationTitle(thread.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if (read?.thread ?? thread).active {
+            if current.active {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(role: .destructive) { confirmStop = true } label: { Image(systemName: "stop.circle") }.accessibilityLabel("Stop thread")
+                    Button(role: .destructive) { confirmStop = true } label: { Image(systemName: "stop.fill").foregroundStyle(.red) }.accessibilityLabel("Stop thread")
                 }
             }
         }
@@ -212,10 +282,25 @@ struct T3ThreadView: View {
         .disabled(!machine.connected)
     }
 
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(current.statusText).font(.caption.weight(.semibold)).foregroundStyle(current.tint)
+                    .padding(.horizontal, 9).padding(.vertical, 4).background(current.tint.opacity(0.15), in: Capsule())
+                Spacer()
+                Text(machine.label).font(.caption).foregroundStyle(.secondary)
+            }
+            let place = [thread.project, thread.branch].compactMap { $0 }
+            if !place.isEmpty { Text(place.joined(separator: " · ")).font(.footnote).foregroundStyle(.secondary).lineLimit(1) }
+        }
+        .padding(14)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
     /// A message to the thread's agent: it starts an idle thread, steers a running turn, or waits its turn.
     private var composer: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            TextField("Message this thread", text: $draft, axis: .vertical)
+            TextField("Reply to the agent", text: $draft, axis: .vertical)
                 .lineLimit(1...6).focused($composing)
                 .padding(.horizontal, 14).padding(.vertical, 10)
                 .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -237,23 +322,74 @@ struct T3ThreadView: View {
             notice = kind == "send" ? "Sent to \(machine.label)" : "Stopped"
             try? await Task.sleep(for: .seconds(2))
             await load()
+            await t3.loadThreads(store)
         } catch {
             notice = (error as? LocalizedError)?.errorDescription ?? "It did not reach the machine."
         }
     }
 
-    private var header: some View {
-        let current = read?.thread ?? thread
-        return VStack(alignment: .leading, spacing: 4) {
-            Label(current.statusText, systemImage: current.symbol).font(.subheadline.weight(.medium))
-            Text([thread.project, thread.branch, machine.label].compactMap { $0 }.joined(separator: " · "))
-                .font(.footnote).foregroundStyle(.secondary)
-            Text("Showing the latest messages. Permission requests are answered in T3 Code.").font(.caption).foregroundStyle(.tertiary)
-        }
+    private func answer(_ set: T3QuestionSet, _ question: T3QuestionSet.Question, _ value: T3CodeModel.AnswerValue) async {
+        do {
+            try await t3.answer(store, machine: machine.id, thread: thread.threadId, question: set.requestId, answers: [question.id: value])
+            questions.removeAll { $0.requestId == set.requestId }
+            notice = "Answered"
+            try? await Task.sleep(for: .seconds(2))
+            await load()
+            await t3.loadThreads(store)
+        } catch { notice = (error as? LocalizedError)?.errorDescription ?? "The answer did not reach the machine." }
     }
 
     private func load() async {
-        do { read = try await t3.read(store, machine: machine.id, thread: thread.threadId); problem = nil }
-        catch { problem = (error as? LocalizedError)?.errorDescription ?? "The machine did not answer." }
+        do {
+            read = try await t3.read(store, machine: machine.id, thread: thread.threadId); problem = nil
+            questions = current.status == "waiting" ? await t3.questions(store, machine: machine.id, thread: thread.threadId) : []
+        } catch { problem = (error as? LocalizedError)?.errorDescription ?? "The machine did not answer." }
+    }
+}
+
+/// What an agent asks, with its choices as plain rows: a tap answers. No frame, no colour: it reads as part of the thread.
+struct T3QuestionCard: View {
+    let question: T3QuestionSet.Question
+    let answer: (T3CodeModel.AnswerValue) -> Void
+    @State private var picked: Set<String> = []
+    @State private var own = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("THE AGENT ASKS").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+            Text(question.question).font(.body.weight(.semibold))
+            ForEach(question.options, id: \.label) { option in
+                let value = option.value ?? option.label
+                Button {
+                    if question.multiSelect == true { if picked.contains(value) { picked.remove(value) } else { picked.insert(value) } }
+                    else { answer(.one(value)) }
+                } label: {
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(option.label).foregroundStyle(.primary)
+                            if let detail = option.description, !detail.isEmpty { Text(detail).font(.footnote).foregroundStyle(.secondary) }
+                        }
+                        Spacer()
+                        if question.multiSelect == true { Image(systemName: picked.contains(value) ? "checkmark.circle.fill" : "circle").foregroundStyle(picked.contains(value) ? Color.accentColor : .secondary) }
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 10).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
+            if question.multiSelect == true {
+                Button("Answer") { answer(.many(Array(picked))) }.buttonStyle(.borderedProminent).disabled(picked.isEmpty)
+            }
+            if question.allowCustomAnswer == true || question.options.isEmpty {
+                HStack {
+                    TextField("Your own answer", text: $own).textFieldStyle(.plain)
+                    Button("Send") { answer(.one(own.trimmingCharacters(in: .whitespacesAndNewlines))) }.disabled(own.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 10)
+                .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+        }
+        .padding(14)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 }
