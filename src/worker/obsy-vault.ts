@@ -60,6 +60,36 @@ export class ObsyVaultClient implements VaultPlanningClient {
     return { day, checkedAt: new Date().toISOString(), revision: vaultNoteRevision(target), target, template, recent };
   }
 
+  /** The day's note for the app's Today view, or null when it does not exist yet. */
+  async readDay(day: string): Promise<{ day: string; text: string | null; revision: string }> {
+    shiftPlanningDay(day, 0);
+    const file = await this.agent().read(vaultDayPath(this.scope, day));
+    if (file && (file.text === null || file.size > MAX_NOTE_BYTES)) throw new Error("The daily note is not readable text");
+    const text = file?.text ?? null;
+    return { day, text, revision: vaultNoteRevision(text) };
+  }
+
+  /**
+   * The owner ticked or unticked a checklist line in the app. Only that line changes, and only while it still reads as
+   * the app showed it; any other edit made meanwhile is kept, and a changed line is a conflict, not a guess.
+   */
+  async setTask(day: string, line: number, expected: string, checked: boolean, run: string): Promise<{ status: "synced" | "conflict"; text: string | null; revision: string }> {
+    shiftPlanningDay(day, 0);
+    const path = vaultDayPath(this.scope, day), agent = this.agent(run);
+    const current = await agent.read(path);
+    if (!current || current.text === null) return { status: "conflict", text: null, revision: vaultNoteRevision(null) };
+    const lines = current.text.split("\n");
+    const before = lines[line];
+    if (before === undefined || before !== expected || !/^\s*[-*+] \[[ xX]\]/.test(before)) return { status: "conflict", text: current.text, revision: vaultNoteRevision(current.text) };
+    lines[line] = before.replace(/\[[ xX]\]/, checked ? "[x]" : "[ ]");
+    const text = lines.join("\n");
+    if (text === current.text) return { status: "synced", text, revision: vaultNoteRevision(text) };
+    const result = await agent.replaceIfUnchanged(path, text, { baseRev: current.rev ?? null, toolCall: run });
+    if (result.status === "committed" || result.status === "unchanged") return { status: "synced", text, revision: vaultNoteRevision(text) };
+    const latest = await agent.read(path);
+    return { status: "conflict", text: latest?.text ?? null, revision: vaultNoteRevision(latest?.text ?? null) };
+  }
+
   async applyNote(value: VaultPlanningApply): Promise<VaultPlanningResult> {
     const intent = parseVaultApply(value), path = vaultDayPath(this.scope, intent.day);
     const checked = () => new Date().toISOString();

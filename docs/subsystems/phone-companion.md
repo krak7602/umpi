@@ -38,6 +38,12 @@ The owner's own words are the message; text meant only for Umpi (a video's frame
 
 Speech uses the phone's on-device recognizer when it has one, and Apple's recognition service otherwise. The simulator has neither, so voice notes and video speech must be checked on a real phone; a failed transcription says why in the composer.
 
+### Today and Work
+
+The app's tabs are **Chat**, **Today**, **Work**, and **Settings**. **Today** (`TodayView.swift`) shows the day's note from the owner's obsy vault, the note [daily preparation](assistant-runtime.md#daily-note-preparation) writes, rendered like the chat with its frontmatter hidden; arrows move between days. `GET /api/device/today?day=` returns `{day, text, revision}` (today in the owner's timezone by default; `text` is null without a note). Tapping a checkbox calls `POST /api/device/today/task {day, line, text, checked}`: `ObsyVaultClient.setTask` changes only that line, and only while it still reads as the app showed it, through a compare-and-swap commit by agent `umpi`. Edits elsewhere in the note are kept; a changed line returns `conflict` with the latest note, which the app then shows. Without a configured vault the routes answer 503 and Today says notes aren't available.
+
+**Work** (`WorkView.swift`) puts what needs the owner first (device actions to review, commands awaiting approval, open questions), then running commands, the next reminders, and links to Workflows and the full activity record.
+
 ### Knocks
 
 Reminders knock on the phone in place of alarms (`Knocks.swift`). After each refresh the app sets every scheduled reminder (up to 18 ahead) as local notifications on the phone itself, so a knock comes even offline: a Time Sensitive notification with Umpi's own knock sound (`knock.caf`, about 20 seconds, a soft wooden double knock that grows slightly firmer; synthesized for Umpi, so no licensed tone is bundled), then two repeats three minutes apart. A `gentle` reminder knocks once with a short sound at the normal level. **Done**, **Snooze 10 min**, and **Later** answer it through the durable outbox (`POST /api/device/reminders/:id/answer {version, action}`); opening or dismissing it stops the repeats and leaves the reminder open. A knock answered a few seconds before the coordinator fires the reminder fires it once, without a second message. "Wake me" stays a native alarm.
@@ -157,6 +163,8 @@ The agent tools are `read_companion_state`, `update_companion`, and `request_dev
 | `GET /api/device/chat/socket` | Device credential; WebSocket that announces new positions |
 | `GET`, `PUT /api/device/chat/settings` | Device credential; `{expectedVersion, notify}` |
 | `POST /api/device/chat/press` | Device credential; `{seq, data}` presses a button on a chat message |
+| `GET /api/device/today` | Device credential; the day's note, `?day=YYYY-MM-DD` optional |
+| `POST /api/device/today/task` | Device credential; `{day, line, text, checked}` ticks one checklist line |
 | `POST /api/device/knocks` | Device credential; `{scheduled}` reminders this phone has set as knocks |
 | `POST /api/device/reminders/:id/answer` | Device credential; `{version, action}` with done, snooze, or later |
 | `DELETE /api/device/session` | Device credential; revoke itself |

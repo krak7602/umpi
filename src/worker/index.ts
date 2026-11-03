@@ -829,6 +829,14 @@ export class Assistant extends Agent<Env> {
         companion: this.companion, config: this.config, wake: () => this.coordinator.wake(), chat: this.chat,
         admitApp: (id, deviceId, message) => this.admitApp(id, deviceId, message),
         press: (seq, data) => this.pressChatButton(seq, data),
+        today: async day => {
+          if (!this.obsyVault) throw new StateError(503, this.obsyIssue ?? "No notes vault is configured");
+          return this.obsyVault.readDay(day ?? this.planningRuntime.today());
+        },
+        setTask: async (day, line, expected, checked) => {
+          if (!this.obsyVault) throw new StateError(503, this.obsyIssue ?? "No notes vault is configured");
+          return this.obsyVault.setTask(day, line, expected, checked, `app-task-${crypto.randomUUID()}`);
+        },
         readFile: (name, bytes) => documentFromBytes(bytes, name, (this.env as Env).AI as unknown as DocumentConverter | undefined),
         requireModel: async () => { if (!(await this.modelReady())) throw new StateError(503, this.modelIssue!); },
       });

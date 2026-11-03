@@ -93,3 +93,21 @@ test("the apply contract requires explicit expiry and cannot smuggle a path or c
   assert.throws(() => parseVaultApply({ ...intent, expiresAt: "2026-10-13T00:00:00.000Z", path: "another.md" }));
   assert.throws(() => parseVaultApply({ ...intent, expiresAt: "2026-10-13T00:00:00.000Z", command: "anything" }));
 });
+
+test("the app's Today view reads the day's note and ticks one checklist line without touching other edits", async () => {
+  const note = "# Nov 3\n\n## Tasks\n- [ ] Buy oats\n- [x] Buy dal\nPlain line\n";
+  const { client, device } = await vault({ [PATH]: note });
+  const read = await client.readDay(DAY);
+  assert.equal(read.text, note); assert.equal(read.revision, vaultNoteRevision(note));
+  assert.equal((await client.readDay("2026-10-22")).text, null, "a day without a note");
+  const ticked = await client.setTask(DAY, 3, "- [ ] Buy oats", true, "tick-1");
+  assert.equal(ticked.status, "synced");
+  assert.equal((await device.read(PATH))!.text, note.replace("- [ ] Buy oats", "- [x] Buy oats"));
+  // An edit in Obsidian elsewhere in the note survives the next tick.
+  const edited = (await device.read(PATH))!;
+  assert.equal((await device.replaceIfUnchanged(PATH, edited.text!.replace("Plain line", "Edited on the Mac"), { baseRev: edited.rev })).status, "committed");
+  assert.equal((await client.setTask(DAY, 4, "- [x] Buy dal", false, "tick-2")).status, "synced");
+  assert.match((await device.read(PATH))!.text!, /- \[ \] Buy dal\nEdited on the Mac/);
+  assert.equal((await client.setTask(DAY, 3, "- [ ] Buy oats", false, "tick-3")).status, "conflict", "a line that no longer reads as shown is not changed");
+  assert.equal((await client.setTask(DAY, 5, "Edited on the Mac", true, "tick-4")).status, "conflict", "only checklist lines can be ticked");
+});

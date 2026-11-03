@@ -41,11 +41,11 @@ private struct RootView: View {
                     Tab("Chat", systemImage: "bubble.left.and.bubble.right", value: 0) {
                         NavigationStack { ChatView() }
                     }
-                    Tab("Workflows", systemImage: "list.bullet.rectangle", value: 1) {
-                        NavigationStack { WorkflowListView() }
+                    Tab("Today", systemImage: "sun.max", value: 1) {
+                        NavigationStack { TodayView() }
                     }
-                    Tab("Activity", systemImage: "clock", value: 2) {
-                        NavigationStack { ActivityListView() }
+                    Tab("Work", systemImage: "tray.full", value: 2) {
+                        NavigationStack { WorkView() }
                     }
                     Tab("Settings", systemImage: "gear", value: 3) {
                         NavigationStack { SettingsView() }

@@ -43,7 +43,9 @@ function fixture(t: TestContext) {
       const result = owner.resolveTelegramCallback(data, { groupId: entry!.id.slice("umpi:".length) });
       chat.setButtons(seq, result.replyMarkup);
       return result;
-    } };
+    },
+    async today(day) { return { day: day ?? "2026-11-03", text: null, revision: "none" }; },
+    async setTask() { return { status: "synced" }; } };
   return { db, owner, chat, appended, companion, context };
 }
 function pair(companion: CompanionStore) {
