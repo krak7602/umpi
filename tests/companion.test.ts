@@ -47,7 +47,13 @@ function fixture(t: TestContext) {
       return owner.admit(id, message.text || "[attachment]", "telegram", "2", { kind: message.images ? "app-image" : message.document ? "app-file" : "app-text",
         ...(message.document ? { file: { name: message.document.name, characters: message.document.text.length } } : {}) }, message.images, message.document);
     },
-    async readFile(name, bytes) { return { name, text: new TextDecoder().decode(bytes), truncated: false }; } };
+    async readFile(name, bytes) { return { name, text: new TextDecoder().decode(bytes), truncated: false }; },
+    async press(seq, data) {
+      const entry = chat.entry(seq);
+      const result = owner.resolveTelegramCallback(data, { groupId: entry!.id.slice("umpi:".length) });
+      chat.setButtons(seq, result.replyMarkup);
+      return result;
+    } };
   return { db, owner, companion, context, reopen() { sqlite.close(); sqlite = new DatabaseSync(path); return new CompanionStore(new Store(db)); } };
 }
 function paired(companion: CompanionStore, deviceId = "phone-1") {

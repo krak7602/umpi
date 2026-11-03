@@ -433,13 +433,17 @@ export class Store {
     });
   }
   choices(): Choice[] { return this.rows("SELECT data FROM umpi_choices ORDER BY CASE WHEN status='pending' THEN 0 ELSE 1 END, rowid DESC LIMIT 100"); }
-  resolveTelegramCallback(token: string, messageId: number): { text: string; operationId?: string; replyMarkup: TelegramMarkup } {
+  /** A button press, bound to its Telegram message or, from the app, to the message's group. */
+  resolveTelegramCallback(token: string, binding: number | { groupId: string }): { text: string; operationId?: string; replyMarkup: TelegramMarkup } {
     return this.db.transaction(() => {
-      if (typeof token !== "string" || !token || token.length > 64 || !Number.isSafeInteger(messageId) || messageId < 1) throw new StateError(400, "Invalid button");
+      const messageId = typeof binding === "number" ? binding : undefined;
+      if (typeof token !== "string" || !token || token.length > 64 || (messageId !== undefined && (!Number.isSafeInteger(messageId) || messageId < 1))) throw new StateError(400, "Invalid button");
       const interaction = this.rows<TelegramInteraction>("SELECT data FROM umpi_telegram_interactions WHERE token=?", token)[0];
-      if (!interaction) throw new StateError(409, "This button is no longer available");
-      const delivery = this.deliveries(interaction.groupId).find(item => item.channel === "telegram" && item.status === "sent" && item.messageId === messageId
-        && item.replyMarkup?.inline_keyboard.some(row => row.some(button => button.callback_data === token)));
+      if (!interaction) throw new StateError(409, messageId === undefined ? "This button can only be answered in Telegram for now" : "This button is no longer available");
+      const hasButton = (item: Delivery) => item.channel === "telegram" && item.replyMarkup?.inline_keyboard.some(row => row.some(button => button.callback_data === token));
+      const delivery = typeof binding === "number"
+        ? this.deliveries(interaction.groupId).find(item => hasButton(item) && item.status === "sent" && item.messageId === messageId)
+        : interaction.groupId === binding.groupId ? this.deliveries(interaction.groupId).find(hasButton) : undefined;
       if (!delivery) throw new StateError(409, "This button does not belong to that message");
       const empty: TelegramMarkup = { inline_keyboard: [] };
       if (interaction.kind === "job") {
@@ -471,8 +475,9 @@ export class Store {
         if (!interaction.used || choice.answer !== answer || !this.operation(operationId)) throw new StateError(409, "This question already has an answer");
       } else {
         this.choiceWrite({ ...choice, status: "answered", answer });
+        // An answer given in the app is replied to in the app.
         this.operationWrite({ id: operationId, requestId: operationId, channel: choice.channel, sessionId: choice.sessionId,
-          text: `Question: ${choice.question}\nAnswer: ${answer}`, status: "admitted", createdAt: iso() });
+          text: `Question: ${choice.question}\nAnswer: ${answer}`, status: "admitted", createdAt: iso(), ...(messageId === undefined ? { surface: "app" as const } : {}) });
         this.interactionWrite(token, { ...interaction, used: true });
       }
       return { text: "Answer received.", operationId, replyMarkup: empty };

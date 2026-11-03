@@ -86,6 +86,32 @@ final class ChatModel {
         }
     }
 
+    private(set) var notice: String?
+    @ObservationIgnored private var pressing: Set<String> = []
+
+    /// Presses a button on one of Umpi's messages; the server runs the same handler as Telegram's.
+    func press(_ store: CompanionStore, seq: Int, data: String) async {
+        guard let transport = store.chatTransport, !pressing.contains("\(seq):\(data)") else { return }
+        pressing.insert("\(seq):\(data)"); defer { pressing.remove("\(seq):\(data)") }
+        struct Press: Encodable { var seq: Int; var data: String }
+        struct Answer: Decodable { var text: String }
+        do {
+            let reply = try await transport.send(path: "/api/device/chat/press", method: "POST", body: JSONEncoder().encode(Press(seq: seq, data: data)))
+            notice = (try? JSONDecoder().decode(Answer.self, from: reply))?.text
+        } catch {
+            notice = (error as? LocalizedError)?.errorDescription ?? "The button could not be pressed."
+        }
+        await refreshAll(store)
+    }
+    func clearNotice() { notice = nil }
+
+    /// Reads the newest page again, so changed buttons on recent messages show.
+    func refreshAll(_ store: CompanionStore) async {
+        guard let transport = store.chatTransport, !fetching else { return }
+        fetching = true; defer { fetching = false }
+        if let result = try? await page(transport, query: "?limit=50") { entries = ChatModel.merge(entries, result.entries); latest = result.latest }
+    }
+
     func loadOlder(_ store: CompanionStore) async {
         guard let transport = store.chatTransport, let first = entries.first?.seq, hasOlder, !fetching else { return }
         fetching = true; defer { fetching = false }
@@ -112,8 +138,9 @@ final class ChatModel {
                     let message = try await task.receive()
                     delay = 1
                     if case .string(let text) = message, let data = text.data(using: .utf8),
-                       let change = try? JSONDecoder().decode(Change.self, from: data), change.type == "chat", change.latest > (entries.last?.seq ?? 0) {
-                        await refresh(store)
+                       let change = try? JSONDecoder().decode(Change.self, from: data), change.type == "chat" {
+                        // A newer position is new messages; the same one means a message changed, such as its buttons.
+                        if change.latest > (entries.last?.seq ?? 0) { await refresh(store) } else { await refreshAll(store) }
                     }
                 }
             } catch {

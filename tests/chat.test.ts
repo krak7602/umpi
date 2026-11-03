@@ -36,7 +36,13 @@ function fixture(t: TestContext) {
       return owner.admit(id, message.text || "[attachment]", "telegram", "telegram-session", { kind: message.images ? "app-image" : message.document ? "app-file" : "app-text",
         ...(message.document ? { file: { name: message.document.name, characters: message.document.text.length } } : {}) }, message.images, message.document);
     },
-    async readFile(name, bytes) { return { name, text: new TextDecoder().decode(bytes), truncated: false }; } };
+    async readFile(name, bytes) { return { name, text: new TextDecoder().decode(bytes), truncated: false }; },
+    async press(seq, data) {
+      const entry = chat.entry(seq);
+      const result = owner.resolveTelegramCallback(data, { groupId: entry!.id.slice("umpi:".length) });
+      chat.setButtons(seq, result.replyMarkup);
+      return result;
+    } };
   return { db, owner, chat, appended, companion, context };
 }
 function pair(companion: CompanionStore) {
@@ -143,4 +149,21 @@ test("a chat message reaches the phone as an alert with its preview and position
   assert.equal(result.status, "accepted");
   assert.equal(sent[0]!.headers.get("apns-push-type"), "alert");
   assert.deepEqual(sent[0]!.body, { aps: { alert: { title: "Umpi", body: "Your brief is ready." }, sound: "default", "thread-id": "chat", "content-available": 1 }, chat: 42 });
+});
+
+test("a button pressed in the app answers the same approval as Telegram's, and the message's buttons change", async t => {
+  const f = fixture(t);
+  const token = pair(f.companion);
+  f.owner.createJob({ jobId: "job-1", command: "printf safe", cwd: "/workspace", timeoutMs: 1_000, createdAt: new Date().toISOString() }, "telegram", "telegram-session");
+  const card = f.chat.page().entries.find(entry => entry.id.startsWith("umpi:approval:job-1"))!;
+  const approve = card.buttons!.flat().find(button => /approve/i.test(button.label))!;
+  const pressed = await companionRequest(request("/api/device/chat/press", token, { seq: card.seq, data: approve.data }), f.context);
+  assert.match(String(record(await pressed!.json()).text), /Approved/);
+  assert.equal(f.owner.job("job-1")!.status, "queued");
+  assert.ok(!f.chat.entry(card.seq)!.buttons?.flat().some(button => button.data === approve.data), "the used button is gone");
+  f.owner.enqueue("approval:other:1", "telegram", "Other", { inline_keyboard: [[{ text: "Approve", callback_data: approve.data }]] });
+  const other = f.chat.page().entries.at(-1)!;
+  await assert.rejects(companionRequest(request("/api/device/chat/press", token, { seq: other.seq, data: approve.data }), f.context), /no longer available|does not belong/, "a button is bound to its own message");
+  f.owner.enqueue("proactive:x", "telegram", "Mail", { inline_keyboard: [[{ text: "Draft", callback_data: "mail:draft:1" }]] });
+  await assert.rejects(companionRequest(request("/api/device/chat/press", token, { seq: f.chat.latest(), data: "mail:draft:1" }), f.context), /only be answered in Telegram/);
 });

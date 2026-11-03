@@ -9,7 +9,7 @@ import { createAssistantModels, selectAssistantModel, DEFAULT_PROVIDER, DEFAULT_
 import { parseAssistantCredential } from "../model/credentials.js";
 import { InputError, boundedText, identifier, record } from "../shared/protocol.js";
 import { DurableCredentials } from "./credentials.js";
-import { Store, StateError, type Channel, type Operation, type OwnerMessageSource } from "./store.js";
+import { Store, StateError, type Channel, type Operation, type OwnerMessageSource, type TelegramMarkup } from "./store.js";
 import { assistantTools, ASSISTANT_INSTRUCTIONS, RESPONSE_STYLE_INSTRUCTIONS } from "./tools.js";
 import { readJson, authorize, isChatSocketUpgrade, isExecutorWakeUpgrade, telegramMissing, telegramUpdate, sendTelegram, answerTelegramCallback, editTelegramKeyboard, type TelegramConfig } from "./transport.js";
 import { formatTelegramStatus } from "./telegram-view.js";
@@ -83,6 +83,7 @@ import { documentFromBytes, readTelegramFile, type DocumentConverter } from "./t
 import { ChatLog, type ChatEntry } from "./chat.js";
 import { ChatSocket } from "./chat-socket.js";
 import type { AppMessage } from "./companion-http.js";
+type ButtonResult = { text: string; replyMarkup?: TelegramMarkup };
 import { SUBSCRIPTION_TRANSCRIPTION_MODEL, transcribeSubscriptionAudio } from "./subscription-transcription.js";
 import { MAX_VOICE_NOTE_BYTES, MAX_VOICE_NOTE_SECONDS, VoiceNoteError, type TelegramDocument, type TelegramImage, type TelegramInboxDelivery } from "../shared/voice-note.js";
 import { classifyModelError, describeModelFailure, type ModelFailure } from "../model/failure.js";
@@ -338,6 +339,7 @@ export class Assistant extends Agent<Env> {
     this.chat = new ChatLog(this.store.db);
     this.store.chat = this.chat;
     this.chat.appended = entry => { this.chatSocket?.changed(entry.seq); };
+    this.chat.changed = latest => { this.chatSocket?.changed(latest); };
     // Knocks belong on the phone, in place of alarms; the Mac lane stays idle until the app takes them. Reminders are Telegram messages meanwhile.
     this.webUsage = new WebUsageStore(this.store.db, () => {
       const budget = Number(env.UMPI_WEB_MONTHLY_BUDGET);
@@ -667,6 +669,55 @@ export class Assistant extends Agent<Env> {
     return this.store.operation(op.id)!;
   }
 
+  /**
+   * Runs one button of a message Umpi sent. A Telegram press names its Telegram message; an app press names the chat
+   * entry, which is bound to the same message when it reached Telegram. Returns the answer text and the new keyboard.
+   */
+  private async pressButton(data: string, messageId: number | undefined, groupId?: string): Promise<ButtonResult> {
+    await this.coordinator.wake();
+    try {
+      if (messageId !== undefined) {
+        const coding = await handleCodingCallback(this.codingRuntime, data, messageId);
+        if (coding) return { text: coding.text, ...(coding.removeKeyboard ? { replyMarkup: { inline_keyboard: [] } } : {}) };
+        const browser = await handleBrowserCallback(this.browserRuntime, data, messageId);
+        if (browser) return { text: browser.text, ...(browser.removeKeyboard ? { replyMarkup: { inline_keyboard: [] } } : {}) };
+        const mail = await handleMailCallback(this.mailRuntime, data, messageId);
+        if (mail) {
+          if (mail.prompt) {
+            const sessionId = await this.session("telegram");
+            this.proactive.deferForForeground();
+            this.store.admitResult(`mail-draft:${data}`, mail.prompt, "telegram", sessionId);
+          }
+          return { text: mail.text, replyMarkup: mail.replyMarkup };
+        }
+      }
+      const result = messageId !== undefined
+        ? await handleBriefCallback(this.brief, data, messageId, () => this.coordinator.wake())
+          ?? await handlePlanningCallback(this.planningRuntime, data, messageId)
+          ?? handleScheduleCallback(this.proactive, data, messageId)
+          ?? await handleMemoryTelegramCallback(await this.harness.pi(), BACKGROUND_CONTEXT, this.store, data, messageId)
+          ?? this.store.resolveTelegramCallback(data, messageId)
+        // Without a Telegram message, only approvals and questions are answered here, bound to their own message.
+        : this.store.resolveTelegramCallback(data, { groupId: groupId! });
+      if (this.store.hasForegroundInput()) this.proactive.deferForForeground();
+      return { text: result.text, replyMarkup: result.replyMarkup };
+    } finally { await this.coordinator.wake(); }
+  }
+
+  /** A button pressed in the app, on a message in the shared chat. Telegram's copy of the message changes with it. */
+  private async pressChatButton(seq: number, data: string): Promise<ButtonResult> {
+    const entry = this.chat.entry(seq);
+    if (!entry || entry.role !== "umpi" || !entry.buttons?.some(row => row.some(button => button.data === data))) throw new StateError(409, "This button is no longer available");
+    const groupId = entry.id.slice("umpi:".length);
+    const sent = this.store.deliveries(groupId).filter(delivery => delivery.status === "sent" && delivery.messageId !== undefined && delivery.replyMarkup).at(-1);
+    const result = await this.pressButton(data, sent?.messageId, groupId);
+    if (result.replyMarkup) {
+      this.chat.setButtons(seq, result.replyMarkup);
+      if (sent?.messageId !== undefined) await editTelegramKeyboard(sent.messageId, result.replyMarkup, this.config).catch(() => undefined);
+    }
+    return result;
+  }
+
   /** An app message joins the Telegram conversation; its reply stays in the app. */
   private async admitApp(id: string, deviceId: string, message: AppMessage): Promise<Operation> {
     const kind = message.images ? "app-image" : message.document ? "app-file" : "app-text";
@@ -777,6 +828,7 @@ export class Assistant extends Agent<Env> {
       const companion = await companionRequest(request, {
         companion: this.companion, config: this.config, wake: () => this.coordinator.wake(), chat: this.chat,
         admitApp: (id, deviceId, message) => this.admitApp(id, deviceId, message),
+        press: (seq, data) => this.pressChatButton(seq, data),
         readFile: (name, bytes) => documentFromBytes(bytes, name, (this.env as Env).AI as unknown as DocumentConverter | undefined),
         requireModel: async () => { if (!(await this.modelReady())) throw new StateError(503, this.modelIssue!); },
       });
@@ -910,45 +962,8 @@ export class Assistant extends Agent<Env> {
         const input = telegramUpdate(await readJson(request), this.config);
         if (!input) return Response.json({ ok: true, ignored: true });
         if (input.kind === "callback") {
-          await this.coordinator.wake();
-          let result;
-          try {
-          const coding = await handleCodingCallback(this.codingRuntime, input.data, input.messageId);
-          if (coding) {
-            await answerTelegramCallback(input.callbackId, coding.text, this.config);
-            if (coding.removeKeyboard) await editTelegramKeyboard(input.messageId, { inline_keyboard: [] }, this.config);
-            await this.coordinator.wake();
-            return Response.json({ ok: true });
-          }
-            const browser = await handleBrowserCallback(this.browserRuntime, input.data, input.messageId);
-            if (browser) {
-              await answerTelegramCallback(input.callbackId, browser.text, this.config);
-              if (browser.removeKeyboard) await editTelegramKeyboard(input.messageId, { inline_keyboard: [] }, this.config);
-              await this.coordinator.wake();
-              return Response.json({ ok: true });
-            }
-            const mail = await handleMailCallback(this.mailRuntime, input.data, input.messageId);
-            if (mail) {
-              await Promise.all([
-                answerTelegramCallback(input.callbackId, mail.text, this.config),
-                editTelegramKeyboard(input.messageId, mail.replyMarkup, this.config),
-              ]);
-              if (mail.prompt) {
-                const sessionId = await this.session("telegram");
-                this.proactive.deferForForeground();
-                this.store.admitResult(`mail-draft:${input.data}`, mail.prompt, "telegram", sessionId);
-              }
-              await this.coordinator.wake();
-              return Response.json({ ok: true });
-            }
-            result = await handleBriefCallback(this.brief, input.data, input.messageId, () => this.coordinator.wake())
-              ?? await handlePlanningCallback(this.planningRuntime, input.data, input.messageId)
-              ?? handleScheduleCallback(this.proactive, input.data, input.messageId)
-              ?? await handleMemoryTelegramCallback(await this.harness.pi(), BACKGROUND_CONTEXT, this.store, input.data, input.messageId)
-              ?? this.store.resolveTelegramCallback(input.data, input.messageId);
-            if (this.store.hasForegroundInput()) this.proactive.deferForForeground();
-            await this.coordinator.wake();
-          }
+          let result: ButtonResult;
+          try { result = await this.pressButton(input.data, input.messageId); }
           catch (error) {
             if (!(error instanceof InputError || error instanceof StateError)) throw error;
             await answerTelegramCallback(input.callbackId, error.message, this.config);
@@ -956,7 +971,7 @@ export class Assistant extends Agent<Env> {
           }
           await Promise.all([
             answerTelegramCallback(input.callbackId, result.text, this.config),
-            editTelegramKeyboard(input.messageId, result.replyMarkup, this.config),
+            result.replyMarkup ? editTelegramKeyboard(input.messageId, result.replyMarkup, this.config) : Promise.resolve(),
           ]);
           return Response.json({ ok: true });
         }
