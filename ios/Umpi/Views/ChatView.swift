@@ -7,7 +7,7 @@ struct ChatView: View {
     @Environment(CompanionStore.self) private var store
     @State private var chat = ChatModel()
     @State private var draft = ""
-    @FocusState private var composing: Bool
+    @State private var composing = false
     @State private var attachment: PreparedAttachment?
     @State private var preparing: String?
     @State private var photoItems: [PhotosPickerItem] = []
@@ -211,14 +211,11 @@ struct ChatView: View {
             .accessibilityIdentifier("chat.attach")
             .accessibilityLabel("Attach")
             ZStack(alignment: .bottomTrailing) {
-                TextField("Message Umpi", text: $draft, axis: .vertical)
-                    .lineLimit(1...8)
-                    .focused($composing)
-                    // Measured: body text sits optically high in its line, so a little more space above centres it, and the
-                    // one-line field is exactly as tall as the + button.
-                    .padding(.leading, 14).padding(.trailing, 42).padding(.top, 9.5).padding(.bottom, 7)
-                    .frame(minHeight: ChatView.fieldHeight)
-                    .accessibilityIdentifier("chat.input")
+                // A UIKit text view, so pasted photos, videos, and files arrive as attachments. Its insets keep the
+                // measured centring: a little more space above the text, and one line as tall as the + button.
+                ComposerTextView(text: $draft, focused: $composing, placeholder: "Message Umpi") { providers in
+                    prepare("Adding what you pasted…") { try await PreparedAttachment.pasted(providers) }
+                }
                 Group {
                     if canSend {
                         Button(action: send) { Image(systemName: "arrow.up.circle.fill").font(.system(size: 28)).frame(width: 34, height: ChatView.fieldHeight) }
@@ -313,6 +310,56 @@ struct PreparedAttachment {
 
     static let fileTypes: [UTType] = [.plainText, .text, .utf8PlainText, .commaSeparatedText, .json, .pdf, .audio, .movie]
         + ["net.daringfireball.markdown", "org.openxmlformats.wordprocessingml.document"].compactMap { UTType($0) }
+
+    /// Pasted items: a video, photos (up to four), or a file, in that order of preference.
+    @MainActor static func pasted(_ providers: [NSItemProvider]) async throws -> PreparedAttachment {
+        if let video = providers.first(where: { $0.hasItemConformingToTypeIdentifier(UTType.movie.identifier) }) {
+            let url = try await copy(video, type: .movie)
+            defer { try? FileManager.default.removeItem(at: url) }
+            return try await self.video(url, name: nil)
+        }
+        let imageProviders = providers.filter { $0.canLoadObject(ofClass: UIImage.self) }
+        if !imageProviders.isEmpty {
+            var images: [UIImage] = []
+            for provider in imageProviders.prefix(MediaPrep.maxImages) {
+                if let image = try? await withCheckedThrowingContinuation({ (continuation: CheckedContinuation<UIImage?, Error>) in
+                    _ = provider.loadObject(ofClass: UIImage.self) { object, error in
+                        if let error { continuation.resume(throwing: error) } else { continuation.resume(returning: object as? UIImage) }
+                    }
+                }) { images.append(image) }
+            }
+            guard !images.isEmpty else { throw MediaError.unreadable("The pasted image could not be read.") }
+            return .init(summary: images.count == 1 ? "1 photo" : "\(images.count) photos", symbol: "photo", value: .init(images: try MediaPrep.images(images)),
+                         media: MediaInfo(kind: "photos", count: images.count), previews: LocalMedia(thumbnails: images.compactMap(LocalMedia.thumbnail)))
+        }
+        if let fileProvider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(UTType.data.identifier) }) {
+            let type = fileProvider.registeredContentTypes.first ?? .data
+            let url = try await copy(fileProvider, type: type)
+            defer { try? FileManager.default.removeItem(at: url) }
+            return try await file(url)
+        }
+        throw MediaError.unreadable("Only photos, videos, and files can be pasted here.")
+    }
+
+    /// Copies a pasted item to a temporary file named like the original, for reading.
+    @MainActor private static func copy(_ provider: NSItemProvider, type: UTType) async throws -> URL {
+        let suggested = provider.suggestedName
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, Error>) in
+            _ = provider.loadFileRepresentation(for: type, openInPlace: false) { url, _, error in
+                continuation.resume(with: Result { try copyOut(url, error, suggested, directory) })
+            }
+        }
+    }
+    /// The provider's file lasts only for its callback, so it is copied out there.
+    nonisolated private static func copyOut(_ url: URL?, _ error: Error?, _ suggested: String?, _ directory: URL) throws -> URL {
+        guard let url else { throw error ?? MediaError.unreadable("The pasted item could not be read.") }
+        let name = suggested.map { "\($0).\(url.pathExtension)" } ?? url.lastPathComponent
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let copy = directory.appendingPathComponent(name)
+        try FileManager.default.copyItem(at: url, to: copy)
+        return copy
+    }
 
     @MainActor static func photos(_ items: [PhotosPickerItem]) async throws -> PreparedAttachment {
         if let videoItem = items.first(where: { $0.supportedContentTypes.contains { $0.conforms(to: .movie) } }) {

@@ -26,7 +26,7 @@ The app's first tab, **Chat** (`ChatView.swift`, `ChatModel.swift`), shows this 
 
 `MarkdownView.swift` renders Markdown with Apple's swift-markdown parser: headings, lists, checklists (Apple Notes circles), tables (hairline borders, wide tables scroll), quotes, code blocks with copy, rules, and Obsidian's callouts (`> [!tip] Title`), highlights (`==text==`), and wiki links (`[[Note|alias]]`). Code blocks are colored by [highlight.js](https://highlightjs.org) (BSD-3-Clause, bundled in `ios/Umpi/Resources/Highlight` with its license) in JavaScriptCore, as native text in an Xcode-like palette; a block without a language is detected when it has a few lines. A `mermaid` code block is drawn by [Pele](https://github.com/obsidianmd/pele) (MIT, bundled in `ios/Umpi/Resources/Pele` with its license) in a small offline web view with the system's colors; a diagram Pele cannot draw shows its source.
 
-The composer attaches, through the same outbox (`ChatAttachments.swift`; attachment data waits in its own protected file, excluded from backup, and is deleted once sent):
+The message field is a UIKit text view (`ComposerTextView.swift`), so photos, a video, or a file pasted from another app (the edit menu or the keyboard's paste suggestion) become an attachment, as if picked; text pastes as text. The composer attaches, through the same outbox (`ChatAttachments.swift`; attachment data waits in its own protected file, excluded from backup, and is deleted once sent):
 
 - **Photos:** up to four, scaled and compressed to fit 1 MB together.
 - **Files:** text, Markdown, CSV, JSON, PDF, and Word up to 10 MB, read on the coordinator like Telegram files.
