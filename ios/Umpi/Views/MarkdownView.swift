@@ -142,9 +142,10 @@ indirect enum MarkdownBlock: Equatable {
         case is SoftBreak: return AttributedString(" ")
         case is LineBreak: return AttributedString("\n")
         case let code as InlineCode:
-            var run = AttributedString("\u{2009}\(code.code)\u{2009}")
+            // Drawn as a rounded pill per line by InlineCodeRenderer; no padding characters, so a wrap leaves nothing behind.
+            var run = AttributedString(code.code)
             run.font = .system(.callout, design: .monospaced)
-            run.backgroundColor = Color(.tertiarySystemFill)
+            run.inlinePresentationIntent = .code
             return run
         case let strong as Strong: return styled(strong.children, .stronglyEmphasized)
         case let emphasis as Emphasis: return styled(emphasis.children, .emphasized)
@@ -203,11 +204,11 @@ private struct MarkdownBlockView: View {
         switch block {
         case .heading(let level, let text):
             // Apple Notes: Title, Heading, Subheading.
-            Text(text).font(level == 1 ? .title2.weight(.bold) : level == 2 ? .title3.weight(.semibold) : .headline)
+            SwiftUI.Text(markdown: text).font(level == 1 ? .title2.weight(.bold) : level == 2 ? .title3.weight(.semibold) : .headline).inlineCodePills(onTint: onOwnerTint)
                 .padding(.top, level <= 2 ? 4 : 0)
                 .accessibilityAddTraits(.isHeader)
         case .paragraph(let text):
-            Text(text).lineSpacing(2).fixedSize(horizontal: false, vertical: true)
+            SwiftUI.Text(markdown: text).lineSpacing(3).fixedSize(horizontal: false, vertical: true).inlineCodePills(onTint: onOwnerTint)
         case .list(let ordered, let start, let items):
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(Array(items.enumerated()), id: \.offset) { index, item in
@@ -275,11 +276,11 @@ private struct NotesTable: View {
             Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
                 GridRow {
                     ForEach(Array(header.enumerated()), id: \.offset) { column, cell in
-                        self.cell(Text(cell).fontWeight(.semibold), column: column).background(Color(.secondarySystemFill))
+                        self.cell(SwiftUI.Text(markdown: cell).fontWeight(.semibold), column: column).background(Color(.secondarySystemFill))
                     }
                 }
                 ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                    GridRow { ForEach(Array(row.enumerated()), id: \.offset) { column, cell in self.cell(Text(cell), column: column) } }
+                    GridRow { ForEach(Array(row.enumerated()), id: \.offset) { column, cell in self.cell(SwiftUI.Text(markdown: cell), column: column).inlineCodePills() } }
                 }
             }
             .font(.callout)
@@ -330,4 +331,38 @@ private struct CodeBlockView: View {
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color(.separator).opacity(0.5), lineWidth: 0.5))
     }
+}
+
+/// Marks inline code inside a Text so the renderer can draw its pill.
+struct InlineCodeAttribute: TextAttribute {}
+
+extension SwiftUI.Text {
+    /// Text from parsed Markdown, with inline code marked for `inlineCodePills()`.
+    init(markdown: AttributedString) {
+        var result = SwiftUI.Text(verbatim: "")
+        for run in markdown.runs {
+            let piece = SwiftUI.Text(AttributedString(markdown[run.range]))
+            let isCode = run.inlinePresentationIntent?.contains(.code) == true
+            result = SwiftUI.Text("\(result)\(isCode ? piece.customAttribute(InlineCodeAttribute()) : piece)")
+        }
+        self = result
+    }
+}
+
+/// Draws a rounded pill behind each line's piece of inline code, like Obsidian and GitHub.
+struct InlineCodeRenderer: TextRenderer {
+    var fill: Color
+    func draw(layout: SwiftUI.Text.Layout, in context: inout GraphicsContext) {
+        for line in layout {
+            for run in line where run[InlineCodeAttribute.self] != nil {
+                let rect = run.typographicBounds.rect.insetBy(dx: -3.5, dy: -0.5)
+                context.fill(Path(roundedRect: rect, cornerRadius: 5, style: .continuous), with: .color(fill))
+            }
+            context.draw(line)
+        }
+    }
+}
+
+extension View {
+    func inlineCodePills(onTint: Bool = false) -> some View { textRenderer(InlineCodeRenderer(fill: onTint ? Color.white.opacity(0.22) : Color(.tertiarySystemFill))) }
 }
