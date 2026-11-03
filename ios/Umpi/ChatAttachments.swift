@@ -164,3 +164,49 @@ final class VoiceRecorder {
         return url
     }
 }
+
+/// Previews of what the owner sent from this phone (thumbnails, length, size), kept on the phone only so the history
+/// can show photos, videos, files, and voice notes the way messaging apps do. The coordinator never stores media.
+struct LocalMedia: Codable, Equatable, Sendable {
+    var thumbnails: [Data] = []
+    var seconds: Int? = nil
+    var bytes: Int? = nil
+
+    private static var directory: URL? {
+        try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            .appendingPathComponent("Companion/Media", isDirectory: true)
+    }
+    private static func url(_ key: String) -> URL? {
+        let safe = String(key.map { $0.isLetter || $0.isNumber || $0 == "-" ? $0 : "_" }).prefix(150)
+        return directory?.appendingPathComponent("\(safe).json")
+    }
+    static func save(_ media: LocalMedia, key: String) {
+        guard let directory, let url = url(key) else { return }
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+            attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+        try? JSONEncoder().encode(media).write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+    static func load(_ key: String) -> LocalMedia? {
+        guard let url = url(key), let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(LocalMedia.self, from: data)
+    }
+    static func rename(from old: String, to new: String) {
+        guard let from = url(old), let to = url(new), FileManager.default.fileExists(atPath: from.path) else { return }
+        try? FileManager.default.removeItem(at: to)
+        try? FileManager.default.moveItem(at: from, to: to)
+    }
+    static func thumbnail(_ image: UIImage) -> Data? {
+        let side: CGFloat = 480, longest = max(image.size.width, image.size.height)
+        let factor = min(1, side / max(longest, 1))
+        let size = CGSize(width: (image.size.width * factor).rounded(), height: (image.size.height * factor).rounded())
+        let format = UIGraphicsImageRendererFormat.default(); format.scale = 1
+        return UIGraphicsImageRenderer(size: size, format: format).image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }.jpegData(compressionQuality: 0.7)
+    }
+}
+
+extension MediaPrep {
+    static func seconds(of url: URL) async -> Int? {
+        guard let duration = try? await AVURLAsset(url: url).load(.duration).seconds, duration.isFinite else { return nil }
+        return Int(duration.rounded())
+    }
+}

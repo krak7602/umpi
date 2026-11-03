@@ -18,7 +18,7 @@ The [coordinator's text reminders](assistant-runtime.md#reminders) remain distin
 
 ### Shared chat
 
-The app's chat is the owner's Telegram conversation, not a second one. `POST /api/device/messages` admits `{id, text?, sentAt?, voice?, images?, file?}` to the Telegram Pi session with an `app-text`, `app-image`, or `app-file` source, so Umpi remembers both surfaces as one conversation. Up to four images (1 MB together, as for Telegram) or one file (10 MB, read as in [Telegram files](assistant-runtime.md#images-and-other-attachments)) can be sent; the body may be 15 MB. The reply to an app message stays in the app: it is not sent to Telegram.
+The app's chat is the owner's Telegram conversation, not a second one. `POST /api/device/messages` admits `{id, text?, sentAt?, voice?, images?, file?, context?, media?}` to the Telegram Pi session with an `app-text`, `app-image`, or `app-file` source, so Umpi remembers both surfaces as one conversation. Up to four images (1 MB together, as for Telegram) or one file (10 MB, read as in [Telegram files](assistant-runtime.md#images-and-other-attachments)) can be sent; the body may be 15 MB. The reply to an app message stays in the app: it is not sent to Telegram.
 
 `chat.ts` keeps the readable history in the coordinator's SQLite, written in the same transactions that admit owner messages and queue Umpi's Telegram messages: what the owner said on either surface, Umpi's replies, and the messages Umpi started (brief, reminders, mail, approvals and questions, with their buttons). Telegram command panels (`/mail`, `/schedule`, memory views, and other menus) are Telegram's own interface and are left out. `GET /api/device/chat` pages it by position: `?limit=` (default 50, at most 100) returns the newest, `?before=N` older entries, and `?after=N` newer ones; `latest` is the newest position. Images are counted, not stored; a file is named.
 
@@ -34,7 +34,15 @@ The composer attaches, through the same outbox (`ChatAttachments.swift`; attachm
 - **Audio files:** transcribed on the phone and sent as text with the file name.
 - **Video:** Claude cannot watch video, so four frames from across it (exact times, not the nearest keyframe) go as images, with its speech transcribed.
 
+The owner's own words are the message; text meant only for Umpi (a video's frames note and transcript, an audio transcript) goes as `context`, which reaches the model after the owner's words but is not shown in the history. `media` (`kind` photos, video, audio, file, or voice, with `name`, `seconds`, `count`) tells every surface what was attached. The sending phone keeps small previews (`LocalMedia`: thumbnails, length, size) keyed by the message's operation, so its history shows photos as thumbnails, a video as its first frame with a play badge and length, a file as a card, and a voice note or audio as a waveform with its length, as messaging apps do. Other surfaces show a compact label; the coordinator stores no media.
+
 Speech uses the phone's on-device recognizer when it has one, and Apple's recognition service otherwise. The simulator has neither, so voice notes and video speech must be checked on a real phone; a failed transcription says why in the composer.
+
+### Knocks
+
+Reminders knock on the phone in place of alarms (`Knocks.swift`). After each refresh the app sets every scheduled reminder (up to 18 ahead) as local notifications on the phone itself, so a knock comes even offline: a Time Sensitive notification with Umpi's own knock sound (`knock.caf`, about 20 seconds, a soft wooden double knock that grows slightly firmer; synthesized for Umpi, so no licensed tone is bundled), then two repeats three minutes apart. A `gentle` reminder knocks once with a short sound at the normal level. **Done**, **Snooze 10 min**, and **Later** answer it through the durable outbox (`POST /api/device/reminders/:id/answer {version, action}`); opening or dismissing it stops the repeats and leaves the reminder open. A knock answered a few seconds before the coordinator fires the reminder fires it once, without a second message. "Wake me" stays a native alarm.
+
+The app reports the reminders it has set (`POST /api/device/knocks {scheduled: [{id, version}]}`) only while notifications are allowed. A reminder a phone confirmed is then delivered to Telegram silently and not pushed again; without that confirmation Telegram stays the alert. Time Sensitive delivery needs the `com.apple.developer.usernotifications.time-sensitive` entitlement and the owner's Focus settings. The simulator shows the knock on time as Time Sensitive; its notification buttons and the sound on a locked phone need checking on a real phone.
 
 Buttons on Umpi's messages work in the app. `POST /api/device/chat/press {seq, data}` runs the same handler as a Telegram press. When the message reached Telegram, the press is bound to that Telegram message and its Telegram keyboard changes too; otherwise approvals and questions are bound to their own message, and other buttons say to answer in Telegram. A question answered in the app is replied to in the app.
 
@@ -149,6 +157,8 @@ The agent tools are `read_companion_state`, `update_companion`, and `request_dev
 | `GET /api/device/chat/socket` | Device credential; WebSocket that announces new positions |
 | `GET`, `PUT /api/device/chat/settings` | Device credential; `{expectedVersion, notify}` |
 | `POST /api/device/chat/press` | Device credential; `{seq, data}` presses a button on a chat message |
+| `POST /api/device/knocks` | Device credential; `{scheduled}` reminders this phone has set as knocks |
+| `POST /api/device/reminders/:id/answer` | Device credential; `{version, action}` with done, snooze, or later |
 | `DELETE /api/device/session` | Device credential; revoke itself |
 
 Mutations use `operationId`, `workflowId`, `expectedRevision`, and explicit `create`, `define`, `set_values`, `archive`, `restore`, or `remove`. Missing values remain unchanged; `null` explicitly clears a value. Stale revisions return 409. Replay identities bind the actor and exact request. Pending device actions are retained independently of the recent completed-action window.

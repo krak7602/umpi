@@ -13,6 +13,7 @@ final class UmpiAppDelegate: NSObject, UIApplicationDelegate, UNUserNotification
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        KnockScheduler.registerCategory()
         attach(store: store, capabilities: capabilities)
         backgroundSync.register()
         application.registerForRemoteNotifications()
@@ -83,9 +84,29 @@ final class UmpiAppDelegate: NSObject, UIApplicationDelegate, UNUserNotification
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
-        // No approve/cancel notification actions: protected reviews live in trusted app UI only.
+        // No approve/cancel notification actions: protected reviews live in trusted app UI only. Knock answers are
+        // reminder outcomes, not approvals.
+        let content = response.notification.request.content
+        let action = response.actionIdentifier
+        let isKnock = content.categoryIdentifier == KnockScheduler.category
+        let reminderID = content.userInfo["reminderId"] as? String
+        let version = content.userInfo["version"] as? Int
+        // The answer is written to the durable outbox right away; sending it may finish after this returns.
         completionHandler()
-        Task { @MainActor [weak self] in await self?.synchronize() }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if isKnock, let reminderID, let version {
+                switch action {
+                case KnockScheduler.Action.done.rawValue: await self.store.answerKnock(id: reminderID, version: version, action: "done")
+                case KnockScheduler.Action.snooze.rawValue: await self.store.answerKnock(id: reminderID, version: version, action: "snooze")
+                case KnockScheduler.Action.later.rawValue: await self.store.answerKnock(id: reminderID, version: version, action: "later")
+                // Opening or dismissing the knock means it was seen: the repeats stop, and the reminder stays open.
+                default: await KnockScheduler.stop(reminderID: reminderID); await self.synchronize()
+                }
+            } else {
+                await self.synchronize()
+            }
+        }
     }
 }
 

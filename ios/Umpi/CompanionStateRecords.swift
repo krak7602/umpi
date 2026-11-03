@@ -16,6 +16,16 @@ struct MessageRequest: Codable, Equatable {
     var voice: Bool? = nil
     /// Images or a file stored in `AttachmentFiles` under this message's ID.
     var hasAttachment: Bool? = nil
+    /// Text for Umpi only, such as a video's frames note and transcript.
+    var context: String? = nil
+    /// What the attachment was, for the history to show.
+    var media: MediaInfo? = nil
+}
+struct MediaInfo: Codable, Equatable, Sendable {
+    var kind: String
+    var name: String? = nil
+    var seconds: Int? = nil
+    var count: Int? = nil
 }
 struct ActionRequest: Codable, Equatable {
     var id: String
@@ -34,6 +44,8 @@ enum OutboxPayload: Codable, Equatable {
     case acknowledgment(actionID: String, ActionAcknowledgment)
     case job(id: String, decision: String, version: Int)
     case choice(id: String, answer: String)
+    /// The owner answered a knock: done, snooze, or later.
+    case knock(id: String, version: Int, action: String)
 }
 struct OutboxEntry: Codable, Equatable, Identifiable {
     var id: String

@@ -249,10 +249,10 @@ private struct MarkdownBlockView: View {
 
     @ViewBuilder private func marker(ordered: Bool, number: Int, checkbox: Bool?) -> some View {
         if let checked = checkbox {
-            // Apple Notes checklist: an empty circle, or a filled circle with a checkmark.
+            // Apple Notes checklist shape in the system tint: an empty circle, or a filled circle with a checkmark.
             Image(systemName: checked ? "checkmark.circle.fill" : "circle")
                 .symbolRenderingMode(.palette)
-                .foregroundStyle(checked ? Color.white : Color.secondary.opacity(0.6), checked ? Color.orange : Color.clear)
+                .foregroundStyle(checked ? Color.white : Color.secondary.opacity(0.6), checked ? (onOwnerTint ? Color.white.opacity(0.35) : Color.accentColor) : Color.clear)
                 .font(.title3)
                 .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 6 }
                 .accessibilityLabel(checked ? "Done" : "Not done")

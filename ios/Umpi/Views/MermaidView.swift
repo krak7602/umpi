@@ -61,18 +61,29 @@ private struct MermaidWebView: UIViewRepresentable {
         <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' file:; style-src 'unsafe-inline'; img-src data:">
         <style>
-        :root { color-scheme: light dark; --pele-font: -apple-system, system-ui; --pele-radius: 8px;
-          --pele-bg: transparent; --pele-fg: #1c1c1e; --pele-muted: #8e8e93; --pele-line: #8e8e93;
-          --pele-surface: #f2f2f7; --pele-surface-alt: #e5e5ea; --pele-border: #c6c6c8; --pele-accent: #007aff; }
-        @media (prefers-color-scheme: dark) { :root { --pele-fg: #f2f2f7; --pele-muted: #8e8e93; --pele-line: #98989f;
-          --pele-surface: #1c1c1e; --pele-surface-alt: #2c2c2e; --pele-border: #38383a; --pele-accent: #0a84ff; } }
+        /* Styled after Freeform: soft tinted shapes without outlines, a light shadow, smooth curved connectors. */
+        :root { color-scheme: light dark; --pele-font: -apple-system, system-ui; --pele-radius: 12px;
+          --pele-bg: transparent; --pele-fg: #1c1c1e; --pele-muted: #6e6e73; --pele-line: #aeaeb2;
+          --pele-surface: #e8f1ff; --pele-surface-alt: #f2f2f7; --pele-border: transparent; --pele-accent: #007aff;
+          --pele-series-1: #007aff; --pele-series-2: #34c759; --pele-series-3: #ff9500; --pele-series-4: #af52de;
+          --pele-series-5: #ff2d55; --pele-series-6: #5ac8fa; --pele-series-7: #ffcc00; --pele-series-8: #8e8e93;
+          --shadow: drop-shadow(0 1px 1.5px rgba(0,0,0,.06)) drop-shadow(0 3px 8px rgba(0,0,0,.07)); }
+        @media (prefers-color-scheme: dark) { :root { --pele-fg: #f2f2f7; --pele-muted: #98989f; --pele-line: #636366;
+          --pele-surface: #1d2a3d; --pele-surface-alt: #2c2c2e; --pele-accent: #0a84ff;
+          --shadow: drop-shadow(0 1px 2px rgba(0,0,0,.5)); } }
         html, body { margin: 0; padding: 0; background: transparent; -webkit-text-size-adjust: 100%; }
-        #d { width: 100%; }
+        #d { width: 100%; display: flex; justify-content: center; }
+        .pele-node > rect, .pele-node > path, .pele-node > polygon, .pele-node > circle, .pele-node > ellipse,
+        .pele-cluster > rect { stroke: none !important; filter: var(--shadow); }
+        .pele-cluster > rect { fill: var(--pele-surface-alt) !important; filter: none; }
+        .pele-edge path, .pele-edges path { stroke-width: 1.6px !important; stroke-linecap: round; stroke-linejoin: round; }
+        .pele-label, .pele-title, .pele-edge-label { font-family: -apple-system, system-ui; }
+        .pele-title { font-weight: 600; }
         </style>
         <script src="\(script.lastPathComponent)"></script></head><body><div id="d"></div><script>
         const report = () => webkit.messageHandlers.pele.postMessage({ height: Math.ceil(document.getElementById("d").getBoundingClientRect().height) });
         try {
-          pele.mount(document.getElementById("d"), \(encoded), { zoom: "auto",
+          pele.mount(document.getElementById("d"), \(encoded), { zoom: "auto", fontSize: 15, padding: 12, config: { flowchart: { curve: "basis" } },
             onRender: () => requestAnimationFrame(report), onError: () => webkit.messageHandlers.pele.postMessage({ failed: true }) });
           new ResizeObserver(report).observe(document.getElementById("d"));
         } catch (e) { webkit.messageHandlers.pele.postMessage({ failed: true }); }

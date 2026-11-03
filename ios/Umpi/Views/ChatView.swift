@@ -49,11 +49,21 @@ struct ChatView: View {
             }
             .defaultScrollAnchor(.bottom)
             .scrollDismissesKeyboard(.interactively)
-            .onChange(of: chat.entries.last?.seq) { _, _ in withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
+            .softScrollEdges()
+            .onChange(of: chat.entries.last?.seq) { old, _ in
+                // The first load jumps to the newest message; later ones scroll there.
+                if old == nil { Task { @MainActor in try? await Task.sleep(for: .milliseconds(50)); proxy.scrollTo("bottom", anchor: .bottom) } }
+                else { withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
+            }
             .onChange(of: pending.count) { _, _ in withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
         }
         .safeAreaInset(edge: .bottom) { composer }
         .navigationTitle("Chat")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            // Formatting lives above the keyboard, only while typing.
+            ToolbarItemGroup(placement: .keyboard) { formatButtons; Spacer() }
+        }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Image(systemName: chat.isLive ? "dot.radiowaves.left.and.right" : "wifi.slash")
@@ -84,17 +94,14 @@ struct ChatView: View {
     }
 
     private var composer: some View {
-        VStack(spacing: 6) {
-            if composing { formatBar }
-            composerRow
-        }
-        .padding(.horizontal).padding(.vertical, 8)
-        .background(.bar)
+        composerRow
+            .padding(.horizontal).padding(.vertical, 8)
+            .composerBackground()
     }
 
     /// Inserts Markdown the owner would otherwise type by hand; the text stays plain Markdown.
-    private var formatBar: some View {
-        HStack(spacing: 18) {
+    @ViewBuilder private var formatButtons: some View {
+        Group {
             Button { draft += draft.isEmpty || draft.hasSuffix(" ") || draft.hasSuffix("\n") ? "****" : " ****" } label: { Image(systemName: "bold") }
                 .accessibilityLabel("Bold")
             Button { draft += draft.isEmpty || draft.hasSuffix("\n") ? "- " : "\n- " } label: { Image(systemName: "list.bullet") }
@@ -103,10 +110,7 @@ struct ChatView: View {
                 .accessibilityLabel("Checkbox")
             Button { draft += draft.isEmpty || draft.hasSuffix("\n") ? "```\n\n```" : "\n```\n\n```" } label: { Image(systemName: "chevron.left.forwardslash.chevron.right") }
                 .accessibilityLabel("Code block")
-            Spacer()
         }
-        .font(.callout)
-        .foregroundStyle(.secondary)
     }
 
     private var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || attachment != nil }
@@ -127,34 +131,44 @@ struct ChatView: View {
         }
     }
 
+    /// Messages-style: attach on the left; send or record inside the field, so the text takes the whole width.
     private var inputRow: some View {
         HStack(alignment: .bottom, spacing: 8) {
             Menu {
                 Button { showPhotos = true } label: { Label("Photos and videos", systemImage: "photo.on.rectangle") }
                 Button { showFiles = true } label: { Label("Files and audio", systemImage: "doc") }
             } label: {
-                Image(systemName: "plus.circle.fill").font(.system(size: 30)).symbolRenderingMode(.hierarchical)
+                Image(systemName: "plus").font(.system(size: 18, weight: .semibold)).frame(width: 36, height: 36)
+                    .glassOrFill(in: Circle())
             }
+            .tint(.primary)
             .disabled(preparing != nil)
             .accessibilityIdentifier("chat.attach")
             .accessibilityLabel("Attach")
-            TextField("Message Umpi", text: $draft, axis: .vertical)
-                .lineLimit(1...6)
-                .focused($composing)
-                .padding(.horizontal, 12).padding(.vertical, 8)
-                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18))
-                .accessibilityIdentifier("chat.input")
-            if canSend {
-                Button(action: send) { Image(systemName: "arrow.up.circle.fill").font(.system(size: 32)) }
-                    .disabled(preparing != nil)
-                    .accessibilityIdentifier("chat.send")
-                    .accessibilityLabel("Send")
-            } else {
-                Button { Task { await startRecording() } } label: { Image(systemName: "mic.circle.fill").font(.system(size: 32)).symbolRenderingMode(.hierarchical) }
-                    .disabled(preparing != nil)
-                    .accessibilityIdentifier("chat.record")
-                    .accessibilityLabel("Record a voice note")
+            ZStack(alignment: .bottomTrailing) {
+                TextField("Message Umpi", text: $draft, axis: .vertical)
+                    .lineLimit(1...8)
+                    .focused($composing)
+                    .padding(.leading, 14).padding(.trailing, 40).padding(.vertical, 8)
+                    .frame(minHeight: 36)
+                    .accessibilityIdentifier("chat.input")
+                Group {
+                    if canSend {
+                        Button(action: send) { Image(systemName: "arrow.up.circle.fill").font(.system(size: 28)) }
+                            .disabled(preparing != nil)
+                            .accessibilityIdentifier("chat.send")
+                            .accessibilityLabel("Send")
+                    } else {
+                        Button { Task { await startRecording() } } label: { Image(systemName: "mic.fill").font(.system(size: 16, weight: .medium)).frame(width: 28, height: 28) }
+                            .tint(.secondary)
+                            .disabled(preparing != nil)
+                            .accessibilityIdentifier("chat.record")
+                            .accessibilityLabel("Record a voice note")
+                    }
+                }
+                .padding(.trailing, 4).padding(.bottom, 4)
             }
+            .glassOrFill(in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
     }
 
@@ -175,12 +189,14 @@ struct ChatView: View {
     }
 
     private func send() {
-        let text = [draft.trimmingCharacters(in: .whitespacesAndNewlines), attachment?.text ?? ""].filter { !$0.isEmpty }.joined(separator: "\n\n")
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let sending = attachment
         let previous = draft
         draft = ""; attachment = nil
         Task {
-            if await store.sendChat(text: text, attachment: sending?.value) { await chat.refresh(store) } else { draft = previous; attachment = sending }
+            if await store.sendChat(text: text, attachment: sending?.value, context: sending?.context, media: sending?.media, previews: sending?.previews) {
+                await chat.refresh(store)
+            } else { draft = previous; attachment = sending }
         }
     }
     private func prepare(_ label: String, _ work: @escaping @MainActor () async throws -> PreparedAttachment) {
@@ -195,24 +211,29 @@ struct ChatView: View {
     }
     /// A voice note is transcribed on the phone and sent as its transcript, like a Telegram voice note.
     private func finishRecording() {
+        let seconds = recorder.startedAt.map { Int(Date().timeIntervalSince($0).rounded()) }
         guard let url = recorder.stop(keep: true) else { return }
         preparing = "Transcribing…"
         Task {
             defer { preparing = nil; try? FileManager.default.removeItem(at: url) }
             do {
                 let transcript = try await MediaPrep.transcribe(url)
-                if await store.sendChat(text: transcript, voice: true) { await chat.refresh(store) }
+                if await store.sendChat(text: transcript, voice: true, media: MediaInfo(kind: "voice", seconds: seconds), previews: LocalMedia(seconds: seconds)) {
+                    await chat.refresh(store)
+                }
             } catch { chat.show((error as? LocalizedError)?.errorDescription ?? "The voice note could not be transcribed.") }
         }
     }
 }
 
-/// An attachment ready to send: what it shows in the composer, what it uploads, and text it adds (a transcript).
+/// An attachment ready to send: how the composer shows it, what it uploads, text for Umpi only, and its preview.
 struct PreparedAttachment {
     var summary: String
     var symbol: String
     var value: OutgoingAttachment?
-    var text: String?
+    var context: String?
+    var media: MediaInfo
+    var previews: LocalMedia
 
     static let fileTypes: [UTType] = [.plainText, .text, .utf8PlainText, .commaSeparatedText, .json, .pdf, .audio, .movie]
         + ["net.daringfireball.markdown", "org.openxmlformats.wordprocessingml.document"].compactMap { UTType($0) }
@@ -221,38 +242,49 @@ struct PreparedAttachment {
         if let videoItem = items.first(where: { $0.supportedContentTypes.contains { $0.conforms(to: .movie) } }) {
             guard let movie = try await videoItem.loadTransferable(type: PickedMovie.self) else { throw MediaError.unreadable("The video could not be loaded.") }
             defer { try? FileManager.default.removeItem(at: movie.url) }
-            return try await video(movie.url, name: "Video")
+            return try await video(movie.url, name: nil)
         }
         var images: [UIImage] = []
         for item in items {
             if let data = try await item.loadTransferable(type: Data.self), let image = UIImage(data: data) { images.append(image) }
         }
         guard !images.isEmpty else { throw MediaError.unreadable("The photos could not be loaded.") }
-        return .init(summary: images.count == 1 ? "1 photo" : "\(images.count) photos", symbol: "photo", value: .init(images: try MediaPrep.images(images)))
+        return .init(summary: images.count == 1 ? "1 photo" : "\(images.count) photos", symbol: "photo", value: .init(images: try MediaPrep.images(images)),
+                     media: MediaInfo(kind: "photos", count: images.count), previews: LocalMedia(thumbnails: images.compactMap(LocalMedia.thumbnail)))
     }
 
     @MainActor static func file(_ url: URL) async throws -> PreparedAttachment {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         let type = UTType(filenameExtension: url.pathExtension) ?? .data
-        if type.conforms(to: .movie) { return try await video(url, name: url.lastPathComponent) }
+        let name = url.lastPathComponent
+        if type.conforms(to: .movie) { return try await video(url, name: name) }
         if type.conforms(to: .audio) {
             let transcript = try await MediaPrep.transcribe(url)
-            return .init(summary: "\(url.lastPathComponent), transcribed", symbol: "waveform", value: nil, text: "Audio file \"\(url.lastPathComponent)\", transcribed:\n\n\(transcript)")
+            let seconds = await MediaPrep.seconds(of: url)
+            return .init(summary: "\(name), transcribed", symbol: "waveform", value: nil, context: "Audio file \"\(name)\", transcribed:\n\n\(transcript)",
+                         media: MediaInfo(kind: "audio", name: name, seconds: seconds), previews: LocalMedia(seconds: seconds))
         }
-        return .init(summary: url.lastPathComponent, symbol: "doc.text", value: .init(file: try MediaPrep.file(at: url)))
+        let file = try MediaPrep.file(at: url)
+        let bytes = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? nil
+        return .init(summary: name, symbol: "doc.text", value: .init(file: file), media: MediaInfo(kind: "file", name: name), previews: LocalMedia(bytes: bytes))
     }
 
-    /// Claude cannot watch video: it gets a few frames and a transcript of the speech.
-    @MainActor static func video(_ url: URL, name: String) async throws -> PreparedAttachment {
+    /// Claude cannot watch video: it gets a few frames and a transcript of the speech, as text for Umpi only.
+    @MainActor static func video(_ url: URL, name: String?) async throws -> PreparedAttachment {
         let frames = try await MediaPrep.frames(of: url)
+        let seconds = await MediaPrep.seconds(of: url)
         var transcript: String?, problem: String?
         if await MediaPrep.hasAudio(url) {
             do { transcript = try await MediaPrep.transcribe(url) } catch { problem = (error as? LocalizedError)?.errorDescription ?? "speech could not be transcribed" }
         }
-        let note = "\(name): \(frames.count) frames from across the video are attached." + (transcript.map { " Its speech, transcribed:\n\n\($0)" } ?? " No speech was transcribed.")
-        let summary = "\(name), \(frames.count) frames" + (transcript != nil ? " and transcript" : problem.map { " (no transcript: \($0))" } ?? "")
-        return .init(summary: summary, symbol: "film", value: .init(images: try MediaPrep.images(frames)), text: note)
+        let label = name.map { "Video \"\($0)\"" } ?? "A video"
+        let context = "\(label)\(seconds.map { " of \($0) seconds" } ?? ""): \(frames.count) frames from across it are attached in order."
+            + (transcript.map { " Its speech, transcribed:\n\n\($0)" } ?? " No speech was transcribed.")
+        let summary = "Video" + (seconds.map { " · \(ChatMediaView.duration($0))" } ?? "") + (transcript != nil ? " · transcribed" : problem.map { " · no transcript: \($0)" } ?? "")
+        return .init(summary: summary, symbol: "film", value: .init(images: try MediaPrep.images(frames)), context: context,
+                     media: MediaInfo(kind: "video", name: name, seconds: seconds, count: frames.count),
+                     previews: LocalMedia(thumbnails: frames.prefix(1).compactMap(LocalMedia.thumbnail), seconds: seconds))
     }
 }
 
@@ -283,16 +315,25 @@ private struct ChatBubble: View {
         .accessibilityIdentifier("chat.entry.\(entry.seq)")
     }
 
-    /// The owner's message: a Messages-style tinted bubble on the right.
+    /// The owner's message: a Messages-style tinted bubble on the right; media sits at its top, like Telegram.
     private var ownerBubble: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            attachments
-            MarkdownView(entry.text, onOwnerTint: true).textSelection(.enabled)
+        let local = entry.operationId.flatMap(LocalMedia.load)
+        let caption = entry.text == "[Image without a caption]" || entry.text == "[File without a caption]" ? "" : entry.text
+        let media = ChatMediaView(entry: entry, local: local)
+        return VStack(alignment: .leading, spacing: 0) {
+            if media.hasContent {
+                media.padding(media.isVisual ? 3 : 0)
+            }
+            if !caption.isEmpty && entry.kind != "voice" || entry.kind == "voice" {
+                MarkdownView(caption, onOwnerTint: true).textSelection(.enabled)
+                    .font(entry.kind == "voice" ? .callout : .body)
+                    .padding(.horizontal, 14).padding(.vertical, 9)
+            }
         }
-        .padding(.horizontal, 14).padding(.vertical, 9)
         .foregroundStyle(.white)
         .tint(.white)
         .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .frame(maxWidth: media.isVisual ? 280 : .infinity, alignment: .trailing)
         .padding(.leading, 48)
     }
     /// Umpi's reply reads like a note: full width, no bubble.
@@ -306,10 +347,6 @@ private struct ChatBubble: View {
             MarkdownView(entry.text).textSelection(.enabled)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-    @ViewBuilder private var attachments: some View {
-        if let file = entry.file { Label(file, systemImage: "doc.text").font(.footnote.weight(.semibold)) }
-        if let images = entry.images { Label(images == 1 ? "Photo" : "\(images) photos", systemImage: "photo").font(.footnote.weight(.semibold)) }
     }
     private func buttons(_ rows: [[ChatEntry.Button]]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -368,5 +405,138 @@ private struct PendingBubble: View {
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, 40)
+    }
+}
+
+extension View {
+    /// The system's soft fade where content scrolls under the bars (iOS 26 and later).
+    @ViewBuilder func softScrollEdges() -> some View {
+        if #available(iOS 26.0, *) { self.scrollEdgeEffectStyle(.soft, for: .all) } else { self }
+    }
+    /// The system's Liquid Glass on iOS 26, like Messages' composer; a filled shape on earlier systems.
+    @ViewBuilder func glassOrFill<S: Shape>(in shape: S) -> some View {
+        if #available(iOS 26.0, *) { self.glassEffect(.regular.interactive(), in: shape) }
+        else { self.background(Color(.secondarySystemBackground), in: shape) }
+    }
+    /// On iOS 26 the composer floats over the softly faded content; earlier systems get the bar material.
+    @ViewBuilder func composerBackground() -> some View {
+        if #available(iOS 26.0, *) { self } else { self.background(.bar) }
+    }
+}
+
+/// What an owner message carried, drawn the way messaging apps do: photos as thumbnails, a video as its first frame with
+/// a play badge and length, a file as a card, a voice note or audio as a waveform with its length. Previews exist only
+/// on the phone that sent them; elsewhere a compact label stands in.
+struct ChatMediaView: View {
+    let entry: ChatEntry
+    let local: LocalMedia?
+
+    private var kind: String {
+        if let kind = entry.media?.kind { return kind }
+        if entry.kind == "voice" { return "voice" }
+        if entry.file != nil { return "file" }
+        if entry.images != nil { return "photos" }
+        return ""
+    }
+    var hasContent: Bool { !kind.isEmpty }
+    var isVisual: Bool { (kind == "photos" || kind == "video") && !(local?.thumbnails.isEmpty ?? true) }
+
+    static func duration(_ seconds: Int) -> String { String(format: "%d:%02d", seconds / 60, seconds % 60) }
+
+    var body: some View {
+        switch kind {
+        case "photos": photos
+        case "video": video
+        case "file": fileCard
+        case "voice", "audio": audio
+        default: EmptyView()
+        }
+    }
+
+    @ViewBuilder private var photos: some View {
+        let images = (local?.thumbnails ?? []).compactMap(UIImage.init(data:))
+        if images.isEmpty {
+            chip(entry.images.map { $0 == 1 ? "Photo" : "\($0) photos" } ?? "Photo", symbol: "photo")
+        } else if images.count == 1 {
+            Image(uiImage: images[0]).resizable().scaledToFill().frame(maxWidth: 274, maxHeight: 320).clipShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
+        } else {
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2)], spacing: 2) {
+                ForEach(Array(images.prefix(4).enumerated()), id: \.offset) { _, image in
+                    Color.clear.aspectRatio(1, contentMode: .fit).overlay(Image(uiImage: image).resizable().scaledToFill()).clipped()
+                }
+            }
+            .frame(width: 274)
+            .clipShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
+        }
+    }
+
+    @ViewBuilder private var video: some View {
+        let seconds = entry.media?.seconds ?? local?.seconds
+        if let data = local?.thumbnails.first, let image = UIImage(data: data) {
+            Image(uiImage: image).resizable().scaledToFill().frame(width: 274, height: 200).clipped()
+                .overlay { Image(systemName: "play.fill").font(.title2).foregroundStyle(.white).padding(14).background(.black.opacity(0.45), in: Circle()) }
+                .overlay(alignment: .bottomLeading) {
+                    if let seconds {
+                        Text(Self.duration(seconds)).font(.caption2.weight(.semibold).monospacedDigit()).foregroundStyle(.white)
+                            .padding(.horizontal, 6).padding(.vertical, 3).background(.black.opacity(0.5), in: Capsule()).padding(8)
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
+                .accessibilityLabel("Video" + (seconds.map { ", \(Self.duration($0))" } ?? ""))
+        } else {
+            chip("Video" + (seconds.map { " · \(Self.duration($0))" } ?? ""), symbol: "play.rectangle")
+        }
+    }
+
+    private var fileCard: some View {
+        let name = entry.media?.name ?? entry.file ?? "File"
+        let ext = (name as NSString).pathExtension.uppercased()
+        return HStack(spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.white.opacity(0.22)).frame(width: 40, height: 46)
+                Text(ext.isEmpty ? "FILE" : String(ext.prefix(4))).font(.caption2.weight(.bold))
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name).font(.subheadline.weight(.semibold)).lineLimit(2)
+                if let bytes = local?.bytes { Text(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)).font(.caption).opacity(0.8) }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 2)
+    }
+
+    private var audio: some View {
+        let seconds = entry.media?.seconds ?? local?.seconds
+        return HStack(spacing: 10) {
+            Image(systemName: kind == "voice" ? "mic.fill" : "waveform").font(.callout.weight(.semibold))
+                .frame(width: 34, height: 34).background(.white.opacity(0.22), in: Circle())
+            WaveformBars(seed: entry.seq).frame(height: 22)
+            if let seconds { Text(Self.duration(seconds)).font(.caption.monospacedDigit()).opacity(0.85) }
+        }
+        .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 0)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel((kind == "voice" ? "Voice note" : entry.media?.name ?? "Audio") + (seconds.map { ", \(Self.duration($0))" } ?? "") + ", transcribed")
+    }
+
+    private func chip(_ text: String, symbol: String) -> some View {
+        Label(text, systemImage: symbol).font(.footnote.weight(.semibold)).padding(.horizontal, 14).padding(.top, 10)
+    }
+}
+
+/// A fixed, decorative waveform, the same for a message every time it is drawn.
+private struct WaveformBars: View {
+    let seed: Int
+    var body: some View {
+        HStack(alignment: .center, spacing: 2) {
+            ForEach(0..<24, id: \.self) { index in
+                Capsule().frame(width: 2.5, height: Self.height(index, seed))
+            }
+        }
+        .opacity(0.9)
+    }
+    private static func height(_ index: Int, _ seed: Int) -> CGFloat {
+        let first = sin(Double(index * 7 + seed * 13) * 0.61) * 0.7
+        let second = sin(Double(index + seed) * 1.7) * 0.3
+        return max(4, 22 * CGFloat(abs(first + second)))
     }
 }

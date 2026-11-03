@@ -86,6 +86,7 @@ struct ActivityListView: View {
                 }
             }
         }
+        .softScrollEdges()
         .navigationTitle("Activity")
         .refreshable { await store.synchronize() }
         .toolbar {

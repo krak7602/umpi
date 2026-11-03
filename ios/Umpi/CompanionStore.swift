@@ -106,6 +106,26 @@ final class CompanionStore {
         return request
     }
 
+    @ObservationIgnored private var reportedKnocks: String?
+    /// Sets the phone's knocks from the latest reminders and tells the coordinator which are set, when that changed.
+    func updateKnocks(_ reminders: [Reminder]) async {
+        guard let set = await KnockScheduler.reconcile(reminders), let client else { return }
+        struct Knock: Encodable { var id: String; var version: Int }
+        struct Report: Encodable { var scheduled: [Knock] }
+        let report = Report(scheduled: set.map { Knock(id: $0.id, version: $0.version) })
+        let signature = report.scheduled.map { "\($0.id):\($0.version)" }.sorted().joined(separator: ",")
+        guard signature != reportedKnocks, let body = try? JSONEncoder().encode(report) else { return }
+        if (try? await client.send(path: "/api/device/knocks", method: "POST", body: body)) != nil { reportedKnocks = signature }
+    }
+    /// The owner answered a knock on the phone; the answer is kept in the outbox until the coordinator has it.
+    func answerKnock(id: String, version: Int, action: String) async {
+        await KnockScheduler.stop(reminderID: id)
+        guard DeviceActionValidation.identifier(id), ["done", "snooze", "later"].contains(action) else { return }
+        guard enqueue(OutboxEntry(id: UUID().uuidString, payload: .knock(id: id, version: version, action: action))) else { return }
+        await flushOutbox()
+        await synchronize()
+    }
+
     func clearError() { errorMessage = nil }
     func workflow(id: String) -> Workflow? { workflows.first { $0.id == id } }
     func draftValues(for workflowID: String) -> [String: FieldValue] {
@@ -223,9 +243,10 @@ final class CompanionStore {
         return true
     }
     /// Sends a chat message with an optional voice transcript flag or attachment, through the durable outbox.
-    @discardableResult func sendChat(text: String, voice: Bool = false, attachment: OutgoingAttachment? = nil) async -> Bool {
+    @discardableResult func sendChat(text: String, voice: Bool = false, attachment: OutgoingAttachment? = nil, context: String? = nil,
+                                     media: MediaInfo? = nil, previews: LocalMedia? = nil) async -> Bool {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty || attachment != nil else { return false }
+        guard !text.isEmpty || attachment != nil || context != nil else { return false }
         guard text.isEmpty || DeviceActionValidation.text(text, limit: 16_384) else {
             report("Enter a message of at most 16,384 characters."); return false
         }
@@ -233,8 +254,9 @@ final class CompanionStore {
         if let attachment {
             do { try AttachmentFiles.save(attachment, id: id) } catch { report("The attachment could not be saved for sending."); return false }
         }
+        if let previews { LocalMedia.save(previews, key: id) }
         let message = MessageRequest(id: id, text: text, sentAt: ISO8601DateFormatter().string(from: Date()),
-                                     voice: voice ? true : nil, hasAttachment: attachment == nil ? nil : true)
+                                     voice: voice ? true : nil, hasAttachment: attachment == nil ? nil : true, context: context, media: media)
         guard enqueue(OutboxEntry(id: message.id, payload: .message(message))) else { AttachmentFiles.remove(id); return false }
         await flushOutbox()
         return true
@@ -392,6 +414,7 @@ final class CompanionStore {
             statusMessage = state.outbox.isEmpty ? "Up to date" : "\(state.outbox.count) changes need synchronization"
             errorMessage = nil
             if let snapshotObserver { await snapshotObserver(snapshot.jobs) }
+            await updateKnocks(snapshot.reminders)
         } catch {
             if generation == sessionGeneration { report("Refresh failed. Cached state and drafts are retained. \(error.localizedDescription)") }
         }
@@ -504,6 +527,7 @@ final class CompanionStore {
             case .acknowledgment(let id, _): kind = "acknowledgment"; target = id
             case .job(let id, let decision, _): kind = "job_\(decision)"; target = id
             case .choice(let id, _): kind = "choice"; target = id
+            case .knock(let id, _, let action): kind = "knock_\(action)"; target = id
             }
             return QueuedChange(id: entry.id, kind: kind, target: target, status: entry.status, error: entry.error)
         }
@@ -618,15 +642,18 @@ final class CompanionStore {
                     struct Body: Encodable {
                         var id: String; var text: String?; var sentAt: String?; var voice: Bool?
                         var images: [OutgoingAttachment.Image]?; var file: OutgoingAttachment.File?
+                        var context: String?; var media: MediaInfo?
                     }
                     let attachment = message.hasAttachment == true ? AttachmentFiles.load(message.id) : nil
                     if message.hasAttachment == true && attachment == nil { throw CompanionClientError.http(status: 400, message: "The attachment is no longer on this phone. Discard this message and attach it again.", current: nil) }
                     let body = Body(id: message.id, text: message.text.isEmpty ? nil : message.text, sentAt: message.sentAt, voice: message.voice,
-                                    images: attachment?.images, file: attachment?.file)
+                                    images: attachment?.images, file: attachment?.file, context: message.context, media: message.media)
                     let data = try await client.send(path: "/api/device/messages", method: "POST", body: encoder.encode(body))
                     AttachmentFiles.remove(message.id)
                     guard generation == sessionGeneration else { return }
                     let operation = try decoder.decode(Operation.self, from: data)
+                    // The preview now belongs to the conversation entry of this operation.
+                    LocalMedia.rename(from: message.id, to: operation.id)
                     state.snapshot?.operations.removeAll { $0.id == operation.id }
                     state.snapshot?.operations.append(operation)
                     stateEpoch += 1
@@ -657,6 +684,15 @@ final class CompanionStore {
                     stateEpoch += 1
                     guard persist() else { return }
                     if let snapshotObserver { await snapshotObserver(jobs) }
+                case .knock(let id, let version, let action):
+                    struct Answer: Encodable { var version: Int; var action: String }
+                    do {
+                        _ = try await client.send(path: "/api/device/reminders/\(id)/answer", method: "POST", body: encoder.encode(Answer(version: version, action: action)))
+                    } catch CompanionClientError.http(let status, _, _) where status == 409 || status == 404 {
+                        // The reminder changed or is gone; the answer no longer applies and is dropped, not retried.
+                    }
+                    guard generation == sessionGeneration else { return }
+                    stateEpoch += 1
                 case .choice(let id, let answer):
                     _ = try await client.send(path: "/api/device/choices/\(id)/answer", method: "POST", body: encoder.encode(ChoiceAnswer(answer: answer)))
                     guard generation == sessionGeneration else { return }

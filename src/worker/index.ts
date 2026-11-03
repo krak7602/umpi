@@ -723,7 +723,7 @@ export class Assistant extends Agent<Env> {
     const kind = message.images ? "app-image" : message.document ? "app-file" : message.voice ? "app-voice" : "app-text";
     const text = message.text.trim() ? message.text : message.images ? IMAGE_WITHOUT_CAPTION : message.document ? FILE_WITHOUT_CAPTION : message.text;
     return this.admit(id, text, "telegram", () => { this.companion.requireDevice(deviceId); }, {
-      kind, ...(message.sentAt ? { sentAt: message.sentAt } : {}),
+      kind, ...(message.sentAt ? { sentAt: message.sentAt } : {}), ...(message.context ? { note: message.context } : {}), ...(message.media ? { media: message.media } : {}),
       ...(message.document ? { file: { name: message.document.name, characters: message.document.text.length, ...(message.document.truncated ? { truncated: true as const } : {}) } } : {}),
     }, message.images, message.document);
   }

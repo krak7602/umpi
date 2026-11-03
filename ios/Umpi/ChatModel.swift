@@ -13,6 +13,7 @@ struct ChatEntry: Codable, Equatable, Identifiable, Sendable {
     var text: String
     var images: Int?
     var file: String?
+    var media: MediaInfo?
     var operationId: String?
     var buttons: [[Button]]?
 

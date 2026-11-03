@@ -157,6 +157,7 @@ struct Job: Codable, Equatable, Sendable, Identifiable {
     var isTerminal: Bool { ["succeeded", "failed", "cancelled", "uncertain"].contains(status) }
 }
 struct Reminder: Codable, Equatable, Sendable, Identifiable {
+    struct Answer: Codable, Equatable, Sendable { var outcome: String; var at: String }
     var id: String
     var version: Int
     var text: String
@@ -164,6 +165,9 @@ struct Reminder: Codable, Equatable, Sendable, Identifiable {
     var channel: String
     var status: String
     var createdAt: String
+    /// "gentle" knocks once and quietly; absent is a full knock.
+    var intensity: String? = nil
+    var answer: Answer? = nil
 }
 struct Choice: Codable, Equatable, Sendable, Identifiable {
     var id: String

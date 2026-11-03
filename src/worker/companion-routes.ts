@@ -7,7 +7,8 @@ export function companionRole(path: string, method: string): CompanionRole | und
       (method === "DELETE" && /^\/api\/companion\/devices\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(path))) return "control";
   if ((method === "GET" && ["/api/device/state", "/api/device/chat", "/api/device/chat/settings", "/api/device/chat/socket"].includes(path)) || (method === "PUT" && path === "/api/device/chat/settings") ||
       (method === "DELETE" && path === "/api/device/session") ||
-      (method === "POST" && (["/api/device/register", "/api/device/changes", "/api/device/actions", "/api/device/messages", "/api/device/chat/press"].includes(path) ||
+      (method === "POST" && (["/api/device/register", "/api/device/changes", "/api/device/actions", "/api/device/messages", "/api/device/chat/press", "/api/device/knocks"].includes(path) ||
+        /^\/api\/device\/reminders\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\/answer$/.test(path) ||
         /^\/api\/device\/actions\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\/ack$/.test(path) ||
         /^\/api\/device\/jobs\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\/(approve|cancel)$/.test(path) ||
         /^\/api\/device\/choices\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\/answer$/.test(path)))) return "device";

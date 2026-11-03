@@ -97,7 +97,7 @@ The model uses semantic tools: `current_time`, `list_reminders`, `create_reminde
 
 Reminder identity is stable. Corrections and cancellations require the current version. Due reminders transition to `fired` and create an outbox item atomically. Lifecycle wakeups recover pending and overdue reminders after restart. This is a text-notification contract, not an iPhone system alarm or a hard real-time deadline.
 
-**Knocks are off for now.** They belong on the phone, in place of alarms, and come with the app redesign; the Mac lane below receives none, and a fired reminder is only its Telegram message. The design that follows is kept for the phone.
+**Knocks happen on the phone.** The app sets reminders as [phone knocks](phone-companion.md#knocks) ahead of time; the Mac lane below receives none. A reminder the phone confirmed is posted to Telegram silently as the record; otherwise its Telegram message is the alert. The coordinator-side knock records below are kept but unused.
 
 When a reminder fires, the same transaction creates a **knock** in `knocks.ts` as well as the Telegram message. The knock is how the reminder gets the owner's attention; the message stays as the written record. The [Mac executor's knock lane](mac-executor.md#knocks) shows it with a soft chime and a Done/Snooze prompt when the owner is at the Mac.
 
