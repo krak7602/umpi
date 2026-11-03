@@ -46,6 +46,13 @@ export interface T3Thread {
 }
 export interface T3Message { position: number; type: string; by?: string; text: string; truncated?: boolean; at?: string }
 
+/** What Umpi can do to a machine's threads. */
+export type T3Action =
+  | { kind: "send"; threadId: string; message: string; mode?: "auto" | "queue" | "steer" | "restart" }
+  | { kind: "start"; title: string; message: string; project?: string; projectId?: string; worktree?: boolean; branch?: string; baseRef?: string; plan?: boolean }
+  | { kind: "stop"; threadId: string; reason?: string; whole?: boolean }
+  | { kind: "answer"; threadId: string; requestId: string; answers: Record<string, unknown> };
+
 export const T3_MAX_MACHINES = 6;
 const APPROVAL_MS = 15 * 60_000;
 const REQUEST_MS = 20_000;
@@ -346,6 +353,54 @@ export class T3CodeStore {
       }
       return { ...(head.thread ? { thread: thread(head.thread, new Map()) } : {}), messages: kept,
         ...(typeof last.nextPosition === "number" ? { nextPosition: last.nextPosition } : {}), hasMore: false };
+    });
+  }
+
+  /** Projects on a machine: id and name. */
+  async projects(id: string): Promise<{ id: string; name: string }[]> {
+    return this.session(id, async session => [...projectNames(await session.call("t3_project_list", { limit: 100 })).entries()].map(([projectId, name]) => ({ id: projectId, name })));
+  }
+
+  /**
+   * One action on a machine's threads. `requestId` makes it idempotent: T3 Code returns the earlier result for a
+   * repeated request instead of acting twice.
+   */
+  async act(id: string, action: T3Action, requestId: string): Promise<unknown> {
+    const clientRequestId = requestId.slice(0, 100);
+    return this.session(id, async session => {
+      switch (action.kind) {
+        case "send":
+          return session.call("t3_thread_send", { threadId: action.threadId, message: action.message, mode: action.mode ?? "auto", clientRequestId });
+        case "stop":
+          return session.call("t3_thread_interrupt", { threadId: action.threadId, ...(action.reason ? { reason: action.reason } : {}), ...(action.whole === false ? {} : { stop: true }), clientRequestId });
+        case "answer":
+          return session.call("t3_pending_request", { action: "respond", threadId: action.threadId, requestId: action.requestId, answers: action.answers });
+        case "start": {
+          let projectId = action.projectId;
+          if (!projectId && action.project) {
+            const projects = [...projectNames(await session.call("t3_project_list", { limit: 100 })).entries()];
+            const wanted = action.project.trim().toLowerCase();
+            const found = projects.find(([, name]) => name.toLowerCase() === wanted) ?? projects.find(([, name]) => name.toLowerCase().includes(wanted));
+            if (!found) throw new T3Error(`No project called "${action.project.slice(0, 60)}". Projects: ${projects.map(([, name]) => name).join(", ") || "none"}`);
+            projectId = found[0];
+          }
+          const workspace = action.branch || action.worktree ? { workspaceStrategy: { type: "worktree", ...(action.branch ? { branch: action.branch } : {}), ...(action.baseRef ? { baseRef: action.baseRef } : {}) } } : {};
+          const launched = record(await session.call("t3_thread_launch", { title: action.title, message: action.message, clientRequestId,
+            ...(projectId ? { projectId } : { scratch: true }), ...workspace, ...(action.plan ? { interactionMode: "plan" } : {}) }));
+          const created = Array.isArray(launched.threads) && launched.threads.length ? record(launched.threads[0]) : launched;
+          return { threadId: created.threadId, title: action.title, ...(typeof created.status === "string" ? { status: created.status } : {}), ...(typeof created.model === "string" ? { model: created.model } : {}) };
+        }
+      }
+    });
+  }
+
+  /** Questions an agent is waiting on in a thread, with their choices. Permission requests are answered in T3 Code. */
+  async questions(id: string, threadId: string): Promise<unknown> {
+    return this.session(id, async session => {
+      const list = record(await session.call("t3_pending_request", { action: "list", threadId }));
+      const ids = (Array.isArray(list.requests) ? list.requests : Array.isArray(list.requestIds) ? list.requestIds : []).map(item => typeof item === "string" ? item : String(record(item).requestId ?? record(item).id ?? "")).filter(Boolean).slice(0, 5);
+      const read = await Promise.all(ids.map(requestId => session.call("t3_pending_request", { action: "read", threadId, requestId })));
+      return { questions: read, ...(ids.length ? {} : { note: "Nothing is waiting for an answer. Permission requests (approve a command or edit) are answered in T3 Code itself." }) };
     });
   }
 
