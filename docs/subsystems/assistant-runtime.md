@@ -97,6 +97,8 @@ The model uses semantic tools: `current_time`, `list_reminders`, `create_reminde
 
 Reminder identity is stable. Corrections and cancellations require the current version. Due reminders transition to `fired` and create an outbox item atomically. Lifecycle wakeups recover pending and overdue reminders after restart. This is a text-notification contract, not an iPhone system alarm or a hard real-time deadline.
 
+**Knocks are off for now.** They belong on the phone, in place of alarms, and come with the app redesign; the Mac lane below receives none, and a fired reminder is only its Telegram message. The design that follows is kept for the phone.
+
 When a reminder fires, the same transaction creates a **knock** in `knocks.ts` as well as the Telegram message. The knock is how the reminder gets the owner's attention; the message stays as the written record. The [Mac executor's knock lane](mac-executor.md#knocks) shows it with a soft chime and a Done/Snooze prompt when the owner is at the Mac.
 
 - `intensity` is `knock` (default) or `gentle`. A knock is tried up to three times, three minutes apart, while it is missed or the owner is away; a gentle one is tried once. A knock not delivered within 30 minutes expires. Knocks are not alarms: waking the owner still uses a native phone alarm.
@@ -444,6 +446,7 @@ The [development and operation runbook](../runbooks/local-development.md) owns l
 - 2026-10-22: Added the Aside context: activity summaries for chat and the brief, and owner memory search through the Mac.
 - 2026-10-22: Added failure causes to run notes and a once-a-day Telegram notice when a retrying commitment gives up.
 - 2026-10-22: Added image input (photos, image files and albums). Other attachments are skipped with a short reply instead of a rejected webhook.
+- 2026-11-03: Turned off Mac knocks; knocks move to the phone with the app redesign.
 - 2026-11-03: Added text, Markdown, PDF, and Word files from Telegram, and nightly notes that keep what lasts from them in history search.
 - 2026-10-30: Added reranking, stemming, passage overlap, and date filters to history search.
 - 2026-10-30: Added hybrid history search (FTS5 and embeddings in SQLite) over digests and past conversation, paged reading of the whole day, stuck work, delegated tasks, reply drafts, habit lessons with reinforcement, a year summary, conversation-derived probes, and an early anchored close for very long days.

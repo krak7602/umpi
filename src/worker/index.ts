@@ -328,7 +328,7 @@ export class Assistant extends Agent<Env> {
     this.modelFallback = new ModelFallback(this.store.db, () => env.UMPI_ANTHROPIC_FALLBACK_KEY, fallbackZone, (groupId, text) => this.store.enqueue(groupId, "telegram", text));
     this.contextHealth = new ContextHealth(this.store.db);
     this.knocks = new KnockStore(this.store.db);
-    this.store.reminderFired = reminder => this.knocks.add(reminder);
+    // Knocks belong on the phone, in place of alarms; the Mac lane stays idle until the app takes them. Reminders are Telegram messages meanwhile.
     this.webUsage = new WebUsageStore(this.store.db, () => {
       const budget = Number(env.UMPI_WEB_MONTHLY_BUDGET);
       return Number.isInteger(budget) && budget >= 0 ? budget : DEFAULT_WEB_MONTHLY_BUDGET;
