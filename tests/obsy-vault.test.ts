@@ -111,3 +111,11 @@ test("the app's Today view reads the day's note and ticks one checklist line wit
   assert.equal((await client.setTask(DAY, 3, "- [ ] Buy oats", false, "tick-3")).status, "conflict", "a line that no longer reads as shown is not changed");
   assert.equal((await client.setTask(DAY, 5, "Edited on the Mac", true, "tick-4")).status, "conflict", "only checklist lines can be ticked");
 });
+
+test("a kept reader still sees edits made elsewhere since its last read", async () => {
+  const { client, device } = await vault({ [PATH]: "# Day\n- [ ] One\n" });
+  assert.equal((await client.readDay(DAY)).text, "# Day\n- [ ] One\n");
+  const current = (await device.read(PATH))!;
+  assert.equal((await device.replaceIfUnchanged(PATH, "# Day\n- [ ] One\n- [ ] Two\n", { baseRev: current.rev })).status, "committed");
+  assert.equal((await client.readDay(DAY)).text, "# Day\n- [ ] One\n- [ ] Two\n", "the next read catches up");
+});
