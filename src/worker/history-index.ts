@@ -74,6 +74,25 @@ export class HistoryIndex {
       this.db.all("DELETE FROM umpi_history WHERE source=? AND at<?", source, before);
     });
   }
+  /** Drops passages whose id starts with `prefix` and is not in `keep`, such as notes a rewritten day no longer has. */
+  removeExcept(prefix: string, keep: string[]): void {
+    const kept = new Set(keep);
+    this.db.transaction(() => {
+      for (const row of this.db.all<{ id: string }>("SELECT id FROM umpi_history WHERE substr(id, 1, ?)=?", prefix.length, prefix)) {
+        if (kept.has(row.id)) continue;
+        this.db.all("DELETE FROM umpi_history_fts WHERE id=?", row.id);
+        this.db.all("DELETE FROM umpi_history WHERE id=?", row.id);
+      }
+    });
+  }
+  /** Drops day digests and their notes for days before `day` (YYYY-MM-DD), with the stored day digests. */
+  pruneDays(day: string): void {
+    this.db.transaction(() => {
+      const old = "source='digest' AND (substr(id, 1, 4)='day:' OR substr(id, 1, 5)='note:') AND period<?";
+      for (const row of this.db.all<{ id: string }>(`SELECT id FROM umpi_history WHERE ${old}`, day)) this.db.all("DELETE FROM umpi_history_fts WHERE id=?", row.id);
+      this.db.all(`DELETE FROM umpi_history WHERE ${old}`, day);
+    });
+  }
   unembedded(): number { return this.db.all<{ n: number }>("SELECT count(*) AS n FROM umpi_history WHERE vec IS NULL")[0]?.n ?? 0; }
   /** Embeds waiting passages in batches; returns how many were embedded. Unavailable models leave them for later. */
   async embedPending(maxBatches = 4): Promise<number> {

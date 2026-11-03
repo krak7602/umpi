@@ -37,7 +37,7 @@ function audioFormat(bytes: Uint8Array, path: string, declaredMime: string | und
 }
 
 /** Telegram credentials and response details never escape this fixed-host boundary. */
-async function downloadTelegramFile(file: TelegramFile, maxBytes: number, config: TelegramConfig, signal: AbortSignal, fetcher: typeof fetch): Promise<{ bytes: Uint8Array; path: string; contentType: string | null }> {
+export async function downloadTelegramFile(file: TelegramFile, maxBytes: number, config: TelegramConfig, signal: AbortSignal, fetcher: typeof fetch): Promise<{ bytes: Uint8Array; path: string; contentType: string | null }> {
   let response: Response | undefined;
   try {
     signal.throwIfAborted();

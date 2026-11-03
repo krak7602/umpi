@@ -20,6 +20,21 @@ const DIGEST_DAYS_KEPT = 400;
 export const DREAM_PART_CHARS = 60_000;
 const PASSAGE_CHARS = 2_000;
 const PASSAGE_OVERLAP_CHARS = 600;
+const MAX_NOTES = 6, NOTE_CHARS = 6_000;
+
+/** Splits a note into passages of about PASSAGE_CHARS at paragraph or line breaks. */
+export function notePassages(text: string): string[] {
+  const passages: string[] = [];
+  let current = "";
+  for (const line of text.split("\n")) {
+    // A break is taken at a line end; only a line longer than a passage is cut inside.
+    if (current && current.length + line.length + 1 > PASSAGE_CHARS && line.length <= PASSAGE_CHARS) { passages.push(current.trim()); current = ""; }
+    current += (current ? "\n" : "") + line;
+    while (current.length > PASSAGE_CHARS) { passages.push(current.slice(0, PASSAGE_CHARS).trim()); current = current.slice(PASSAGE_CHARS); }
+  }
+  if (current.trim()) passages.push(current.trim());
+  return passages;
+}
 /** A day this long is closed early with the anchored summary, before the 550k threshold. */
 export const LONG_DAY_TOKENS = 450_000;
 const LONG_DAY_GAP_MS = 3 * 3_600_000;
@@ -34,6 +49,8 @@ export interface DayDigest {
   openLoops: { ref: string | null; text: string }[];
   people: string[];
   topics: string[];
+  /** What lasts from files and reference material the owner shared, kept as the understanding instead of the raw text. */
+  notes?: { title: string; text: string }[];
 }
 export interface Night {
   day: string;
@@ -53,7 +70,8 @@ export interface Night {
   compaction: { at: string; sessions: number; failed: number; probesKept: number; probesRepaired: number; error?: string } | null;
 }
 export interface Digest { id: string; level: "day" | "week" | "month" | "year"; period: string; text: string; data: DayDigest | null; updatedAt: string }
-export interface TranscriptLine { at: number; text: string }
+/** A day's conversation line; `file` names a document the owner shared, which is read overnight but not indexed raw. */
+export interface TranscriptLine { at: number; text: string; file?: string }
 export interface Lesson {
   id: string; version: number; text: string; status: "active" | "retired";
   /** Nights whose evidence confirmed the lesson; a well-supported lesson is kept over a newer one when merging. */
@@ -208,6 +226,13 @@ export class DreamStore {
     this.db.all("INSERT INTO umpi_digests VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET search=excluded.search,data=excluded.data", digest.id, digest.level, digest.period, search, JSON.stringify(digest));
     const extra = digest.data ? [...digest.data.decisions.map(text => `Decision: ${text}`), ...digest.data.openLoops.map(loop => `Open: ${loop.text}`)].join("\n") : "";
     this.index?.put([{ id: digest.id, source: "digest", period: digest.period, at: Date.parse(digest.updatedAt), text: `${digest.level} ${digest.period}: ${digest.text}${extra ? `\n${extra}` : ""}` }]);
+    if (digest.level === "day" && this.index) {
+      // Each note is searchable on its own, in passages small enough for the reranker; a rewritten day replaces them.
+      const passages = (digest.data?.notes ?? []).flatMap((note, index) => notePassages(note.text).map((text, part) =>
+        ({ id: `note:${digest.period}:${index}:${part}`, source: "digest" as const, period: digest.period, at: Date.parse(digest.updatedAt), text: `Note ${digest.period}, ${note.title}${part ? " (continued)" : ""}: ${text}` })));
+      this.index.removeExcept(`note:${digest.period}:`, passages.map(passage => passage.id));
+      this.index.put(passages);
+    }
   }
   dayDigests(from: string, to: string): Digest[] {
     return this.rows<Digest>("SELECT data FROM umpi_digests WHERE level='day' AND period>=? AND period<=? ORDER BY period", from, to);
@@ -245,6 +270,7 @@ export class DreamStore {
     if (!this.index) return;
     const passages: { at: number; lines: string[]; size: number }[] = [];
     for (let part = 1; part <= this.partCount(day); part++) for (const line of this.part(day, part)) {
+      if (line.file) continue;
       const last = passages.at(-1);
       if (!last || last.size + line.text.length > PASSAGE_CHARS) {
         // A passage starts with the previous passage's last line, so a question and its answer are not split apart.
@@ -307,7 +333,7 @@ export class DreamStore {
   // Commit -------------------------------------------------------------------------------------------------------
   commit(sessionId: string, value: unknown, now = Date.now()): Night {
     const body = record(value); keys(body, ["digest", "week", "month", "year", "probes", "lessons", "overnight", "drafts"], "nightly result");
-    const raw = record(body.digest); keys(raw, ["summary", "decisions", "standingInstructions", "openLoops", "people", "topics"], "digest");
+    const raw = record(body.digest); keys(raw, ["summary", "decisions", "standingInstructions", "openLoops", "people", "topics", "notes"], "digest");
     const digest: DayDigest = {
       summary: boundedText(raw.summary, 6_000, "digest summary").trim(),
       decisions: texts(raw.decisions, 25, 300, "decisions"),
@@ -318,6 +344,11 @@ export class DreamStore {
       people: texts(raw.people, 30, 80, "people"),
       topics: texts(raw.topics, 30, 80, "topics"),
     };
+    const notes = (raw.notes === undefined || raw.notes === null ? [] : Array.isArray(raw.notes) && raw.notes.length <= MAX_NOTES ? raw.notes : (() => { throw new InputError(`At most ${MAX_NOTES} notes a day`); })())
+      .map(item => { const note = record(item); keys(note, ["title", "text"], "note");
+        return { title: boundedText(note.title, 120, "note title").trim(), text: boundedText(note.text, NOTE_CHARS, "note text").trim() }; })
+      .filter(note => note.title && note.text);
+    if (notes.length) digest.notes = notes;
     if (!digest.summary) throw new InputError("The day digest needs a summary");
     // Loops that point at records are kept only while those records exist; free-text loops stay as written.
     digest.openLoops = digest.openLoops.filter(loop => loop.ref === null || this.refExists(loop.ref));
@@ -347,6 +378,7 @@ export class DreamStore {
       let applied = 0;
       for (const edit of edits) { try { this.editLesson(edit, "dream", now); applied++; } catch (error) { if (!(error instanceof InputError)) throw error; } }
       this.db.all("DELETE FROM umpi_digests WHERE level='day' AND period < ?", shiftPlanningDay(night.day, -DIGEST_DAYS_KEPT));
+      this.index?.pruneDays(shiftPlanningDay(night.day, -DIGEST_DAYS_KEPT));
       return this.saveNight({ ...night, version: night.version + 1, status: "committed", runId: run.id, committedAt: updatedAt, probes, overnight, lessonEdits: applied, drafts: drafted });
     });
   }

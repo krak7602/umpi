@@ -10,7 +10,8 @@ import { DreamStore, weekOf, type Probe, type TranscriptLine } from "./dream-sto
 import type { HistoryIndex } from "./history-index.js";
 import type { MailStore } from "./mail-store.js";
 import type { SituationStore } from "./situation-store.js";
-import { StateError } from "./store.js";
+import { OWNER_FILE_TAG, StateError } from "./store.js";
+import { MAX_FILE_TEXT } from "../shared/voice-note.js";
 
 /** A conversation entry as the harness returns it; only model messages are read. */
 export interface TranscriptEntry { model?: readonly { role: string; content?: unknown; timestamp?: number }[] }
@@ -25,6 +26,8 @@ export interface DreamSources {
   tasks?(): { kind: "coding" | "browser"; id: string; status: string; prompt: string; result: string | null; updatedAt: string }[];
 }
 
+const FILE_BLOCK = new RegExp(`<${OWNER_FILE_TAG} name="([^"]*)">\\n([\\s\\S]*?)\\n</${OWNER_FILE_TAG}>`, "g");
+
 /** A safety bound for one day's conversation text; a day longer than this keeps its newest part. */
 const TRANSCRIPT_CHARS = 1_500_000;
 
@@ -32,6 +35,7 @@ const TRANSCRIPT_CHARS = 1_500_000;
 export const DREAM_GUIDE = `You are closing the owner's day overnight. Nobody reads this run live. Your outputs become the assistant's memory: tomorrow's conversation starts from a summary built from them, so anything you leave out is gone from the conversation (it stays searchable as raw text and in the digest).
 0. Read the whole day first: conversation holds part 1 of conversationParts; read every further part with read_dream_conversation before writing anything.
 1. digest.summary: what happened on this day in the owner's conversations, for the assistant's own memory, 300 to 900 words. Cover what the owner asked and why, what was done and its outcome, plans, problems, and preferences shown, including delegated coding and browser work from tasks. Keep exact names, numbers, dates, IDs, file and product names. If existingDigest is present, this day already had a partial digest: write the whole day, merging it. decisions: one line each. people and topics: short names for search.
+1b. digest.notes: for each file the owner shared today (an 'owner file' line) and for other dense reference material they gave, write one note with what lasts from it: facts, numbers with units and dates, decisions, plans and rules, and open items, in enough detail to act on months later (up to 6,000 characters). Title it by subject and month, such as "Health: blood tests and eating plan, Nov 2026". Leave out what only identifies the document, such as account, patient, card, or receipt numbers and links. The file itself is not kept, so the note is the lasting record. If existingDigest has notes, keep them, merged with today's.
 2. digest.standingInstructions: copy word for word every instruction about how the assistant should behave from now on (for example "No need to mention that in the documents"). Not one-off tasks. Keep the ones in previousStandingInstructions that still apply and drop any the owner withdrew.
 3. digest.openLoops: what is still open after today: follow-ups the assistant promised, owner questions not answered yet, tasks the owner said they would do, pending approvals, and stuck work. When a loop is one of openRecords, set ref to its id exactly; otherwise ref is null.
 4. week: rewrite this week's summary from weekDigests plus today, not from an older week summary, in at most 250 words. month: only when monthClosing is true, from monthDigests, at most 400 words; otherwise null. year: only when yearClosing is true, from yearMonths, at most 600 words; otherwise null.
@@ -55,12 +59,17 @@ export function transcript(conversations: { channel: string; entries: Transcript
 }
 export function transcriptLines(conversations: { channel: string; entries: TranscriptEntry[] }[], since: number, timezone: string, budget = TRANSCRIPT_CHARS): TranscriptLine[] {
   const clock = new Intl.DateTimeFormat("en-GB", { timeZone: timezone, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-  const lines: { at: number; text: string }[] = [];
+  const lines: TranscriptLine[] = [];
   for (const { channel, entries } of conversations) {
     for (const entry of entries) for (const message of entry.model ?? []) {
       if ((message.role !== "user" && message.role !== "assistant") || typeof message.timestamp !== "number" || message.timestamp < since) continue;
-      const text = textOf(message.content).replace(/\s+/g, " ").trim();
-      if (text) lines.push({ at: message.timestamp, text: `${clock.format(new Date(message.timestamp))} ${channel} ${message.role === "user" ? "owner" : "assistant"}: ${text.slice(0, 6_000)}` });
+      const files: { name: string; text: string }[] = [];
+      const raw = message.role === "user" ? textOf(message.content).replace(FILE_BLOCK, (_match, name: string, body: string) => { files.push({ name, text: body }); return ` [file: ${name}] `; }) : textOf(message.content);
+      const text = raw.replace(/\s+/g, " ").trim();
+      const prefix = `${clock.format(new Date(message.timestamp))} ${channel}`;
+      if (text) lines.push({ at: message.timestamp, text: `${prefix} ${message.role === "user" ? "owner" : "assistant"}: ${text.slice(0, 6_000)}` });
+      // A shared file is its own line, in full, so the nightly run can keep what lasts from it. It is not indexed as raw text.
+      for (const file of files) lines.push({ at: message.timestamp, file: file.name, text: `${prefix} owner file "${file.name}":\n${file.text.trim().slice(0, MAX_FILE_TEXT)}` });
     }
   }
   lines.sort((a, b) => a.at - b.at);
@@ -150,6 +159,7 @@ export function dreamTools(sources: DreamSources): ToolRegistration[] {
           summary: Type.String({ minLength: 1, maxLength: 6_000 }), decisions: Strings(25, 300), standingInstructions: Strings(25, 500),
           openLoops: Type.Optional(Type.Array(Type.Object({ ref: Type.Union([Type.String({ maxLength: 120 }), Type.Null()]), text: Type.String({ minLength: 1, maxLength: 300 }) }, { additionalProperties: false }), { maxItems: 40 })),
           people: Strings(30, 80), topics: Strings(30, 80),
+          notes: Type.Optional(Type.Array(Type.Object({ title: Type.String({ minLength: 1, maxLength: 120 }), text: Type.String({ minLength: 1, maxLength: 6_000 }) }, { additionalProperties: false }), { maxItems: 6 })),
         }, { additionalProperties: false }),
         week: Type.Union([Type.String({ maxLength: 4_000 }), Type.Null()]),
         month: Type.Optional(Type.Union([Type.String({ maxLength: 6_000 }), Type.Null()])),
@@ -272,7 +282,7 @@ export class DreamRuntime {
   }
 }
 
-export const DREAM_INSTRUCTIONS = `Each night Umpi closes the day: it writes a digest, and the conversation before that point is replaced by a summary with the owner's standing instructions, open loops, and recent days. When the owner refers to something the summary does not cover, use search_history (it finds both digests and the actual past conversation, by words and meaning) and read_history before saying you do not know. Only the owned nightly run may call read_dream_inputs, read_dream_conversation, and commit_dream.`;
+export const DREAM_INSTRUCTIONS = `Each night Umpi closes the day: it writes a digest, and the conversation before that point is replaced by a summary with the owner's standing instructions, open loops, and recent days. When the owner refers to something the summary does not cover, use search_history (it finds both digests and the actual past conversation, by words and meaning) and read_history before saying you do not know. Notes from files and material the owner shared (for example health results or a plan) are in history as well: before advising on the owner's health, food, exercise, money, or other personal plans, search for what they shared about it, unless this conversation already has it. Only the owned nightly run may call read_dream_inputs, read_dream_conversation, and commit_dream.`;
 
 /** The parent router authenticates the owner control credential before calling this. */
 export async function dreamRequest(request: Request, dream: DreamStore, telegramSession: () => string | undefined, wake: () => Promise<void>): Promise<Response | undefined> {

@@ -156,6 +156,31 @@ test("history search finds digests and past conversation by words and by meaning
   assert.equal((await new HistoryIndex(f.db).search("Clef-flash")).length > 0, true);
 });
 
+test("a shared file is kept as the night's understanding: notes are searchable, the raw file is not indexed", async t => {
+  const f = fixture(t);
+  const index = new HistoryIndex(f.db, new Decisions(f.db, topicAi, () => 1_000));
+  f.dream.index = index;
+  f.dream.configure({ expectedVersion: 1, enabled: true }, "owner", EVENING);
+  f.time(NIGHT); f.dream.drive(NIGHT); openNight(f, NIGHT);
+  const day = Date.parse("2026-10-30T08:00:00Z");
+  f.dream.saveParts("2026-10-30", [{ at: day, text: "owner: Keep this in mind [file: health.md]" },
+    { at: day, file: "health.md", text: "owner file \"health.md\":\nPatient ID 4076 triglycerides 364" }, { at: day + 1, text: "assistant: Noted." }]);
+  const note = { title: "Health: blood tests and eating plan, Oct 2026", text: `Triglycerides 364 mg/dL; retest about 1 Feb 2027.\n${"No rice at dinner. ".repeat(150)}` };
+  f.dream.commit("dream-review", RESULT({ digest: { ...RESULT().digest as object, notes: [note, { title: "Gym", text: "Hevy from December." }] } }), NIGHT);
+  const ids = f.db.all<{ id: string; text: string }>("SELECT id, text FROM umpi_history ORDER BY id");
+  assert.deepEqual(ids.filter(row => row.id.startsWith("note:")).map(row => row.id), ["note:2026-10-30:0:0", "note:2026-10-30:0:1", "note:2026-10-30:1:0"], "a long note is split for the reranker");
+  assert.ok(!ids.some(row => row.text.includes("Patient ID")), "the raw file text is not indexed");
+  const matches = await index.search("triglycerides retest");
+  assert.match(matches[0]!.text, /^Note 2026-10-30, Health: blood tests and eating plan, Oct 2026: Triglycerides 364/);
+  assert.deepEqual(f.dream.digest("day:2026-10-30")!.data!.notes!.map(item => item.title), [note.title, "Gym"], "read_history shows the notes with the day");
+  // A rewritten day replaces its notes.
+  index.removeExcept("note:2026-10-30:", ["note:2026-10-30:1:0"]);
+  assert.deepEqual(f.db.all<{ id: string }>("SELECT id FROM umpi_history WHERE id LIKE 'note:%'").map(row => row.id), ["note:2026-10-30:1:0"]);
+  index.pruneDays("2026-10-31");
+  assert.equal(f.db.all("SELECT id FROM umpi_history WHERE id LIKE 'note:%' OR id LIKE 'day:%'").length, 0, "notes age out with their day digest");
+  assert.throws(() => f.dream.commit("dream-review", RESULT({ digest: { ...RESULT().digest as object, notes: Array.from({ length: 7 }, () => ({ title: "x", text: "y" })) } }), NIGHT));
+});
+
 test("a long day is read in parts, stuck work and delegated tasks reach the night, and drafts and reinforcement are saved", async t => {
   const f = fixture(t);
   f.dream.configure({ expectedVersion: 1, enabled: true }, "owner", EVENING);

@@ -79,8 +79,9 @@ import { subagentRequest } from "./subagent-http.js";
 import type { SubagentReport, SubagentScope } from "./subagent-types.js";
 import { TelegramInbox } from "./telegram-inbox.js";
 import { downloadTelegramImage, downloadTelegramVoice } from "./telegram-voice.js";
+import { readTelegramFile, type DocumentConverter } from "./telegram-files.js";
 import { SUBSCRIPTION_TRANSCRIPTION_MODEL, transcribeSubscriptionAudio } from "./subscription-transcription.js";
-import { MAX_VOICE_NOTE_BYTES, MAX_VOICE_NOTE_SECONDS, VoiceNoteError, type TelegramImage, type TelegramInboxDelivery } from "../shared/voice-note.js";
+import { MAX_VOICE_NOTE_BYTES, MAX_VOICE_NOTE_SECONDS, VoiceNoteError, type TelegramDocument, type TelegramImage, type TelegramInboxDelivery } from "../shared/voice-note.js";
 import { classifyModelError, describeModelFailure, type ModelFailure } from "../model/failure.js";
 import { ModelFallback } from "./model-fallback.js";
 
@@ -438,6 +439,7 @@ export class Assistant extends Agent<Env> {
       db: this.store.db,
       download: (note, signal) => downloadTelegramVoice(note, this.config, signal),
       downloadImage: (image, maxBytes, signal) => downloadTelegramImage(image, maxBytes, this.config, signal),
+      readFile: (file, signal) => readTelegramFile(file, this.config, env.AI as unknown as DocumentConverter | undefined, signal),
       transcribe: (audio, signal) => transcribeSubscriptionAudio(audio, async () => {
         const stored = await this.credentials.read("openai-codex");
         if (stored?.type !== "oauth") throw new VoiceNoteError("authorization_missing");
@@ -634,7 +636,7 @@ export class Assistant extends Agent<Env> {
     this.contextHealth.wasReset(session);
   }
 
-  private async admit(id: string, text: string, channel: Channel, guard?: () => void, ownerSource?: OwnerMessageSource, images?: TelegramImage[]): Promise<Operation> {
+  private async admit(id: string, text: string, channel: Channel, guard?: () => void, ownerSource?: OwnerMessageSource, images?: TelegramImage[], document?: TelegramDocument): Promise<Operation> {
     const existing = this.store.operation(`message:${channel}:${id}`);
     if (!existing && !(await this.modelReady())) throw new StateError(503, this.modelIssue!);
     const sessionId = await this.session(channel);
@@ -642,7 +644,7 @@ export class Assistant extends Agent<Env> {
     await this.coordinator.wake();
     guard?.();
     const op = this.store.db.transaction(() => {
-      const admitted = this.store.admit(id, text, channel, sessionId, ownerSource, images);
+      const admitted = this.store.admit(id, text, channel, sessionId, ownerSource, images, document);
       if (admitted.status === "admitted" || admitted.status === "submitted") this.proactive.deferForForeground();
       return admitted;
     });
@@ -655,12 +657,13 @@ export class Assistant extends Agent<Env> {
     const sessionId = this.store.session("telegram");
     const pendingChoice = !existing && sessionId && !input.text.trimStart().startsWith("/") ? this.store.pendingChoice(sessionId) : undefined;
     const op = await this.admit(input.id, input.text, "telegram", undefined, {
-      kind: input.source === "voice" ? "telegram-voice" : input.source === "image" ? "telegram-image" : "telegram-text",
+      kind: input.source === "voice" ? "telegram-voice" : input.source === "image" ? "telegram-image" : input.source === "file" ? "telegram-file" : "telegram-text",
       ...(input.sentAt === undefined ? {} : { sentAt: input.sentAt }),
       ...(input.caption === undefined ? {} : { caption: input.caption }),
       ...(input.skipped === undefined ? {} : { skipped: input.skipped }),
       ...(input.omittedImages === undefined ? {} : { omittedImages: input.omittedImages }),
-    }, input.images);
+      ...(input.document === undefined ? {} : { file: { name: input.document.name, characters: input.document.text.length, ...(input.document.truncated ? { truncated: true } : {}) } }),
+    }, input.images, input.document);
     if (pendingChoice) {
       for (const delivery of this.store.deliveries(`choice:${pendingChoice.id}`)) {
         if (delivery.status === "sent" && delivery.messageId !== undefined && delivery.replyMarkup) {
