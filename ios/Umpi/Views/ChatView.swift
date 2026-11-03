@@ -66,6 +66,8 @@ struct ChatView: View {
             }
             .onScrollPhaseChange { _, phase in userScrolling = phase == .interacting || phase == .decelerating }
             .scrollDismissesKeyboard(.interactively)
+            // A tap anywhere in the conversation puts the keyboard away; buttons and links in messages still work.
+            .simultaneousGesture(TapGesture().onEnded { composing = false })
             .softScrollEdges()
             .onChange(of: chat.entries.last?.seq) { old, _ in
                 // The first load jumps to the newest message; later ones scroll there.
@@ -128,6 +130,9 @@ struct ChatView: View {
         Button { draft += draft.isEmpty || draft.hasSuffix("\n") ? "```\n\n```" : "\n```\n\n```" } label: { Label("Code block", systemImage: "chevron.left.forwardslash.chevron.right") }
     }
 
+    /// One line of the message field: body text plus its vertical padding.
+    static let fieldHeight: CGFloat = 40
+
     private var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || attachment != nil }
 
     private var composerRow: some View {
@@ -159,7 +164,7 @@ struct ChatView: View {
                     Button { showFiles = true } label: { Label("Files and audio", systemImage: "doc") }
                 }
             } label: {
-                Image(systemName: composing || !draft.isEmpty ? "textformat" : "plus").font(.system(size: 17, weight: .semibold)).frame(width: 36, height: 36)
+                Image(systemName: composing || !draft.isEmpty ? "textformat" : "plus").font(.system(size: 17, weight: .semibold)).frame(width: ChatView.fieldHeight, height: ChatView.fieldHeight)
                     .contentTransition(.symbolEffect(.replace))
                     .glassOrFill(in: Circle())
             }
@@ -171,24 +176,26 @@ struct ChatView: View {
                 TextField("Message Umpi", text: $draft, axis: .vertical)
                     .lineLimit(1...8)
                     .focused($composing)
-                    .padding(.leading, 14).padding(.trailing, 40).padding(.vertical, 8)
-                    .frame(minHeight: 36)
+                    .padding(.leading, 14).padding(.trailing, 42).padding(.vertical, 9)
+                    .frame(minHeight: ChatView.fieldHeight)
                     .accessibilityIdentifier("chat.input")
                 Group {
                     if canSend {
-                        Button(action: send) { Image(systemName: "arrow.up.circle.fill").font(.system(size: 28)) }
+                        Button(action: send) { Image(systemName: "arrow.up.circle.fill").font(.system(size: 28)).frame(width: 34, height: ChatView.fieldHeight) }
                             .disabled(preparing != nil)
                             .accessibilityIdentifier("chat.send")
                             .accessibilityLabel("Send")
                     } else {
-                        Button { Task { await startRecording() } } label: { Image(systemName: "mic.fill").font(.system(size: 16, weight: .medium)).frame(width: 28, height: 28) }
+                        Button { Task { await startRecording() } } label: { Image(systemName: "mic.fill").font(.system(size: 17, weight: .medium)).frame(width: 34, height: ChatView.fieldHeight) }
                             .tint(.secondary)
                             .disabled(preparing != nil)
                             .accessibilityIdentifier("chat.record")
                             .accessibilityLabel("Record a voice note")
                     }
                 }
-                .padding(.trailing, 4).padding(.bottom, 4)
+                // The button is as tall as one line of the field, so it is centred on a single line and stays on the
+                // last line as the text grows.
+                .padding(.trailing, 4)
             }
             .glassOrFill(in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
