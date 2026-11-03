@@ -88,6 +88,7 @@ export async function companionRequest(request: Request, context: CompanionHttpC
     return Response.json(context.chat.page({ ...(chatPosition(query.get("before")) !== undefined ? { before: chatPosition(query.get("before"))! } : {}),
       ...(chatPosition(query.get("after")) !== undefined ? { after: chatPosition(query.get("after"))! } : {}), ...(limit !== null ? { limit: Number(limit) } : {}) }));
   }
+  if (path === "/api/device/chat/socket") throw new StateError(426, "Open the chat socket as a WebSocket");
   if (path === "/api/device/chat/settings" && request.method === "GET") return Response.json(context.chat.settings());
   if (path === "/api/device/session") {
     await context.wake(); companion.requireDevice(device.id); companion.revoke(device.id);

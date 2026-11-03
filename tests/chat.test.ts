@@ -9,6 +9,7 @@ import { Store, type Database } from "../src/worker/store.js";
 import { CompanionStore } from "../src/worker/companion-store.js";
 import { companionRequest, type CompanionHttpContext } from "../src/worker/companion-http.js";
 import { sendCompanionPush } from "../src/worker/companion-push.js";
+import { authorize } from "../src/worker/transport.js";
 
 const capabilities: Capability[] = [{ id: "notification.schedule", version: 1, status: "available" }];
 const config = { UMPI_CONTROL_TOKEN: "control-".repeat(8), UMPI_EXECUTOR_TOKEN: "executor-".repeat(8) };
@@ -121,6 +122,12 @@ test("the app reads history in pages, changes the notification setting, and send
   await assert.rejects(companionRequest(request("/api/device/messages", token, { id: "m4" }), f.context), /needs text, images, or a file/);
   await assert.rejects(companionRequest(request("/api/device/messages", token, { id: "m5", file: { name: "x", data: "not base64!" } }), f.context), /base64/);
   await assert.rejects(companionRequest(request("/api/device/chat", "not-a-paired-token"), f.context));
+  await assert.rejects(companionRequest(request("/api/device/chat/socket", token), f.context), /WebSocket/);
+  const upgrade = (path: string, token?: string) => new Request(`https://coordinator.example${path}`, { headers: { upgrade: "websocket", ...(token ? { authorization: `Bearer ${token}` } : {}) } });
+  await authorize(upgrade("/api/device/chat/socket", token), config, "forward-device");
+  await assert.rejects(authorize(upgrade("/api/device/chat/socket"), config, "forward-device"), /Unauthorized/, "the socket needs a device credential");
+  await assert.rejects(authorize(upgrade("/api/device/chat/socket", config.UMPI_CONTROL_TOKEN), config, "forward-device"), /Unauthorized/);
+  await assert.rejects(authorize(upgrade("/api/device/state", token), config, "forward-device"), /Not found/, "other upgrades are refused");
 });
 
 test("a chat message reaches the phone as an alert with its preview and position", async () => {
