@@ -100,6 +100,47 @@ struct HomeWidgetView: View {
     }
 }
 
+/// A small square with four buttons in a 2×2 grid, each opening its own action. Widget buttons run an intent per tap
+/// (iOS 17 and later), so a small widget is not limited to one tap target.
+struct ButtonsWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: "UmpiButtons", provider: HomeProvider()) { entry in
+            ButtonsWidgetView(entry: entry).containerBackground(.fill.tertiary, for: .widget)
+        }
+        .configurationDisplayName("Umpi Buttons")
+        .description("Four quick buttons in a small square; choose them in Umpi's Settings.")
+        .supportedFamilies([.systemSmall])
+    }
+}
+
+struct ButtonsWidgetView: View {
+    let entry: HomeEntry
+    private var actions: [WidgetAction] { Array(WidgetAction.list(entry.content?.actions).prefix(4)) }
+
+    var body: some View {
+        Grid(horizontalSpacing: 10, verticalSpacing: 10) {
+            ForEach(0..<2, id: \.self) { row in
+                GridRow {
+                    ForEach(0..<2, id: \.self) { column in
+                        let index = row * 2 + column
+                        if actions.indices.contains(index) { button(actions[index]) } else { Color.clear }
+                    }
+                }
+            }
+        }
+    }
+
+    private func button(_ action: WidgetAction) -> some View {
+        Button(intent: OpenURLIntent(action.url)) {
+            Image(systemName: action.symbol).font(.title2.weight(.semibold)).foregroundStyle(.tint)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.tint.opacity(0.15), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(action.label)
+    }
+}
+
 /// A Control Center and Action Button control: opens Umpi straight into recording an idea.
 @available(iOS 18.0, *)
 struct CaptureControl: ControlWidget {
