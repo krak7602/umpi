@@ -82,6 +82,7 @@ import { downloadTelegramImage, downloadTelegramVoice } from "./telegram-voice.j
 import { documentFromBytes, readTelegramFile, type DocumentConverter } from "./telegram-files.js";
 import { ChatLog, type ChatEntry } from "./chat.js";
 import { ChatSocket } from "./chat-socket.js";
+import { T3CodeStore, T3_CALLBACK_PATH, t3CallbackPage, t3CodeTools } from "./t3-code.js";
 import { openTasks, WidgetStore, widgetTools, type WidgetContent, type WidgetItem } from "./widget.js";
 import { KnockPushStore } from "./knock-push.js";
 import type { AppMessage } from "./companion-http.js";
@@ -304,6 +305,7 @@ export class Assistant extends Agent<Env> {
   readonly chat: ChatLog;
   readonly widgets: WidgetStore;
   readonly knockPushes: KnockPushStore;
+  readonly t3: T3CodeStore;
   private chatSocket?: ChatSocket;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -316,6 +318,7 @@ export class Assistant extends Agent<Env> {
     this.companion = new CompanionStore(this.store);
     this.store.setSession("control", "1");
     this.credentials = new DurableCredentials(this.store.db);
+    this.t3 = new T3CodeStore(this.store.db);
     this.providerId = env.UMPI_MODEL_PROVIDER || DEFAULT_PROVIDER;
     this.modelId = env.UMPI_MODEL_ID || DEFAULT_MODEL;
     this.timezone = env.UMPI_TIMEZONE || "UTC";
@@ -439,7 +442,7 @@ export class Assistant extends Agent<Env> {
       track: work => this.lifecycle.trackAlarmWork(work),
     });
     const browserProfile = browserExtension(this.browserRuntime);
-    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...activityTools(this.store, this.activity, this.timezone, () => this.notifyExecutor()), ...journalTools(this.journal, id => this.store.isBackgroundSession(id)), ...widgetTools(this.widgets, () => this.coordinator.wake()), ...web, ...decision, ...historyTools(this.dream, this.history, id => this.store.isBackgroundSession(id)), ...contextTools(this.contextHealth, id => !this.store.isBackgroundSession(id)), ...delegation.tools ?? []];
+    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...activityTools(this.store, this.activity, this.timezone, () => this.notifyExecutor()), ...journalTools(this.journal, id => this.store.isBackgroundSession(id)), ...widgetTools(this.widgets, () => this.coordinator.wake()), ...t3CodeTools(this.t3), ...web, ...decision, ...historyTools(this.dream, this.history, id => this.store.isBackgroundSession(id)), ...contextTools(this.contextHealth, id => !this.store.isBackgroundSession(id)), ...delegation.tools ?? []];
     const guardedProactiveTools = guardDreamReviewTools(guardBriefReviewTools(guardMailReviewTools(guardPlanningReviewTools(proactiveTools(this.proactive, () => this.coordinator.wake()), this.planningRuntime), this.mailRuntime), this.brief), this.dream);
     const briefSources = { brief: this.brief, situation: this.situation, mail: this.mail, planning: this.planningRuntime, calendarCredentials: () => this.config.UMPI_CALENDAR_CREDENTIALS, activity: this.activity, dream: this.dream };
     const ownerSessions = () => (["telegram", "control"] as const).flatMap(channel => { const session = this.store.session(channel); return session ? [{ channel, session }] : []; });
@@ -838,6 +841,7 @@ export class Assistant extends Agent<Env> {
       decisions: { ...this.decisions.status(), ownerEffort: this.efforts },
       knocks: { ...this.knocks.status(), pushed: this.knockPushes.status() },
       chat: { ...this.chat.status(), sockets: this.chatSocket?.count() ?? 0 },
+      t3Code: this.t3.status(),
       conversations: this.contextHealth.status([
         { label: "telegram", id: this.store.session("telegram") }, { label: "control", id: this.store.session("control") },
         { label: "background:telegram", id: this.store.backgroundSession("telegram") }, { label: "background:control", id: this.store.backgroundSession("control") },
@@ -876,6 +880,7 @@ export class Assistant extends Agent<Env> {
           return this.obsyVault.readDay(day ?? this.planningRuntime.today());
         },
         widget: () => this.widgetContent(),
+        t3: this.t3,
         setWidgetActions: async value => ({ actions: this.widgets.setActions(value) }),
         setTask: async (day, line, expected, checked) => {
           if (!this.obsyVault) throw new StateError(503, this.obsyIssue ?? "No notes vault is configured");
@@ -885,6 +890,12 @@ export class Assistant extends Agent<Env> {
         requireModel: async () => { if (!(await this.modelReady())) throw new StateError(503, this.modelIssue!); },
       });
       if (companion) { companion.headers.set("cache-control", "no-store"); return companion; }
+      const url = new URL(request.url);
+      if (url.pathname === T3_CALLBACK_PATH && request.method === "GET") {
+        const state = url.searchParams.get("state");
+        if (!state || state.length > 100) return t3CallbackPage({ ok: false, label: "T3 Code", message: "This approval link is incomplete. Start again from Umpi." });
+        return t3CallbackPage(await this.t3.finish(state, url.searchParams.get("code")?.slice(0, 2_000) || undefined, url.searchParams.get("error")?.slice(0, 100) || undefined));
+      }
       await authorize(request, this.config);
       const path = new URL(request.url).pathname;
       const coding = await codingExecutorRequest(request, this.codingRuntime)

@@ -15,6 +15,7 @@ import { ChatLog } from "../src/worker/chat.js";
 import { Store, StateError, type Database } from "../src/worker/store.js";
 import { CompanionStore, CompanionConflict, companionHash } from "../src/worker/companion-store.js";
 import { companionRequest, type CompanionHttpContext } from "../src/worker/companion-http.js";
+import { T3CodeStore } from "../src/worker/t3-code.js";
 import { companionTools } from "../src/worker/companion-tools.js";
 import { sendCompanionPush } from "../src/worker/companion-push.js";
 import { authorize, telegramUpdate } from "../src/worker/transport.js";
@@ -41,7 +42,7 @@ function fixture(t: TestContext) {
   const companion = new CompanionStore(owner);
   t.after(() => { sqlite.close(); rmSync(directory, { recursive: true, force: true }); });
   const chat = new ChatLog(db); owner.chat = chat;
-  const context: CompanionHttpContext = { companion, config, chat, async wake() {}, async requireModel() {},
+  const context: CompanionHttpContext = { companion, config, chat, t3: new T3CodeStore(db), async wake() {}, async requireModel() {},
     async admitApp(id, deviceId, message) {
       companion.requireDevice(deviceId);
       return owner.admit(id, message.text || "[attachment]", "telegram", "2", { kind: message.images ? "app-image" : message.document ? "app-file" : "app-text",

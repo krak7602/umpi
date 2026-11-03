@@ -33,6 +33,7 @@ private struct RootView: View {
     @State private var pairingCode = ""
     @State private var selectedTab = 0
     @State private var linkMessage: String?
+    @State private var t3 = T3CodeModel()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -52,6 +53,7 @@ private struct RootView: View {
                         NavigationStack { SettingsView() }
                     }
                 }
+                .environment(t3)
             } else {
                 NavigationStack {
                     PairingView(server: $pairingServer, code: $pairingCode)

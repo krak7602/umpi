@@ -12,6 +12,7 @@
 		1476F06FC28AF0E8B76BA88E /* ChatModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6058656C76912D0F8326ADE4 /* ChatModel.swift */; };
 		15C8F301EEBA31B08FC2C3AB /* UmpiWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 079A89E620BD8E3222C7B1F0 /* UmpiWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		169E7E0A02A980A4730E0F4E /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = 8BAA3024E435FD6EAE76E10F /* Markdown */; };
+		2013FB37B381418F406CDF21 /* T3Code.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E017C621BB16B83A098F0B0 /* T3Code.swift */; };
 		22924A7C70A532D6692AAED1 /* pele.global.js in Resources */ = {isa = PBXBuildFile; fileRef = 3D406A11F29877842AFB10C1 /* pele.global.js */; };
 		22FCF7D0DFC1336220C26A31 /* TaskActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4C30AA88504D79B39CFAED6 /* TaskActivityAttributes.swift */; };
 		2376488D54E3B88D383689ED /* knock.caf in Resources */ = {isa = PBXBuildFile; fileRef = C1917C675F6D8B3F143CBDD7 /* knock.caf */; };
@@ -44,6 +45,7 @@
 		C2EB32BC864A2C0A5DEEF6F0 /* HomeWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7EF9DA8A6B391BDB5D276CD /* HomeWidget.swift */; };
 		CA2572DDF10CA82A8543FF15 /* TodayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2401FEA779E0BCFCCAF2EC1D /* TodayView.swift */; };
 		D1DFB04CA4BA75EB463E2F69 /* SyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B25A76F8A7ED8AD27372684E /* SyntaxHighlighter.swift */; };
+		D5FD75B433F47A46B318D445 /* T3CodeViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 607C5CFA6908E25794744FC8 /* T3CodeViews.swift */; };
 		DEF9887A7D5D7B3061B7DB8C /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1279E4B7032997728B14B81D /* Models.swift */; };
 		EC9CCA04DD0DB7A704BFC4F3 /* WorkView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D40AE38FC399EC2723210EB /* WorkView.swift */; };
 		EE06FB69DE12A46538C3A015 /* MermaidView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24646F2B743B59636E323FED /* MermaidView.swift */; };
@@ -112,6 +114,7 @@
 		5E9AB65F56609B7A65947DF5 /* OpenUmpiAction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenUmpiAction.swift; sourceTree = "<group>"; };
 		6003C7D47F04AE6CFBF42555 /* LICENSE */ = {isa = PBXFileReference; path = LICENSE; sourceTree = "<group>"; };
 		6058656C76912D0F8326ADE4 /* ChatModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatModel.swift; sourceTree = "<group>"; };
+		607C5CFA6908E25794744FC8 /* T3CodeViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = T3CodeViews.swift; sourceTree = "<group>"; };
 		6398981AA3C9F6DDCC9FC8BA /* BackgroundSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundSync.swift; sourceTree = "<group>"; };
 		642470A892264C968849E931 /* Knocks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Knocks.swift; sourceTree = "<group>"; };
 		66C721B679025A29ED293E59 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
@@ -124,6 +127,7 @@
 		8E0ACFCC605F137407E0B52E /* knock-gentle.caf */ = {isa = PBXFileReference; path = "knock-gentle.caf"; sourceTree = "<group>"; };
 		8FDAA4ADB75F6C9CCDD06F98 /* highlight.min.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = highlight.min.js; sourceTree = "<group>"; };
 		9129706318F50FC4F4F18210 /* CompanionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionUITests.swift; sourceTree = "<group>"; };
+		9E017C621BB16B83A098F0B0 /* T3Code.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = T3Code.swift; sourceTree = "<group>"; };
 		A14AEACCCD7F5BCD8694CBB0 /* CompanionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionClient.swift; sourceTree = "<group>"; };
 		A1EAB9A47CBFD4B231E2F243 /* Umpi.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Umpi.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A3BD3523F049B9E124DCDA19 /* WidgetShared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetShared.swift; sourceTree = "<group>"; };
@@ -186,6 +190,7 @@
 				642470A892264C968849E931 /* Knocks.swift */,
 				1279E4B7032997728B14B81D /* Models.swift */,
 				6F3BFD0B54AB075C19E95F37 /* SecureStorage.swift */,
+				9E017C621BB16B83A098F0B0 /* T3Code.swift */,
 				691633D0AABEF045AC98D419 /* UmpiApp.swift */,
 				1C9288EF11B43EEAE6E036BD /* Resources */,
 				38BBF0088149767131CD7635 /* Views */,
@@ -205,6 +210,7 @@
 				1FA63C5DF1830458AA277C57 /* QueuedChangesView.swift */,
 				5130E3C64EA03895D3F8EA5A /* SettingsView.swift */,
 				B25A76F8A7ED8AD27372684E /* SyntaxHighlighter.swift */,
+				607C5CFA6908E25794744FC8 /* T3CodeViews.swift */,
 				2401FEA779E0BCFCCAF2EC1D /* TodayView.swift */,
 				01688E9D5D74AA1EB9A37D45 /* WorkflowViews.swift */,
 				7D40AE38FC399EC2723210EB /* WorkView.swift */,
@@ -485,6 +491,8 @@
 				49744912F7986A50CA9EAF63 /* SecureStorage.swift in Sources */,
 				3431D1D839E0D5CBED583675 /* SettingsView.swift in Sources */,
 				D1DFB04CA4BA75EB463E2F69 /* SyntaxHighlighter.swift in Sources */,
+				2013FB37B381418F406CDF21 /* T3Code.swift in Sources */,
+				D5FD75B433F47A46B318D445 /* T3CodeViews.swift in Sources */,
 				FE57803808D9A0F6E9042BE6 /* TaskActivityAttributes.swift in Sources */,
 				CA2572DDF10CA82A8543FF15 /* TodayView.swift in Sources */,
 				FCE345FBCA4731BC372CBFFE /* UmpiApp.swift in Sources */,

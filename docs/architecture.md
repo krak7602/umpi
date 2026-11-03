@@ -93,3 +93,4 @@ Browser Run is the browser-only cloud provider. Bounded hosted-model public-page
 - 2026-10-21: Moved daily notes from the VaultSync container to the obsy vault over an R2 binding, then removed the container.
 - 2026-10-30: Added the nightly run: daily digests and a code-built anchored summary replace each day's conversation history without a summarizing model call.
 - 2026-10-30: Added decision models on Workers AI to the harness for yes/no, choice, and score answers without a Claude turn; mail is the first caller.
+- 2026-11-03: Umpi reads T3 Code threads on the owner's machines as a remote MCP client through T3 Connect; nothing runs on those machines. The [T3 Code access decision](decisions/2026-11-03-t3-code-access.md) records why.
