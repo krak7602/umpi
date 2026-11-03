@@ -284,6 +284,8 @@ export async function authorize(request: Request, env: TelegramConfig & { UMPI_C
   if (request.headers.has("upgrade") && !wakeSocket && !isChatSocketUpgrade(request)) throw new StateError(404, "Not found");
   // The owner's browser returns here after approving Umpi on a T3 Code machine; the one-time state is the check.
   if (path === "/t3/callback" && request.method === "GET") return;
+  // A cloud machine's Pi asking for a model turn; the coordinator checks the machine's own token.
+  if (path === "/api/cloud/model/messages" && request.method === "POST") return;
   if (path === "/telegram/webhook" && request.method === "POST") {
     const missing = telegramMissing(env);
     if (missing.length) throw new StateError(503, `Telegram is not configured: ${missing.join(", ")}`);

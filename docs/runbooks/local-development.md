@@ -184,6 +184,16 @@ Umpi reaches T3 Code on the owner's machines in one of two ways. The [runtime se
 
 The bridge joins as an ephemeral `tag:umpi` device named `umpi-bridge` when Umpi first needs a tailnet machine, and sleeps after five idle minutes. Docker must be running for a build or deployment, because the container image is built locally.
 
+### Run cloud machines
+
+Cloud machines need the `CloudMachine` container (in both Worker configs), the `CODING_ARCHIVE` R2 binding for saved state, and two private secrets. The [runtime section](../subsystems/assistant-runtime.md#cloud-machines) owns the contract.
+
+1. Generate a dedicated SSH key outside `~/.ssh`, store its private half with `npx wrangler secret put UMPI_GIT_SSH_KEY --config wrangler.local.jsonc` from standard input, delete the local copy, and add the public half to the GitHub account (with SSO authorization for organizations that require it).
+2. Store the commit identity with `npx wrangler secret put UMPI_GIT_IDENTITY --config wrangler.local.jsonc`: a JSON object such as `{"name": "Example Person", "email": "person@example.com", "byRemote": [{"remote": "git@github.com:example-org/**", "email": "person@example.org"}]}`. List each remote form the organization uses (SSH and HTTPS).
+3. Deploy without `--containers-rollout=none` the first time, so the image is built and pushed. Docker must be running.
+
+Umpi learns its own public address from incoming HTTPS requests and gives machines `<origin>/api/cloud/model` as Pi's endpoint. A local copy sets `UMPI_CLOUD_MODEL_URL` (for example `http://host.docker.internal:8788/api/cloud/model`) and `dev.enable_containers`. Local reloads stop running containers; Umpi then marks those machines asleep and wakes them from their last save.
+
 ### Operate subagents
 
 Native background delegation supports focused foreground assistant work and approved coding. Ask for focused independent work and give concrete goals; the parent decides whether delegation is useful. No new Telegram command, provider login, or Mac opt-in is required beyond a correctly deployed coordinator. [The delegation contract](../subsystems/assistant-runtime.md#subagents) owns capability, deadline, and recovery boundaries; [evidence](../learning/assistant-core-verification.md#subagent-verification) records exercised behavior.

@@ -14,11 +14,17 @@ struct T3Machine: Codable, Equatable, Identifiable, Sendable {
     var environmentLabel: String?
     var threads: [T3Thread]?
     var problem: String?
+    var kind: String?
+    var asleep: Bool?
 
     var connected: Bool { status == "connected" }
+    /// One of Umpi's cloud machines: a container per session that sleeps when idle.
+    var cloud: Bool { kind == "cloud" }
+    var name: String { cloud ? "☁︎ \(label)" : label }
     var expires: Date? { expiresAt.flatMap(T3Date.parse) }
     /// One line for the machine's state.
     var summary: String {
+        if cloud { return asleep == true ? "Cloud · asleep, saved" : "Cloud · awake" }
         switch status {
         case "connected":
             guard let expires else { return "Connected" }
@@ -259,7 +265,8 @@ final class T3CodeModel {
 
     func remove(_ store: CompanionStore, _ machine: T3Machine) async {
         guard let transport = store.chatTransport else { return }
-        _ = try? await transport.send(path: "/api/device/t3/machines/\(machine.id)", method: "DELETE", body: nil)
+        // A cloud machine is deleted with its saved state; a machine of the owner's is only forgotten.
+        _ = try? await transport.send(path: machine.cloud ? "/api/device/cloud/\(machine.id)" : "/api/device/t3/machines/\(machine.id)", method: "DELETE", body: nil)
         machines.removeAll { $0.id == machine.id }
         T3CodeModel.save(machines)
     }
@@ -270,6 +277,13 @@ final class T3CodeModel {
         struct Body: Encodable { var machine: String; var requestId: String; var kind: String; var threadId: String; var message: String? }
         _ = try await transport.send(path: "/api/device/t3/act", method: "POST",
                                      body: JSONEncoder().encode(Body(machine: machine, requestId: UUID().uuidString, kind: kind, threadId: thread, message: message)))
+    }
+
+    /// Wakes a sleeping cloud machine, restoring its saved state.
+    func wake(_ store: CompanionStore, _ machine: T3Machine) async throws {
+        guard let transport = store.chatTransport else { throw CompanionClientError.invalidServer }
+        _ = try await transport.send(path: "/api/device/cloud/\(machine.id)/wake", method: "POST", body: Data("{}".utf8))
+        await loadMachines(store)
     }
 
     func read(_ store: CompanionStore, machine: String, thread: String) async throws -> T3ThreadRead {

@@ -18,7 +18,8 @@
       { "name": "ASSISTANT", "class_name": "Assistant" },
       { "name": "CODING_WORKER", "class_name": "CodingWorker" },
       { "name": "BROWSER_WORKER", "class_name": "BrowserWorker" },
-      { "name": "TAILNET_BRIDGE", "class_name": "TailnetBridge" }
+      { "name": "TAILNET_BRIDGE", "class_name": "TailnetBridge" },
+      { "name": "CLOUD_MACHINE", "class_name": "CloudMachine" }
     ]
   },
   "migrations": [
@@ -27,7 +28,8 @@
     { "tag": "v3-coding-worker", "new_sqlite_classes": ["CodingWorker"] },
     { "tag": "v4-browser-worker", "new_sqlite_classes": ["BrowserWorker"] },
     { "tag": "v5-retire-vault-sync", "deleted_classes": ["VaultSync"] },
-    { "tag": "v6-tailnet-bridge", "new_sqlite_classes": ["TailnetBridge"] }
+    { "tag": "v6-tailnet-bridge", "new_sqlite_classes": ["TailnetBridge"] },
+    { "tag": "v7-cloud-machine", "new_sqlite_classes": ["CloudMachine"] }
   ],
   "containers": [{
     "class_name": "CodingWorker",
@@ -41,6 +43,12 @@
     "image_build_context": ".",
     "instance_type": "lite",
     "max_instances": 1
+  }, {
+    "class_name": "CloudMachine",
+    "image": "./containers/cloud-machine/Dockerfile",
+    "image_build_context": ".",
+    "instance_type": "standard-2",
+    "max_instances": 6
   }],
   "r2_buckets": [
     { "binding": "CODING_ARCHIVE", "bucket_name": "replace-with-umpi-coding-state" },

@@ -94,3 +94,4 @@ Browser Run is the browser-only cloud provider. Bounded hosted-model public-page
 - 2026-10-30: Added the nightly run: daily digests and a code-built anchored summary replace each day's conversation history without a summarizing model call.
 - 2026-10-30: Added decision models on Workers AI to the harness for yes/no, choice, and score answers without a Claude turn; mail is the first caller.
 - 2026-11-03: Umpi reads T3 Code threads on the owner's machines as a remote MCP client through T3 Connect; nothing runs on those machines. An on-demand tailnet bridge container reaches machines served over Tailscale HTTPS. The [T3 Code access decision](decisions/2026-11-03-t3-code-access.md) records why.
+- 2026-11-04: Added cloud machines: a container per coding session with T3 Code and Pi, whose model calls go through Umpi's own login; they sleep and save to R2 when idle. See [cloud machines](subsystems/assistant-runtime.md#cloud-machines).

@@ -37,4 +37,15 @@ Umpi therefore runs one container that joins the tailnet only while Umpi needs a
 
 The owner wants Umpi to manage sessions, not only read them: message, start, stop, and answer agents. The owner chose the approval rule: when the owner asked, Umpi acts; when Umpi decided on its own, it asks first with Approve and Decline buttons. Machines are approved at Full access, so the machine's level allows this; Umpi's own rule decides when it asks.
 
-The current contract lives in [T3 Code threads](../subsystems/assistant-runtime.md#t3-code-threads).
+## Amendment: cloud machines, one per session
+
+One machine limits parallel work; the owner wants many sessions at once. Umpi therefore starts a container per session, each with T3 Code and the Pi agent, and treats each as a T3 Code machine. Decisions the owner made:
+
+- **No separate model login.** Many machines each signing in would strain the subscription, so Pi in every container uses Umpi's Claude login through a model gateway. The credential stays in Umpi, which alone refreshes it.
+- **No grace period.** A machine is saved and stopped as soon as nothing is working; keeping it up for a while costs money for little use. A reply or a Wake starts it again from its saved state.
+- **One SSH key for all machines**, generated for this purpose and kept out of the owner's own `~/.ssh`, and a commit identity per organization, both in private secrets.
+- **Umpi stays the higher level.** Deeper work belongs in T3 Code; Umpi starts, wakes, watches, and messages sessions.
+
+T3 Code grants full access only through its OAuth approval, so each machine approves Umpi over loopback with a pairing code it mints itself.
+
+The current contracts live in [T3 Code threads](../subsystems/assistant-runtime.md#t3-code-threads) and [cloud machines](../subsystems/assistant-runtime.md#cloud-machines).
