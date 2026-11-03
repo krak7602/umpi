@@ -68,7 +68,13 @@ final class KnockScheduler {
         }
         let pending = await center.pendingNotificationRequests().map(\.identifier).filter { $0.hasPrefix(prefix) }
         center.removePendingNotificationRequests(withIdentifiers: pending.filter { desired[$0] == nil })
-        for (id, request) in desired where !pending.contains(id) { try? await center.add(request) }
+        // Only a reminder still ahead gets new knocks. One already due that this phone had not set is knocked by the
+        // server's push, so adding it here would knock twice; repeats this phone already set are kept.
+        let ahead = Set(wanted.filter { ($0.due ?? .distantPast) > now }.map(\.id))
+        for (id, request) in desired where !pending.contains(id) {
+            guard let reminderID = request.content.userInfo["reminderId"] as? String, ahead.contains(reminderID) else { continue }
+            try? await center.add(request)
+        }
         let set = Set(await center.pendingNotificationRequests().map(\.identifier))
         return wanted.filter { $0.status == "scheduled" && (set.contains(identifier($0, 0)) || delivered.contains(identifier($0, 0))) }
     }
@@ -78,7 +84,9 @@ final class KnockScheduler {
         let center = UNUserNotificationCenter.current()
         let mine = { (id: String) in id.hasPrefix("\(prefix)\(reminderID).") }
         center.removePendingNotificationRequests(withIdentifiers: await center.pendingNotificationRequests().map(\.identifier).filter(mine))
-        center.removeDeliveredNotifications(withIdentifiers: await center.deliveredNotifications().map(\.request.identifier).filter(mine))
+        // Knocks this phone set, and knocks the server pushed (same thread), are cleared together.
+        let delivered = await center.deliveredNotifications().filter { mine($0.request.identifier) || $0.request.content.threadIdentifier == "knock.\(reminderID)" }
+        center.removeDeliveredNotifications(withIdentifiers: delivered.map(\.request.identifier))
     }
 }
 

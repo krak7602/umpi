@@ -533,13 +533,16 @@ export class Store {
     this.db.transaction(() => {
       for (const reminder of this.rows<Reminder>("SELECT data FROM umpi_reminders WHERE status='scheduled' AND due<=?", now)) {
         this.reminderWrite({ ...reminder, status: "fired" });
-        // A knock the phone confirmed is the alert; the message is then only the written record.
+        // A knock is the alert, set by the phone or else pushed by the server; the message is then only the record.
+        const knocked = this.phoneKnocked(reminder.id, reminder.version) || this.knockFallback?.(reminder) === true;
         this.enqueue(`reminder:${reminder.id}:${reminder.version}`, reminder.channel, `Reminder: ${reminder.text}${reminder.details ? `\n\n${reminder.details}` : ""}`, undefined, undefined, undefined,
-          this.phoneKnocked(reminder.id, reminder.version) ? { quiet: true } : undefined);
+          knocked ? { quiet: true } : undefined);
         this.reminderFired?.(reminder);
       }
     });
   }
+  /** Set by the coordinator: queues a pushed knock for a reminder the phone did not set; true when one was queued. */
+  knockFallback: ((reminder: Reminder) => boolean) | undefined;
   /** Set by the coordinator: runs in the firing transaction, so a fired reminder always has its knock. */
   reminderFired: ((reminder: Reminder) => void) | undefined;
   /** The shared conversation's readable history, written with each owner message and each Telegram message. */

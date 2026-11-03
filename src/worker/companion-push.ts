@@ -20,6 +20,8 @@ export interface CompanionPushEvent {
   alert?: boolean;
   /** A chat message announced on the phone: its preview and position in the shared conversation. */
   message?: { body: string; seq: number };
+  /** A reminder's knock, pushed when the phone had not set it itself; same category and buttons as a local knock. */
+  knock?: { reminderId: string; version: number; attempt: number; text: string; hint?: string; gentle: boolean };
 }
 
 export interface CompanionPushResult {
@@ -89,7 +91,15 @@ function notifications(target: CompanionPushTarget, event: CompanionPushEvent, n
       !["sandbox", "production"].includes(target.apnsEnvironment ?? "") ||
       (target.activityTokens?.length ?? 0) > 32) throw new Error("Invalid push target");
   const result: Notification[] = [];
-  if (target.apnsToken && event.message) {
+  if (target.apnsToken && event.knock) {
+    const knock = event.knock;
+    result.push({ token: target.apnsToken, type: "alert", body: JSON.stringify({
+      aps: { alert: { title: knock.attempt ? "Umpi · still waiting" : "Umpi", body: (knock.hint ? `${knock.text}\n${knock.hint}` : knock.text).slice(0, 400) },
+        sound: knock.gentle ? "knock-gentle.caf" : "knock.caf", category: "UMPI_KNOCK", "interruption-level": knock.gentle ? "active" : "time-sensitive",
+        "thread-id": `knock.${knock.reminderId}` },
+      reminderId: knock.reminderId, version: knock.version,
+    }) });
+  } else if (target.apnsToken && event.message) {
     // The preview is cut so the payload stays within APNs' 4 KB limit.
     result.push({ token: target.apnsToken, type: "alert", body: JSON.stringify({
       aps: { alert: { title: "Umpi", body: event.message.body.slice(0, 600) }, sound: "default", "thread-id": "chat", "content-available": 1 },
