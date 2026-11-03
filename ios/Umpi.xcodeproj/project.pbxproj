@@ -33,6 +33,7 @@
 		7E285273D4B84D89118C79BC /* EffectTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C89BF2E15E70A77ECE98E0C9 /* EffectTests.swift */; };
 		8005F2AEC66FD7F891CB9689 /* Knocks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 642470A892264C968849E931 /* Knocks.swift */; };
 		82599F419212FC5FC8DD6117 /* knock-gentle.caf in Resources */ = {isa = PBXBuildFile; fileRef = 8E0ACFCC605F137407E0B52E /* knock-gentle.caf */; };
+		8F1462081384045FEDF905CC /* ComposerTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1797F107F6BCB434192F1FB /* ComposerTextView.swift */; };
 		9091E3664B14E51595D4B104 /* ChatAttachments.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15C396001AD0754C3A161E58 /* ChatAttachments.swift */; };
 		97C6D73E46001174A5545FEB /* ActivityViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81F84A3AD0BC60BAA18413D7 /* ActivityViews.swift */; };
 		9AD329F34051545AC797E5F9 /* BackgroundSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6398981AA3C9F6DDCC9FC8BA /* BackgroundSync.swift */; };
@@ -131,6 +132,7 @@
 		C1917C675F6D8B3F143CBDD7 /* knock.caf */ = {isa = PBXFileReference; path = knock.caf; sourceTree = "<group>"; };
 		C89BF2E15E70A77ECE98E0C9 /* EffectTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EffectTests.swift; sourceTree = "<group>"; };
 		D010600AC2FC6C41ED03558F /* MarkdownView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownView.swift; sourceTree = "<group>"; };
+		D1797F107F6BCB434192F1FB /* ComposerTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerTextView.swift; sourceTree = "<group>"; };
 		D67BDF4B4A305A1FFFCF7299 /* UmpiUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = UmpiUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		DD9641B7A4D3BADDF36418BD /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
 		E4C30AA88504D79B39CFAED6 /* TaskActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskActivityAttributes.swift; sourceTree = "<group>"; };
@@ -194,6 +196,7 @@
 			children = (
 				81F84A3AD0BC60BAA18413D7 /* ActivityViews.swift */,
 				66C721B679025A29ED293E59 /* ChatView.swift */,
+				D1797F107F6BCB434192F1FB /* ComposerTextView.swift */,
 				D010600AC2FC6C41ED03558F /* MarkdownView.swift */,
 				24646F2B743B59636E323FED /* MermaidView.swift */,
 				0BD1FAC447B1DB858AB1D01C /* PairingView.swift */,
@@ -466,6 +469,7 @@
 				39FA14005F9953715C52D2C2 /* CompanionClient.swift in Sources */,
 				3B9BC5DD46428D9D14E85F25 /* CompanionStateRecords.swift in Sources */,
 				4128364E436BEDDEC99F85E6 /* CompanionStore.swift in Sources */,
+				8F1462081384045FEDF905CC /* ComposerTextView.swift in Sources */,
 				47ADED72318B97BAC5E24841 /* DeviceCapabilities.swift in Sources */,
 				8005F2AEC66FD7F891CB9689 /* Knocks.swift in Sources */,
 				5C03DF65C478600264C013E0 /* MarkdownView.swift in Sources */,
