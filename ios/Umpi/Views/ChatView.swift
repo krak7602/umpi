@@ -81,10 +81,6 @@ struct ChatView: View {
         .navigationTitle("Chat")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            // Formatting lives above the keyboard, only while typing.
-            ToolbarItemGroup(placement: .keyboard) { formatButtons; Spacer() }
-        }
-        .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Image(systemName: chat.isLive ? "dot.radiowaves.left.and.right" : "wifi.slash")
                     .foregroundStyle(chat.isLive ? Color.green : Color.secondary)
@@ -126,16 +122,10 @@ struct ChatView: View {
 
     /// Inserts Markdown the owner would otherwise type by hand; the text stays plain Markdown.
     @ViewBuilder private var formatButtons: some View {
-        Group {
-            Button { draft += draft.isEmpty || draft.hasSuffix(" ") || draft.hasSuffix("\n") ? "****" : " ****" } label: { Image(systemName: "bold") }
-                .accessibilityLabel("Bold")
-            Button { draft += draft.isEmpty || draft.hasSuffix("\n") ? "- " : "\n- " } label: { Image(systemName: "list.bullet") }
-                .accessibilityLabel("List item")
-            Button { draft += draft.isEmpty || draft.hasSuffix("\n") ? "- [ ] " : "\n- [ ] " } label: { Image(systemName: "checklist") }
-                .accessibilityLabel("Checkbox")
-            Button { draft += draft.isEmpty || draft.hasSuffix("\n") ? "```\n\n```" : "\n```\n\n```" } label: { Image(systemName: "chevron.left.forwardslash.chevron.right") }
-                .accessibilityLabel("Code block")
-        }
+        Button { draft += draft.isEmpty || draft.hasSuffix(" ") || draft.hasSuffix("\n") ? "****" : " ****" } label: { Label("Bold", systemImage: "bold") }
+        Button { draft += draft.isEmpty || draft.hasSuffix("\n") ? "- " : "\n- " } label: { Label("List item", systemImage: "list.bullet") }
+        Button { draft += draft.isEmpty || draft.hasSuffix("\n") ? "- [ ] " : "\n- [ ] " } label: { Label("Checklist item", systemImage: "checklist") }
+        Button { draft += draft.isEmpty || draft.hasSuffix("\n") ? "```\n\n```" : "\n```\n\n```" } label: { Label("Code block", systemImage: "chevron.left.forwardslash.chevron.right") }
     }
 
     private var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || attachment != nil }
@@ -159,11 +149,18 @@ struct ChatView: View {
     /// Messages-style: attach on the left; send or record inside the field, so the text takes the whole width.
     private var inputRow: some View {
         HStack(alignment: .bottom, spacing: 8) {
+            // One button, like Messages: attach when empty; while typing it also formats (Aa), with no floating bar.
             Menu {
-                Button { showPhotos = true } label: { Label("Photos and videos", systemImage: "photo.on.rectangle") }
-                Button { showFiles = true } label: { Label("Files and audio", systemImage: "doc") }
+                if composing || !draft.isEmpty {
+                    Section("Format") { formatButtons }
+                }
+                Section("Attach") {
+                    Button { showPhotos = true } label: { Label("Photos and videos", systemImage: "photo.on.rectangle") }
+                    Button { showFiles = true } label: { Label("Files and audio", systemImage: "doc") }
+                }
             } label: {
-                Image(systemName: "plus").font(.system(size: 18, weight: .semibold)).frame(width: 36, height: 36)
+                Image(systemName: composing || !draft.isEmpty ? "textformat" : "plus").font(.system(size: 17, weight: .semibold)).frame(width: 36, height: 36)
+                    .contentTransition(.symbolEffect(.replace))
                     .glassOrFill(in: Circle())
             }
             .tint(.primary)
