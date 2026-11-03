@@ -101,3 +101,13 @@ final class SyntaxHighlightTests: XCTestCase {
         XCTAssertGreaterThan(text.runs.filter { $0.foregroundColor != nil }.count, 1, "keywords, numbers, and comments get colors")
     }
 }
+
+final class NoteMarkupTests: XCTestCase {
+    func testCommentsAreHiddenAndPlanMarksBecomeTags() {
+        let blocks = MarkdownBlock.parse("- [target] 06:30 workout <!-- umpi-plan:routine -->\n- [ ] Buy oats <!--\nnote -->")
+        guard case .list(_, _, let items) = blocks.first, items.count == 2, case .paragraph(let first) = items[0].blocks.first else { return XCTFail("\(blocks)") }
+        XCTAssertEqual(String(first.characters), "Target 06:30 workout")
+        XCTAssertEqual(items[1].line, 2, "line numbers still match the note")
+        XCTAssertEqual(MarkdownBlock.withoutComments("a <!-- x\ny --> b\nc"), "a\n b\nc")
+    }
+}
