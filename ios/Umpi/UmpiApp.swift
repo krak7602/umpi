@@ -34,6 +34,7 @@ private struct RootView: View {
     @State private var selectedTab = 0
     @State private var linkMessage: String?
     @State private var showIdeas = false
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Group {
@@ -69,23 +70,17 @@ private struct RootView: View {
                 pairingServer = items.first(where: { $0.name == "server" })?.value ?? ""
                 pairingCode = items.first(where: { $0.name == "code" })?.value ?? ""
             } else {
-                // Widget and control links: chat, today, work, or capture (record an idea).
-                switch url.host {
-                case "chat": selectedTab = 0
-                case "today": selectedTab = 1
-                case "ideas": showIdeas = true
-                case "remind":
-                    selectedTab = 0
-                    NotificationCenter.default.post(name: .umpiStartDraft, object: "Remind me ")
-                case "idea", "capture":
-                    selectedTab = 0
-                    NotificationCenter.default.post(name: .umpiCaptureIdea, object: nil)
-                default: selectedTab = 2
-                }
-                Task { await store.synchronize() }
+                route(url.host ?? "work")
             }
         }
         .sheet(isPresented: $showIdeas) { NavigationStack { IdeasView() } }
+        // Widget buttons and the control open the app through OpenUmpiAction; a request made before this view
+        // existed waits in UmpiRoute.
+        .onReceive(NotificationCenter.default.publisher(for: UmpiRoute.notification)) { note in
+            if let action = note.object as? String { _ = UmpiRoute.take(); route(action) }
+        }
+        .onChange(of: scenePhase) { _, phase in if phase == .active, let action = UmpiRoute.take() { route(action) } }
+        .onAppear { if let action = UmpiRoute.take() { route(action) } }
         .alert("Pairing link", isPresented: Binding(get: { linkMessage != nil }, set: { if !$0 { linkMessage = nil } })) {
             Button("OK", role: .cancel) { linkMessage = nil }
         } message: {
@@ -104,9 +99,31 @@ private struct RootView: View {
     }
 }
 
-extension Notification.Name {
-    /// Opened from the capture control or widget: start recording an idea in the chat.
-    static let umpiCaptureIdea = Notification.Name("umpi.captureIdea")
-    /// Opened from a "Remind me" button: the chat starts with this text ready to finish.
-    static let umpiStartDraft = Notification.Name("umpi.startDraft")
+
+extension RootView {
+    /// Opens one of the widget's actions: chat, today, work, ideas, remind, or idea (record an idea).
+    func route(_ action: String) {
+        switch action {
+        case "chat": selectedTab = 0
+        case "today": selectedTab = 1
+        case "ideas": showIdeas = true
+        case "remind":
+            selectedTab = 0
+            ChatRequests.shared.draft = "Remind me "
+        case "idea", "capture":
+            selectedTab = 0
+            ChatRequests.shared.capture = true
+        default: selectedTab = 2
+        }
+        Task { await store.synchronize() }
+    }
+}
+
+/// What the chat should do when it appears or is already showing: start recording an idea, or begin a draft. Kept here
+/// rather than sent as a notification, so a chat screen that does not exist yet still gets it.
+@MainActor @Observable
+final class ChatRequests {
+    static let shared = ChatRequests()
+    var capture = false
+    var draft: String?
 }
