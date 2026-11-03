@@ -58,8 +58,7 @@ function fixture(t: TestContext) {
     async setTask() { return { status: "synced" }; },
     async widget() { return { items: [], source: "default", updatedAt: "" }; },
     async setWidgetActions(value) { return { actions: value }; },
-    async ideas() { return { ideas: [] }; },
-    async addIdea(value) { return { idea: value, created: true }; } };
+    };
   return { db, owner, companion, context, reopen() { sqlite.close(); sqlite = new DatabaseSync(path); return new CompanionStore(new Store(db)); } };
 }
 function paired(companion: CompanionStore, deviceId = "phone-1") {
