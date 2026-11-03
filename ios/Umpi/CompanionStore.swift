@@ -85,6 +85,27 @@ final class CompanionStore {
         return byID.values.filter { state.effectOutcomes[$0.id] == nil }.sorted { $0.createdAt < $1.createdAt }
     }
 
+    /// App messages still waiting in the durable outbox, oldest first, for the chat to show as sending.
+    var pendingMessages: [(id: String, text: String, failed: Bool)] {
+        state.outbox.compactMap { entry in
+            if case .message(let message) = entry.payload { return (message.id, message.text, entry.status != "queued") }
+            return nil
+        }
+    }
+    /// The paired transport, for reading chat history.
+    var chatTransport: (any CompanionTransport)? { isPaired ? client : nil }
+    /// The WebSocket request for live chat changes, with this device's credential.
+    func chatSocketRequest() -> URLRequest? {
+        guard isPaired, let credentials, let origin = try? CompanionClient.validateServer(credentials.server),
+              var parts = URLComponents(url: origin, resolvingAgainstBaseURL: false) else { return nil }
+        parts.scheme = parts.scheme == "https" ? "wss" : "ws"
+        parts.path = "/api/device/chat/socket"
+        guard let url = parts.url else { return nil }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(credentials.token)", forHTTPHeaderField: "Authorization")
+        return request
+    }
+
     func clearError() { errorMessage = nil }
     func workflow(id: String) -> Workflow? { workflows.first { $0.id == id } }
     func draftValues(for workflowID: String) -> [String: FieldValue] {

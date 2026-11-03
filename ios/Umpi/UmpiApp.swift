@@ -38,13 +38,16 @@ private struct RootView: View {
         Group {
             if store.isPaired {
                 TabView(selection: $selectedTab) {
-                    Tab("Workflows", systemImage: "list.bullet.rectangle", value: 0) {
+                    Tab("Chat", systemImage: "bubble.left.and.bubble.right", value: 0) {
+                        NavigationStack { ChatView() }
+                    }
+                    Tab("Workflows", systemImage: "list.bullet.rectangle", value: 1) {
                         NavigationStack { WorkflowListView() }
                     }
-                    Tab("Activity", systemImage: "clock", value: 1) {
+                    Tab("Activity", systemImage: "clock", value: 2) {
                         NavigationStack { ActivityListView() }
                     }
-                    Tab("Settings", systemImage: "gear", value: 2) {
+                    Tab("Settings", systemImage: "gear", value: 3) {
                         NavigationStack { SettingsView() }
                     }
                 }
@@ -65,7 +68,7 @@ private struct RootView: View {
                 pairingServer = items.first(where: { $0.name == "server" })?.value ?? ""
                 pairingCode = items.first(where: { $0.name == "code" })?.value ?? ""
             } else {
-                selectedTab = 1
+                selectedTab = 2
                 Task { await store.synchronize() }
             }
         }
