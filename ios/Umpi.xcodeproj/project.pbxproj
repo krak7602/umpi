@@ -27,12 +27,15 @@
 		6E39EDAB10F668DDCD9CE1C1 /* QueuedChangesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FA63C5DF1830458AA277C57 /* QueuedChangesView.swift */; };
 		739848E9D839C9C0920C965B /* CompanionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9129706318F50FC4F4F18210 /* CompanionUITests.swift */; };
 		7E285273D4B84D89118C79BC /* EffectTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C89BF2E15E70A77ECE98E0C9 /* EffectTests.swift */; };
+		9091E3664B14E51595D4B104 /* ChatAttachments.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15C396001AD0754C3A161E58 /* ChatAttachments.swift */; };
 		97C6D73E46001174A5545FEB /* ActivityViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81F84A3AD0BC60BAA18413D7 /* ActivityViews.swift */; };
 		9AD329F34051545AC797E5F9 /* BackgroundSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6398981AA3C9F6DDCC9FC8BA /* BackgroundSync.swift */; };
 		A138BFEE0275119265871D59 /* ChatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 309A00142CD81859386AD711 /* ChatTests.swift */; };
 		BFA62599AE6A3111BF0AD2B6 /* WorkflowViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01688E9D5D74AA1EB9A37D45 /* WorkflowViews.swift */; };
+		D1DFB04CA4BA75EB463E2F69 /* SyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B25A76F8A7ED8AD27372684E /* SyntaxHighlighter.swift */; };
 		DEF9887A7D5D7B3061B7DB8C /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1279E4B7032997728B14B81D /* Models.swift */; };
 		EE06FB69DE12A46538C3A015 /* MermaidView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24646F2B743B59636E323FED /* MermaidView.swift */; };
+		F05A425723A1940DD55B21AB /* highlight.min.js in Resources */ = {isa = PBXBuildFile; fileRef = 8FDAA4ADB75F6C9CCDD06F98 /* highlight.min.js */; };
 		F12A0C1F25530247B442FD27 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09F78D13F600AC1683D4AF01 /* AppDelegate.swift */; };
 		FCE345FBCA4731BC372CBFFE /* UmpiApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 691633D0AABEF045AC98D419 /* UmpiApp.swift */; };
 		FE57803808D9A0F6E9042BE6 /* TaskActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4C30AA88504D79B39CFAED6 /* TaskActivityAttributes.swift */; };
@@ -83,6 +86,7 @@
 		09F78D13F600AC1683D4AF01 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		0BD1FAC447B1DB858AB1D01C /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
 		1279E4B7032997728B14B81D /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		15C396001AD0754C3A161E58 /* ChatAttachments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatAttachments.swift; sourceTree = "<group>"; };
 		1FA63C5DF1830458AA277C57 /* QueuedChangesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QueuedChangesView.swift; sourceTree = "<group>"; };
 		24646F2B743B59636E323FED /* MermaidView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MermaidView.swift; sourceTree = "<group>"; };
 		2D31EFDBA636E32983025960 /* CompanionStateRecords.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionStateRecords.swift; sourceTree = "<group>"; };
@@ -97,13 +101,16 @@
 		66C721B679025A29ED293E59 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		691633D0AABEF045AC98D419 /* UmpiApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UmpiApp.swift; sourceTree = "<group>"; };
 		6F3BFD0B54AB075C19E95F37 /* SecureStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureStorage.swift; sourceTree = "<group>"; };
+		7C8BB7DF265723992A96B177 /* LICENSE */ = {isa = PBXFileReference; path = LICENSE; sourceTree = "<group>"; };
 		7F467CBD3BAFE6FE088492B4 /* StateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StateTests.swift; sourceTree = "<group>"; };
 		81F84A3AD0BC60BAA18413D7 /* ActivityViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityViews.swift; sourceTree = "<group>"; };
+		8FDAA4ADB75F6C9CCDD06F98 /* highlight.min.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = highlight.min.js; sourceTree = "<group>"; };
 		9129706318F50FC4F4F18210 /* CompanionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionUITests.swift; sourceTree = "<group>"; };
 		A14AEACCCD7F5BCD8694CBB0 /* CompanionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionClient.swift; sourceTree = "<group>"; };
 		A1EAB9A47CBFD4B231E2F243 /* Umpi.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Umpi.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B03D8E3B2D22491EDB445A6F /* UmpiWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UmpiWidgets.swift; sourceTree = "<group>"; };
 		B2041A9A0FEAF44FB88A99CE /* CompanionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionStore.swift; sourceTree = "<group>"; };
+		B25A76F8A7ED8AD27372684E /* SyntaxHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntaxHighlighter.swift; sourceTree = "<group>"; };
 		C89BF2E15E70A77ECE98E0C9 /* EffectTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EffectTests.swift; sourceTree = "<group>"; };
 		D010600AC2FC6C41ED03558F /* MarkdownView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownView.swift; sourceTree = "<group>"; };
 		D67BDF4B4A305A1FFFCF7299 /* UmpiUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = UmpiUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -126,6 +133,7 @@
 		1C9288EF11B43EEAE6E036BD /* Resources */ = {
 			isa = PBXGroup;
 			children = (
+				65C1687EDED737EF8824AF49 /* Highlight */,
 				341D7C6A7135DFA27681FCC6 /* Pele */,
 			);
 			path = Resources;
@@ -146,6 +154,7 @@
 				09F78D13F600AC1683D4AF01 /* AppDelegate.swift */,
 				561433B418D0D1EEC60CAB97 /* Assets.xcassets */,
 				6398981AA3C9F6DDCC9FC8BA /* BackgroundSync.swift */,
+				15C396001AD0754C3A161E58 /* ChatAttachments.swift */,
 				6058656C76912D0F8326ADE4 /* ChatModel.swift */,
 				A14AEACCCD7F5BCD8694CBB0 /* CompanionClient.swift */,
 				2D31EFDBA636E32983025960 /* CompanionStateRecords.swift */,
@@ -170,6 +179,7 @@
 				0BD1FAC447B1DB858AB1D01C /* PairingView.swift */,
 				1FA63C5DF1830458AA277C57 /* QueuedChangesView.swift */,
 				5130E3C64EA03895D3F8EA5A /* SettingsView.swift */,
+				B25A76F8A7ED8AD27372684E /* SyntaxHighlighter.swift */,
 				01688E9D5D74AA1EB9A37D45 /* WorkflowViews.swift */,
 			);
 			path = Views;
@@ -186,6 +196,15 @@
 				BE8AFD67F306A1427D644ED4 /* UmpiWidgets */,
 				77781A24EF9ECA8DE26E53C3 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		65C1687EDED737EF8824AF49 /* Highlight */ = {
+			isa = PBXGroup;
+			children = (
+				8FDAA4ADB75F6C9CCDD06F98 /* highlight.min.js */,
+				7C8BB7DF265723992A96B177 /* LICENSE */,
+			);
+			path = Highlight;
 			sourceTree = "<group>";
 		};
 		77781A24EF9ECA8DE26E53C3 /* Products */ = {
@@ -378,6 +397,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				0C1F5213DE603F56F342F856 /* Assets.xcassets in Resources */,
+				F05A425723A1940DD55B21AB /* highlight.min.js in Resources */,
 				22924A7C70A532D6692AAED1 /* pele.global.js in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -401,6 +421,7 @@
 				97C6D73E46001174A5545FEB /* ActivityViews.swift in Sources */,
 				F12A0C1F25530247B442FD27 /* AppDelegate.swift in Sources */,
 				9AD329F34051545AC797E5F9 /* BackgroundSync.swift in Sources */,
+				9091E3664B14E51595D4B104 /* ChatAttachments.swift in Sources */,
 				1476F06FC28AF0E8B76BA88E /* ChatModel.swift in Sources */,
 				480A99FAD26686791F2EFAE4 /* ChatView.swift in Sources */,
 				39FA14005F9953715C52D2C2 /* CompanionClient.swift in Sources */,
@@ -414,6 +435,7 @@
 				6E39EDAB10F668DDCD9CE1C1 /* QueuedChangesView.swift in Sources */,
 				49744912F7986A50CA9EAF63 /* SecureStorage.swift in Sources */,
 				3431D1D839E0D5CBED583675 /* SettingsView.swift in Sources */,
+				D1DFB04CA4BA75EB463E2F69 /* SyntaxHighlighter.swift in Sources */,
 				FE57803808D9A0F6E9042BE6 /* TaskActivityAttributes.swift in Sources */,
 				FCE345FBCA4731BC372CBFFE /* UmpiApp.swift in Sources */,
 				BFA62599AE6A3111BF0AD2B6 /* WorkflowViews.swift in Sources */,

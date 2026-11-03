@@ -12,7 +12,7 @@ export interface Database {
 export type Channel = "control" | "telegram";
 export interface OwnerMessageSource {
   /** Telegram or the Umpi app; both reach the owner's shared Telegram conversation. */
-  kind: "telegram-text" | "telegram-voice" | "telegram-image" | "telegram-file" | "app-text" | "app-image" | "app-file";
+  kind: "telegram-text" | "telegram-voice" | "telegram-image" | "telegram-file" | "app-text" | "app-voice" | "app-image" | "app-file";
   sentAt?: string;
   caption?: string;
   /** For text: an attachment that was not used, such as "a video". */
@@ -173,10 +173,10 @@ export class Store {
     let source: OwnerMessageSource | undefined;
     if (ownerSource !== undefined) {
       const input = record(ownerSource);
-      if (channel !== "telegram" || typeof input.kind !== "string" || !["telegram-text", "telegram-voice", "telegram-image", "telegram-file", "app-text", "app-image", "app-file"].includes(input.kind) || Object.keys(input).some(key => !["kind", "sentAt", "caption", "skipped", "images", "omittedImages", "file"].includes(key))) throw new InputError("Invalid owner message source");
+      if (channel !== "telegram" || typeof input.kind !== "string" || !["telegram-text", "telegram-voice", "telegram-image", "telegram-file", "app-text", "app-voice", "app-image", "app-file"].includes(input.kind) || Object.keys(input).some(key => !["kind", "sentAt", "caption", "skipped", "images", "omittedImages", "file"].includes(key))) throw new InputError("Invalid owner message source");
       const fileKind = input.kind === "telegram-file" || input.kind === "app-file", imageKind = input.kind === "telegram-image" || input.kind === "app-image";
       if (fileKind !== (document !== undefined) || fileKind !== (input.file !== undefined)) throw new InputError("A file needs a file message source");
-      if (input.kind !== "telegram-voice" && input.caption !== undefined) throw new InputError("Only voice notes carry a caption");
+      if (input.kind !== "telegram-voice" && input.caption !== undefined) throw new InputError("Only Telegram voice notes carry a caption");
       if (input.kind !== "telegram-text" && input.skipped !== undefined) throw new InputError("Only text messages record a skipped attachment");
       if (imageKind !== (images !== undefined) || !imageKind && (input.images !== undefined || input.omittedImages !== undefined)) throw new InputError("Images need an image message source");
       source = {

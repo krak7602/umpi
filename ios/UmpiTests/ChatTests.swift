@@ -87,3 +87,17 @@ final class ObsidianMarkdownTests: XCTestCase {
         if case .paragraph(let text) = blocks[2] { XCTAssertEqual(String(text.characters), "See this and my health note.") } else { XCTFail("paragraph") }
     }
 }
+
+@MainActor
+final class SyntaxHighlightTests: XCTestCase {
+    func testHighlightJSOutputBecomesColoredText() {
+        let text = SyntaxHighlighter.attributed(#"<span class="hljs-keyword">let</span> x = <span class="hljs-string">&quot;a &amp; b&quot;</span>"#)
+        XCTAssertEqual(String(text.characters), #"let x = "a & b""#)
+        XCTAssertNotNil(text.runs.first?.foregroundColor, "the keyword is colored")
+    }
+    func testBundledHighlighterColorsSwift() {
+        let text = SyntaxHighlighter.shared.highlight("let value = 42 // answer", language: "swift")
+        XCTAssertEqual(String(text.characters), "let value = 42 // answer")
+        XCTAssertGreaterThan(text.runs.filter { $0.foregroundColor != nil }.count, 1, "keywords, numbers, and comments get colors")
+    }
+}

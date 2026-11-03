@@ -18,7 +18,7 @@ export interface CompanionHttpContext {
   readFile(name: string, bytes: Uint8Array): Promise<TelegramDocument>;
   press(seq: number, data: string): Promise<{ text: string }>;
 }
-export interface AppMessage { text: string; sentAt?: string; images?: TelegramImage[]; document?: TelegramDocument }
+export interface AppMessage { text: string; sentAt?: string; voice?: true; images?: TelegramImage[]; document?: TelegramDocument }
 
 const MAX_APP_MESSAGE_BYTES = 15_000_000;
 function chatPosition(value: string | null): number | undefined {
@@ -27,7 +27,8 @@ function chatPosition(value: string | null): number | undefined {
   return Number(value);
 }
 async function appMessage(body: unknown, readFile: CompanionHttpContext["readFile"]): Promise<{ id: string; message: AppMessage }> {
-  const input = record(body); exactKeys(input, ["id", "text", "sentAt", "images", "file"]);
+  const input = record(body); exactKeys(input, ["id", "text", "sentAt", "voice", "images", "file"]);
+  if (input.voice !== undefined && input.voice !== true) throw new InputError("voice must be true when present");
   const id = identifier(input.id, "message ID");
   const text = input.text === undefined || input.text === "" ? "" : boundedText(input.text, 16_384, "message");
   const sentAt = input.sentAt === undefined ? undefined : timestamp(input.sentAt, "sent time");
@@ -52,7 +53,8 @@ async function appMessage(body: unknown, readFile: CompanionHttpContext["readFil
   }
   if (images && document) throw new InputError("Send images and a file as separate messages");
   if (!text.trim() && !images && !document) throw new InputError("Message needs text, images, or a file");
-  return { id, message: { text, ...(sentAt ? { sentAt } : {}), ...(images ? { images } : {}), ...(document ? { document } : {}) } };
+  if (input.voice === true && (!text.trim() || images || document)) throw new InputError("A voice message is its transcript only");
+  return { id, message: { text, ...(sentAt ? { sentAt } : {}), ...(input.voice === true ? { voice: true as const } : {}), ...(images ? { images } : {}), ...(document ? { document } : {}) } };
 }
 /** Returns undefined only for routes outside the narrow companion surface. Auth precedes every body read. */
 export async function companionRequest(request: Request, context: CompanionHttpContext): Promise<Response | undefined> {

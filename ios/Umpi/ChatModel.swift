@@ -104,6 +104,7 @@ final class ChatModel {
         await refreshAll(store)
     }
     func clearNotice() { notice = nil }
+    func show(_ message: String) { notice = message }
 
     /// Reads the newest page again, so changed buttons on recent messages show.
     func refreshAll(_ store: CompanionStore) async {

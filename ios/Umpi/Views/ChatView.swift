@@ -1,4 +1,6 @@
+import PhotosUI
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The owner's shared conversation: what was said in Telegram and here, and what Umpi sent on its own.
 struct ChatView: View {
@@ -6,6 +8,12 @@ struct ChatView: View {
     @State private var chat = ChatModel()
     @State private var draft = ""
     @FocusState private var composing: Bool
+    @State private var attachment: PreparedAttachment?
+    @State private var preparing: String?
+    @State private var photoItems: [PhotosPickerItem] = []
+    @State private var showPhotos = false
+    @State private var showFiles = false
+    @State private var recorder = VoiceRecorder()
 
     var body: some View {
         let pending = store.pendingMessages
@@ -62,6 +70,16 @@ struct ChatView: View {
             }
         }
         .task { await chat.stayLive(store) }
+        .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: MediaPrep.maxImages, matching: .any(of: [.images, .videos]))
+        .onChange(of: photoItems) { _, items in
+            guard !items.isEmpty else { return }
+            photoItems = []
+            prepare("Preparing…") { try await PreparedAttachment.photos(items) }
+        }
+        .fileImporter(isPresented: $showFiles, allowedContentTypes: PreparedAttachment.fileTypes) { result in
+            guard case .success(let url) = result else { return }
+            prepare(url.pathExtension.isEmpty ? "Reading…" : "Reading \(url.lastPathComponent)…") { try await PreparedAttachment.file(url) }
+        }
         .refreshable { await chat.refresh(store) }
     }
 
@@ -91,26 +109,161 @@ struct ChatView: View {
         .foregroundStyle(.secondary)
     }
 
+    private var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || attachment != nil }
+
     private var composerRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let attachment {
+                HStack {
+                    Label(attachment.summary, systemImage: attachment.symbol).font(.footnote).lineLimit(1)
+                    Spacer()
+                    Button { self.attachment = nil } label: { Image(systemName: "xmark.circle.fill") }.foregroundStyle(.secondary).accessibilityLabel("Remove attachment")
+                }
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            if let preparing { Label(preparing, systemImage: "hourglass").font(.footnote).foregroundStyle(.secondary) }
+            if recorder.isRecording { recordingBar } else { inputRow }
+        }
+    }
+
+    private var inputRow: some View {
         HStack(alignment: .bottom, spacing: 8) {
+            Menu {
+                Button { showPhotos = true } label: { Label("Photos and videos", systemImage: "photo.on.rectangle") }
+                Button { showFiles = true } label: { Label("Files and audio", systemImage: "doc") }
+            } label: {
+                Image(systemName: "plus.circle.fill").font(.system(size: 30)).symbolRenderingMode(.hierarchical)
+            }
+            .disabled(preparing != nil)
+            .accessibilityIdentifier("chat.attach")
+            .accessibilityLabel("Attach")
             TextField("Message Umpi", text: $draft, axis: .vertical)
                 .lineLimit(1...6)
                 .focused($composing)
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18))
                 .accessibilityIdentifier("chat.input")
-            Button {
-                let text = draft
-                draft = ""
-                Task {
-                    if await store.requestAgent(text: text) { await chat.refresh(store) } else { draft = text }
-                }
-            } label: {
-                Image(systemName: "arrow.up.circle.fill").font(.system(size: 32))
+            if canSend {
+                Button(action: send) { Image(systemName: "arrow.up.circle.fill").font(.system(size: 32)) }
+                    .disabled(preparing != nil)
+                    .accessibilityIdentifier("chat.send")
+                    .accessibilityLabel("Send")
+            } else {
+                Button { Task { await startRecording() } } label: { Image(systemName: "mic.circle.fill").font(.system(size: 32)).symbolRenderingMode(.hierarchical) }
+                    .disabled(preparing != nil)
+                    .accessibilityIdentifier("chat.record")
+                    .accessibilityLabel("Record a voice note")
             }
-            .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .accessibilityIdentifier("chat.send")
-            .accessibilityLabel("Send")
+        }
+    }
+
+    private var recordingBar: some View {
+        HStack(spacing: 12) {
+            Button { _ = recorder.stop(keep: false) } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 28)) }
+                .foregroundStyle(.secondary).accessibilityLabel("Cancel recording")
+            Image(systemName: "waveform").symbolEffect(.variableColor.iterative, isActive: true).foregroundStyle(.red)
+            if let started = recorder.startedAt {
+                Text(started, style: .timer).monospacedDigit().foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button { finishRecording() } label: { Image(systemName: "arrow.up.circle.fill").font(.system(size: 32)) }
+                .accessibilityIdentifier("chat.record.send").accessibilityLabel("Send voice note")
+        }
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .background(Color(.secondarySystemBackground), in: Capsule())
+    }
+
+    private func send() {
+        let text = [draft.trimmingCharacters(in: .whitespacesAndNewlines), attachment?.text ?? ""].filter { !$0.isEmpty }.joined(separator: "\n\n")
+        let sending = attachment
+        let previous = draft
+        draft = ""; attachment = nil
+        Task {
+            if await store.sendChat(text: text, attachment: sending?.value) { await chat.refresh(store) } else { draft = previous; attachment = sending }
+        }
+    }
+    private func prepare(_ label: String, _ work: @escaping @MainActor () async throws -> PreparedAttachment) {
+        preparing = label
+        Task {
+            defer { preparing = nil }
+            do { attachment = try await work() } catch { chat.show((error as? LocalizedError)?.errorDescription ?? "The attachment could not be read.") }
+        }
+    }
+    private func startRecording() async {
+        do { try await recorder.start() } catch { chat.show((error as? LocalizedError)?.errorDescription ?? "Recording could not start.") }
+    }
+    /// A voice note is transcribed on the phone and sent as its transcript, like a Telegram voice note.
+    private func finishRecording() {
+        guard let url = recorder.stop(keep: true) else { return }
+        preparing = "Transcribing…"
+        Task {
+            defer { preparing = nil; try? FileManager.default.removeItem(at: url) }
+            do {
+                let transcript = try await MediaPrep.transcribe(url)
+                if await store.sendChat(text: transcript, voice: true) { await chat.refresh(store) }
+            } catch { chat.show((error as? LocalizedError)?.errorDescription ?? "The voice note could not be transcribed.") }
+        }
+    }
+}
+
+/// An attachment ready to send: what it shows in the composer, what it uploads, and text it adds (a transcript).
+struct PreparedAttachment {
+    var summary: String
+    var symbol: String
+    var value: OutgoingAttachment?
+    var text: String?
+
+    static let fileTypes: [UTType] = [.plainText, .text, .utf8PlainText, .commaSeparatedText, .json, .pdf, .audio, .movie]
+        + ["net.daringfireball.markdown", "org.openxmlformats.wordprocessingml.document"].compactMap { UTType($0) }
+
+    @MainActor static func photos(_ items: [PhotosPickerItem]) async throws -> PreparedAttachment {
+        if let videoItem = items.first(where: { $0.supportedContentTypes.contains { $0.conforms(to: .movie) } }) {
+            guard let movie = try await videoItem.loadTransferable(type: PickedMovie.self) else { throw MediaError.unreadable("The video could not be loaded.") }
+            defer { try? FileManager.default.removeItem(at: movie.url) }
+            return try await video(movie.url, name: "Video")
+        }
+        var images: [UIImage] = []
+        for item in items {
+            if let data = try await item.loadTransferable(type: Data.self), let image = UIImage(data: data) { images.append(image) }
+        }
+        guard !images.isEmpty else { throw MediaError.unreadable("The photos could not be loaded.") }
+        return .init(summary: images.count == 1 ? "1 photo" : "\(images.count) photos", symbol: "photo", value: .init(images: try MediaPrep.images(images)))
+    }
+
+    @MainActor static func file(_ url: URL) async throws -> PreparedAttachment {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let type = UTType(filenameExtension: url.pathExtension) ?? .data
+        if type.conforms(to: .movie) { return try await video(url, name: url.lastPathComponent) }
+        if type.conforms(to: .audio) {
+            let transcript = try await MediaPrep.transcribe(url)
+            return .init(summary: "\(url.lastPathComponent), transcribed", symbol: "waveform", value: nil, text: "Audio file \"\(url.lastPathComponent)\", transcribed:\n\n\(transcript)")
+        }
+        return .init(summary: url.lastPathComponent, symbol: "doc.text", value: .init(file: try MediaPrep.file(at: url)))
+    }
+
+    /// Claude cannot watch video: it gets a few frames and a transcript of the speech.
+    @MainActor static func video(_ url: URL, name: String) async throws -> PreparedAttachment {
+        let frames = try await MediaPrep.frames(of: url)
+        var transcript: String?, problem: String?
+        if await MediaPrep.hasAudio(url) {
+            do { transcript = try await MediaPrep.transcribe(url) } catch { problem = (error as? LocalizedError)?.errorDescription ?? "speech could not be transcribed" }
+        }
+        let note = "\(name): \(frames.count) frames from across the video are attached." + (transcript.map { " Its speech, transcribed:\n\n\($0)" } ?? " No speech was transcribed.")
+        let summary = "\(name), \(frames.count) frames" + (transcript != nil ? " and transcript" : problem.map { " (no transcript: \($0))" } ?? "")
+        return .init(summary: summary, symbol: "film", value: .init(images: try MediaPrep.images(frames)), text: note)
+    }
+}
+
+/// A picked video, copied to a temporary file so it can be read and then removed.
+struct PickedMovie: Transferable {
+    let url: URL
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .movie) { SentTransferredFile($0.url) } importing: { received in
+            let copy = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).\(received.file.pathExtension)")
+            try FileManager.default.copyItem(at: received.file, to: copy)
+            return PickedMovie(url: copy)
         }
     }
 }
@@ -146,15 +299,13 @@ private struct ChatBubble: View {
     private var reply: some View {
         MarkdownView(entry.text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
     }
-    /// A message Umpi started (a reminder, the brief, an alert): a card, so it stands apart from the conversation.
+    /// A message Umpi started (a reminder, the brief, an alert): full width like a reply, with a small label naming it.
     private var messageCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(cardTitle, systemImage: cardSymbol).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 6) {
+            Label(cardTitle, systemImage: cardSymbol).font(.caption.weight(.semibold)).foregroundStyle(Color.accentColor)
             MarkdownView(entry.text).textSelection(.enabled)
         }
-        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
     @ViewBuilder private var attachments: some View {
         if let file = entry.file { Label(file, systemImage: "doc.text").font(.footnote.weight(.semibold)) }

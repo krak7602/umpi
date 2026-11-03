@@ -8,7 +8,15 @@ struct WorkflowDraft: Codable, Equatable {
     var baseRevision: Int
     var fields: [String: FieldDraft]
 }
-struct MessageRequest: Codable, Equatable { var id: String; var text: String }
+struct MessageRequest: Codable, Equatable {
+    var id: String
+    var text: String
+    var sentAt: String? = nil
+    /// The text is a voice note's transcript.
+    var voice: Bool? = nil
+    /// Images or a file stored in `AttachmentFiles` under this message's ID.
+    var hasAttachment: Bool? = nil
+}
 struct ActionRequest: Codable, Equatable {
     var id: String
     var capability: String
