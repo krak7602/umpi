@@ -5,7 +5,8 @@ import { StateError, Store } from "./store.js";
 
 const Id = Type.String({ minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9][A-Za-z0-9_.:-]*$" });
 const Version = Type.Integer({ minimum: 1 });
-const Text = Type.String({ minLength: 1, maxLength: 4_096 });
+const Title = Type.String({ minLength: 1, maxLength: 120, description: "One short line, like a to-do: what to do, at most 120 characters. It is the notification and list title." });
+const Details = Type.Optional(Type.String({ maxLength: 4_000, description: "Optional context, steps, or links, in Markdown. Shown when the reminder fires and when opened." }));
 const Due = Type.String({ description: "ISO 8601 instant with explicit Z or numeric offset, e.g. 2026-10-12T09:00:00-07:00. Use current_time and the owner's timezone." });
 const Intensity = Type.Optional(Type.Union([Type.Literal("knock"), Type.Literal("gentle")], { description: "Default knock (repeats if unanswered); gentle knocks once" }));
 const Command = {
@@ -32,10 +33,10 @@ export function assistantTools(store: Store, timezone: string, wake: () => Promi
       async execute(args, api) { return mutate(api, () => store.createChoice(args.id, args.question, args.options, store.channelForSession(String(api.conversationId)), String(api.conversationId))); } }),
     defineTool({ name: "list_reminders", description: "List persistent text reminders with their stable IDs, versions and state. Corrections must update the same ID.", parameters: Type.Object({}), replay: "safe",
       async execute() { return result(() => store.reminders()); } }),
-    defineTool({ name: "create_reminder", description: "Create a durable reminder. When due it is sent as a message in the owner's conversation (Telegram and the Umpi app). Knocks on the phone are planned but not live; intensity is recorded for them. It is not an alarm: for waking the owner, use a native alarm. Choose a unique stable ID; use update_reminder for corrections.", parameters: Type.Object({ id: Id, text: Text, dueAt: Due, intensity: Intensity }), replay: "safe",
-      async execute(args, api) { return mutate(api, () => store.createReminder(args.id, args.text, args.dueAt, store.channelForSession(String(api.conversationId)), args.intensity)); } }),
-    defineTool({ name: "update_reminder", description: "Correct an existing scheduled reminder in place. Read its current version first; stale updates fail.", parameters: Type.Object({ id: Id, expectedVersion: Version, text: Text, dueAt: Due, intensity: Intensity }), replay: "safe",
-      async execute(args, api) { return mutate(api, () => store.updateReminder(args.id, args.expectedVersion, args.text, args.dueAt, args.intensity)); } }),
+    defineTool({ name: "create_reminder", description: "Create a durable reminder: text is a one-line title (what to do); anything longer goes in details. When due it is sent as a message in the owner's conversation (Telegram and the Umpi app). Knocks on the phone are planned but not live; intensity is recorded for them. It is not an alarm: for waking the owner, use a native alarm. Choose a unique stable ID; use update_reminder for corrections.", parameters: Type.Object({ id: Id, text: Title, details: Details, dueAt: Due, intensity: Intensity }), replay: "safe",
+      async execute(args, api) { return mutate(api, () => store.createReminder(args.id, args.text, args.dueAt, store.channelForSession(String(api.conversationId)), args.intensity, args.details)); } }),
+    defineTool({ name: "update_reminder", description: "Correct an existing scheduled reminder in place. Read its current version first; stale updates fail.", parameters: Type.Object({ id: Id, expectedVersion: Version, text: Title, details: Type.Optional(Type.Union([Type.String({ maxLength: 4_000 }), Type.Null()], { description: "New details; omit to keep, null to clear" })), dueAt: Due, intensity: Intensity }), replay: "safe",
+      async execute(args, api) { return mutate(api, () => store.updateReminder(args.id, args.expectedVersion, args.text, args.dueAt, args.intensity, args.details)); } }),
     defineTool({ name: "cancel_reminder", description: "Cancel an existing scheduled reminder using its latest version.", parameters: Type.Object({ id: Id, expectedVersion: Version }), replay: "safe",
       async execute(args, api) { return mutate(api, () => store.cancelReminder(args.id, args.expectedVersion)); } }),
     defineTool({ name: "request_mac_command", description: "Request native Mac shell execution. Always creates pending_approval work; never executes until the owner separately approves. Returns a handle immediately so conversation can continue. A workspace allowlist is NOT a filesystem sandbox. The Mac may be offline; no cloud fallback exists.", parameters: Type.Object({ jobId: Id, ...Command }), replay: "safe",

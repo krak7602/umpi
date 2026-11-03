@@ -53,6 +53,8 @@ export interface Reminder {
   status: "scheduled" | "fired" | "cancelled"; createdAt: string;
   /** How the reminder knocks when due; absent means a full knock. */
   intensity?: ReminderIntensity;
+  /** Context, steps, or links beyond the one-line text. */
+  details?: string;
   /** How the owner answered the knock, when they did. */
   answer?: { outcome: "done" | "snoozed" | "later"; at: string };
 }
@@ -132,6 +134,14 @@ export class Store {
       "CREATE INDEX IF NOT EXISTS umpi_pending_outbox ON umpi_outbox(status)",
       "CREATE INDEX IF NOT EXISTS umpi_session_choices ON umpi_choices(session_id, status)",
     ]) db.all(statement);
+    this.splitLongReminders();
+  }
+  /** Reminders written before titles and details were separate keep their full text as details, under a one-line title. */
+  private splitLongReminders(): void {
+    for (const reminder of this.rows<Reminder>("SELECT data FROM umpi_reminders WHERE status='scheduled'")) {
+      if (reminder.details !== undefined || reminderTitleProblem(reminder.text) === undefined) continue;
+      this.reminderWrite({ ...reminder, text: reminderTitle(reminder.text), details: reminder.text });
+    }
   }
   private rows<T>(query: string, ...bindings: (string | number | null)[]): T[] {
     return this.db.all<{ data: string }>(query, ...bindings).map(row => JSON.parse(row.data) as T);
@@ -493,20 +503,25 @@ export class Store {
   }
   reminder(id: string): Reminder | undefined { return this.rows<Reminder>("SELECT data FROM umpi_reminders WHERE id=?", identifier(id, "reminder ID"))[0]; }
   reminders(): Reminder[] { return this.rows("SELECT data FROM umpi_reminders ORDER BY CASE WHEN status='scheduled' THEN 0 ELSE 1 END, CASE WHEN status='scheduled' THEN due END ASC, due DESC LIMIT 100"); }
-  createReminder(id: string, text: string, dueAt: string, channel: Channel, intensity?: ReminderIntensity): Reminder {
-    identifier(id, "reminder ID"); boundedText(text, 4_096, "reminder text"); timestamp(dueAt, "reminder time");
+  createReminder(id: string, text: string, dueAt: string, channel: Channel, intensity?: ReminderIntensity, details?: string): Reminder {
+    identifier(id, "reminder ID"); requireReminderTitle(text); timestamp(dueAt, "reminder time");
+    const extra = reminderDetails(details);
     if (Date.parse(dueAt) <= Date.now()) throw new InputError("Reminder must be in the future");
     if (this.reminder(id)) throw new StateError(409, "Reminder ID exists; update the existing version");
-    const reminder: Reminder = { id, text, dueAt, channel, version: 1, status: "scheduled", createdAt: iso(), intensity: parseReminderIntensity(intensity) };
+    const reminder: Reminder = { id, text: text.trim(), dueAt, channel, version: 1, status: "scheduled", createdAt: iso(), intensity: parseReminderIntensity(intensity), ...(extra ? { details: extra } : {}) };
     this.reminderWrite(reminder); return reminder;
   }
-  updateReminder(id: string, expectedVersion: number, text: string, dueAt: string, intensity?: ReminderIntensity): Reminder {
+  updateReminder(id: string, expectedVersion: number, text: string, dueAt: string, intensity?: ReminderIntensity, details?: string | null): Reminder {
     const old = this.reminder(id); if (!old) throw new StateError(404, "Reminder not found");
     this.requireVersion(old.version, expectedVersion);
     if (old.status !== "scheduled") throw new StateError(409, "Only scheduled reminders can be edited");
-    boundedText(text, 4_096, "reminder text"); timestamp(dueAt, "reminder time");
+    requireReminderTitle(text); timestamp(dueAt, "reminder time");
     if (Date.parse(dueAt) <= Date.now()) throw new InputError("Reminder must be in the future");
-    const next = { ...old, text, dueAt, version: old.version + 1, ...(intensity === undefined ? {} : { intensity: parseReminderIntensity(intensity) }) }; this.reminderWrite(next); return next;
+    // Missing details keep the current ones; null clears them.
+    const { details: _old, ...rest } = old;
+    const kept = details === undefined ? old.details : details === null ? undefined : reminderDetails(details);
+    const next: Reminder = { ...rest, text: text.trim(), dueAt, version: old.version + 1, ...(intensity === undefined ? {} : { intensity: parseReminderIntensity(intensity) }), ...(kept ? { details: kept } : {}) };
+    this.reminderWrite(next); return next;
   }
   cancelReminder(id: string, expectedVersion: number): Reminder {
     const old = this.reminder(id); if (!old) throw new StateError(404, "Reminder not found");
@@ -519,7 +534,7 @@ export class Store {
       for (const reminder of this.rows<Reminder>("SELECT data FROM umpi_reminders WHERE status='scheduled' AND due<=?", now)) {
         this.reminderWrite({ ...reminder, status: "fired" });
         // A knock the phone confirmed is the alert; the message is then only the written record.
-        this.enqueue(`reminder:${reminder.id}:${reminder.version}`, reminder.channel, `Reminder: ${reminder.text}`, undefined, undefined, undefined,
+        this.enqueue(`reminder:${reminder.id}:${reminder.version}`, reminder.channel, `Reminder: ${reminder.text}${reminder.details ? `\n\n${reminder.details}` : ""}`, undefined, undefined, undefined,
           this.phoneKnocked(reminder.id, reminder.version) ? { quiet: true } : undefined);
         this.reminderFired?.(reminder);
       }
@@ -653,4 +668,30 @@ function validateImages(images: TelegramImage[]): void {
     bytes += image.data.length / 4 * 3;
   }
   if (bytes > MAX_IMAGE_BYTES + 2 * images.length) throw new InputError("Owner images exceed the size limit");
+}
+
+/** A reminder's text is its title: one line, short enough for a notification and a list row. */
+export const REMINDER_TITLE_LENGTH = 120;
+export function reminderTitleProblem(text: string): string | undefined {
+  const trimmed = text.trim();
+  if (trimmed.includes("\n")) return "Reminder text is one line; put context, steps, or links in details";
+  if (trimmed.length > REMINDER_TITLE_LENGTH) return `Reminder text is at most ${REMINDER_TITLE_LENGTH} characters; put the rest in details`;
+  return undefined;
+}
+function requireReminderTitle(text: string): void {
+  boundedText(text, 4_096, "reminder text");
+  const problem = reminderTitleProblem(text);
+  if (problem) throw new InputError(problem);
+}
+function reminderDetails(details: string | undefined): string | undefined {
+  if (details === undefined || details.trim() === "") return undefined;
+  return boundedText(details, 4_000, "reminder details").trim();
+}
+/** The first line, cut at a word near the title limit. */
+export function reminderTitle(text: string): string {
+  const line = text.split("\n").map(part => part.trim()).find(Boolean) ?? text.trim();
+  const plain = line.replace(/^(#+|[-*+]|\d+\.)\s+/, "");
+  if (plain.length <= REMINDER_TITLE_LENGTH) return plain;
+  const cut = plain.slice(0, REMINDER_TITLE_LENGTH - 1);
+  return `${cut.slice(0, Math.max(cut.lastIndexOf(" "), 60))}…`;
 }
