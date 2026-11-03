@@ -89,10 +89,14 @@ final class UmpiAppDelegate: NSObject, UIApplicationDelegate, UNUserNotification
         }
     }
 
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
-                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        completionHandler([.banner, .list, .sound])
+    /// While Umpi is open: a chat message is not announced when the chat is on screen (it appears there), and is
+    /// announced quietly on other tabs. Knocks and other notifications still show, since they are meant to interrupt.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        let isChat = notification.request.content.userInfo["chat"] != nil
+        let chatVisible = await MainActor.run { ChatRequests.shared.chatVisible }
         Task { @MainActor [weak self] in await self?.synchronize() }
+        if isChat { return chatVisible ? [] : [.banner, .list] }
+        return [.banner, .list, .sound]
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,

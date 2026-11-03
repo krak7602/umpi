@@ -123,4 +123,6 @@ final class ChatRequests {
     static let shared = ChatRequests()
     var capture = false
     var draft: String?
+    /// The chat is the screen in front, so its messages need no notification.
+    var chatVisible = false
 }

@@ -19,6 +19,8 @@ struct ChatView: View {
     /// The recording was started from the capture control: it is an idea to file in the notes.
     @State private var capturing = false
     @State private var requests = ChatRequests.shared
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var onScreen = false
 
     var body: some View {
         let pending = store.pendingMessages
@@ -108,6 +110,10 @@ struct ChatView: View {
             }
         }
         .task { await chat.stayLive(store) }
+        // On screen only when this tab shows and the app is in front; another tab keeps the view alive but hidden.
+        .onAppear { onScreen = true; requests.chatVisible = scenePhase == .active }
+        .onDisappear { onScreen = false; requests.chatVisible = false }
+        .onChange(of: scenePhase) { _, phase in requests.chatVisible = onScreen && phase == .active }
         .onChange(of: requests.capture, initial: true) { _, wanted in
             guard wanted else { return }
             requests.capture = false
