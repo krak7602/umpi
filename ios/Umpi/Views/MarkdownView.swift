@@ -81,7 +81,15 @@ indirect enum MarkdownBlock: Equatable {
     case rule
 
     static func parse(_ text: String) -> [MarkdownBlock] {
-        Document(parsing: text).children.compactMap(block)
+        Document(parsing: withoutComments(text)).children.compactMap(block)
+    }
+
+    /// HTML comments are hidden, as in Obsidian, such as the markers Umpi puts on planned lines. Line breaks inside a
+    /// comment are kept, so line numbers still match the note for ticking.
+    static func withoutComments(_ text: String) -> String {
+        guard text.contains("<!--") else { return text }
+        return text.replacing(/<!--[\s\S]*?-->/) { match in String(repeating: "\n", count: match.output.filter { $0 == "\n" }.count) }
+            .replacing(/[ \t]+(?=\n|$)/, with: "")
     }
 
     private static func block(_ markup: Markup) -> MarkdownBlock? {
@@ -156,15 +164,24 @@ indirect enum MarkdownBlock: Equatable {
             return run
         case let image as Markdown.Image:
             return AttributedString("[\(image.plainText.isEmpty ? "image" : image.plainText)]")
-        case let html as InlineHTML: return AttributedString(html.rawHTML)
+        case let html as InlineHTML: return html.rawHTML.hasPrefix("<!--") ? AttributedString() : AttributedString(html.rawHTML)
         default: return inline(markup.children)
         }
     }
 
-    /// Plain text with Obsidian's `==highlight==` and `[[wiki link|alias]]`.
+    /// Plain text with Obsidian's `==highlight==` and `[[wiki link|alias]]`, and Umpi's plan marks ([target],
+    /// [tentative], [confirmed]) as small tags.
     static func obsidianText(_ string: String) -> AttributedString {
         var result = AttributedString()
         var rest = Substring(string)
+        if let mark = rest.prefixMatch(of: /\[(target|tentative|confirmed)\][ \t]*/) {
+            var tag = AttributedString(String(mark.1).capitalized)
+            tag.font = .caption.weight(.semibold)
+            tag.foregroundColor = .secondary
+            tag.inlinePresentationIntent = .code
+            result += tag + AttributedString(" ")
+            rest = rest[mark.range.upperBound...]
+        }
         while let match = rest.firstMatch(of: /==([^=\n]+)==|\[\[([^\]|\n]+)(?:\|([^\]\n]+))?\]\]/) {
             result += AttributedString(String(rest[..<match.range.lowerBound]))
             if let highlighted = match.1 {

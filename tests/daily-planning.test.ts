@@ -147,6 +147,8 @@ test("moving an owned entry into Notes or a fenced example removes write authori
 test("coverage is a readable Plan warning, resolves only unchanged bytes, and can recur", () => {
   const initial = merge(null, [], [], ["Calendar unavailable", "Approved brief unavailable"]);
   assert.equal(initial.applied[0]!.id, "umpi-coverage");
+  assert.match(initial.applied[0]!.line, /Coverage: Calendar unavailable\. Approved brief unavailable\./, "notes read as sentences");
+  assert.match(merge(null, [], [], ["Add items when ready.", "Calendar was complete."]).applied[0]!.line, /ready\. Calendar was complete\./, "no stray semicolons after a full stop");
   assert.ok(!initial.applied[0]!.line.startsWith("- [ ]"));
   assert.ok(initial.text.indexOf(initial.applied[0]!.line) < initial.text.indexOf("### Schedule"));
   const resolved = merge(initial.text, initial.applied, [], []);

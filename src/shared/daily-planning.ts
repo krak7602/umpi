@@ -186,7 +186,9 @@ export function mergeDailyPlan(input: {
     proposals.push(entry);
   }
   for (const issue of input.patch.coverage) validateInline(issue);
-  if (input.patch.coverage.length) proposals.push({ id: coverageId, section: "tasks", text: `Coverage: ${[...new Set(input.patch.coverage)].join("; ")}` });
+  // Each note reads as its own sentence: "…ready. Calendar…", never "…ready.; Calendar…".
+  const sentences = [...new Set(input.patch.coverage.map(note => note.trim()).filter(Boolean))].map(note => /[.!?]$/.test(note) ? note : `${note}.`);
+  if (sentences.length) proposals.push({ id: coverageId, section: "tasks", text: `Coverage: ${sentences.join(" ")}` });
   else if (applied.has(coverageId)) proposals.push({ id: coverageId, section: "tasks", text: "" });
 
   const skipped: DailyMergeResult["skipped"] = [];
