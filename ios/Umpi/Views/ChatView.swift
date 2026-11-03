@@ -447,9 +447,8 @@ private struct ChatBubble: View {
             if media.hasContent {
                 media.padding(media.isVisual ? 3 : 0)
             }
-            if !caption.isEmpty && entry.kind != "voice" || entry.kind == "voice" {
+            if !caption.isEmpty {
                 MarkdownView(caption, onOwnerTint: true).textSelection(.enabled)
-                    .font(entry.kind == "voice" ? .callout : .body)
                     .padding(.horizontal, 14).padding(.vertical, 9)
             }
         }
@@ -562,7 +561,8 @@ struct ChatMediaView: View {
         if entry.images != nil { return "photos" }
         return ""
     }
-    var hasContent: Bool { !kind.isEmpty }
+    /// A voice note's recording is not kept, so it shows as its transcript only, with the "voice note" tag.
+    var hasContent: Bool { !kind.isEmpty && kind != "voice" }
     var isVisual: Bool { (kind == "photos" || kind == "video") && !(local?.thumbnails.isEmpty ?? true) }
 
     static func duration(_ seconds: Int) -> String { String(format: "%d:%02d", seconds / 60, seconds % 60) }
@@ -572,7 +572,7 @@ struct ChatMediaView: View {
         case "photos": photos
         case "video": video
         case "file": fileCard
-        case "voice", "audio": audio
+        case "audio": audio
         default: EmptyView()
         }
     }
@@ -629,17 +629,10 @@ struct ChatMediaView: View {
         .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 2)
     }
 
+    /// An audio file is sent as its transcript; its name and length say what it was.
     private var audio: some View {
         let seconds = entry.media?.seconds ?? local?.seconds
-        return HStack(spacing: 10) {
-            Image(systemName: kind == "voice" ? "mic.fill" : "waveform").font(.callout.weight(.semibold))
-                .frame(width: 34, height: 34).background(.white.opacity(0.22), in: Circle())
-            WaveformBars(seed: entry.seq).frame(height: 22)
-            if let seconds { Text(Self.duration(seconds)).font(.caption.monospacedDigit()).opacity(0.85) }
-        }
-        .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 0)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel((kind == "voice" ? "Voice note" : entry.media?.name ?? "Audio") + (seconds.map { ", \(Self.duration($0))" } ?? "") + ", transcribed")
+        return chip((entry.media?.name ?? "Audio") + (seconds.map { " · \(Self.duration($0))" } ?? ""), symbol: "waveform")
     }
 
     private func chip(_ text: String, symbol: String) -> some View {
@@ -647,21 +640,4 @@ struct ChatMediaView: View {
     }
 }
 
-/// A fixed, decorative waveform, the same for a message every time it is drawn.
-private struct WaveformBars: View {
-    let seed: Int
-    var body: some View {
-        HStack(alignment: .center, spacing: 2) {
-            ForEach(0..<24, id: \.self) { index in
-                Capsule().frame(width: 2.5, height: Self.height(index, seed))
-            }
-        }
-        .opacity(0.9)
-    }
-    private static func height(_ index: Int, _ seed: Int) -> CGFloat {
-        let first = sin(Double(index * 7 + seed * 13) * 0.61) * 0.7
-        let second = sin(Double(index + seed) * 1.7) * 0.3
-        return max(4, 22 * CGFloat(abs(first + second)))
-    }
-}
 
