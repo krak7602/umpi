@@ -60,14 +60,13 @@ struct HomeWidgetView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .widgetURL(first.url)
         case .systemMedium:
-            buttons.frame(maxHeight: .infinity)
+            buttons(labels: true).frame(maxHeight: .infinity)
         default:
-            VStack(alignment: .leading, spacing: 14) {
-                buttons
-                Divider()
+            // Large: what's next at the top, the buttons along the bottom as icons only.
+            VStack(alignment: .leading, spacing: 12) {
                 Text(entry.content?.source == "umpi" ? "From Umpi" : "Next").font(.caption.weight(.semibold)).foregroundStyle(.secondary).textCase(.uppercase)
                 if items.isEmpty { Text("Nothing next.").font(.subheadline).foregroundStyle(.secondary) }
-                ForEach(items.prefix(5)) { item in
+                ForEach(items.prefix(6)) { item in
                     Link(destination: WidgetContent.url(item.link)) {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
                             Image(systemName: item.symbol ?? "circle").foregroundStyle(.tint).frame(width: 18)
@@ -78,19 +77,20 @@ struct HomeWidgetView: View {
                     }
                 }
                 Spacer(minLength: 0)
+                buttons(labels: false)
             }
         }
     }
 
-    /// The configured buttons in a row, each an icon in a soft circle with its name, like the system's shortcuts.
-    private var buttons: some View {
+    /// The configured buttons in a row, each an icon in a soft circle, with its name when there is room for it.
+    private func buttons(labels: Bool) -> some View {
         HStack(spacing: 0) {
             ForEach(actions.prefix(4)) { action in
                 Link(destination: action.url) {
                     VStack(spacing: 6) {
                         Image(systemName: action.symbol).font(.title3.weight(.semibold)).foregroundStyle(.tint)
                             .frame(width: 52, height: 52).background(.tint.opacity(0.15), in: Circle())
-                        Text(action.label).font(.caption2.weight(.medium)).lineLimit(1)
+                        if labels { Text(action.label).font(.caption2.weight(.medium)).lineLimit(1) }
                     }
                     .frame(maxWidth: .infinity)
                 }
