@@ -8,7 +8,7 @@ export const backgroundTools = new Set([
   "current_time", "list_reminders", "job_status", "read_core_context", "read_core_context_history", "read_companion_state", "request_mac_command",
   "decide", "extract_fields",
   // T3 Code: reading is harmless; an action Umpi decides on is only requested, and the owner approves it.
-  "t3_code_threads", "t3_code_read_thread", "t3_code_search", "t3_code_questions", "request_t3_action",
+  "t3_code_threads", "t3_code_read_thread", "t3_code_search", "t3_code_questions", "request_t3_action", "cloud_machines",
 ]);
 
 /** A timer is not permission to ring a phone, edit memory or mutate unrelated app state. */

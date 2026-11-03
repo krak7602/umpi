@@ -18,3 +18,19 @@ export function tailnetFetch(bridge: (() => { fetch(request: Request): Promise<R
     return bridge().fetch(new Request("http://bridge/forward", { method: request.method, headers, body, signal: request.signal }));
   };
 }
+
+/**
+ * Routes Umpi's own cloud machines (<id>.cloud.umpi.internal) to their Durable Object, which relays MCP into the
+ * container; everything else goes to `next`.
+ */
+export function cloudFetch(machine: ((id: string) => { fetch(request: Request): Promise<Response> }) | undefined, next: typeof fetch): typeof fetch {
+  return async (input, init) => {
+    const request = new Request(input, init);
+    const url = new URL(request.url);
+    const id = /^(cloud-[a-z0-9]{6,20})\.cloud\.umpi\.internal$/.exec(url.hostname)?.[1];
+    if (!id) return next(request);
+    if (!machine) throw new Error("Cloud machines are not configured");
+    const body = request.method === "GET" || request.method === "HEAD" ? null : await request.arrayBuffer();
+    return machine(id).fetch(new Request(`http://machine/t3${url.pathname}${url.search}`, { method: request.method, headers: request.headers, body, signal: request.signal }));
+  };
+}

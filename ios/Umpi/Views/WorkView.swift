@@ -43,7 +43,7 @@ struct WorkView: View {
                     }
                     ForEach(waitingThreads, id: \.thread.id) { item in
                         NavigationLink { T3ThreadView(machine: item.machine, thread: item.thread) } label: {
-                            WorkRow(symbol: "questionmark", tint: .orange, title: item.thread.title, detail: "Waiting on you · \(item.machine.label)")
+                            WorkRow(symbol: "questionmark", tint: .orange, title: item.thread.title, detail: "Waiting on you · \(item.machine.name)")
                         }
                     }
                     ForEach(effects.pendingReview) { action in
@@ -60,7 +60,7 @@ struct WorkView: View {
             if !runningThreads.isEmpty || !runningJobs.isEmpty || shownMachines.contains(where: { $0.problem != nil }) {
                 Section("Running") {
                     ForEach(runningThreads, id: \.thread.id) { item in
-                        NavigationLink { T3ThreadView(machine: item.machine, thread: item.thread) } label: { T3ThreadRow(thread: item.thread, machine: multipleMachines ? item.machine.label : nil) }
+                        NavigationLink { T3ThreadView(machine: item.machine, thread: item.thread) } label: { T3ThreadRow(thread: item.thread, machine: multipleMachines ? item.machine.name : nil) }
                     }
                     ForEach(runningJobs) { job in
                         NavigationLink { JobDetailView(jobID: job.id) } label: {
@@ -75,7 +75,7 @@ struct WorkView: View {
             if !recentThreads.isEmpty {
                 Section("Recent") {
                     ForEach(recentThreads, id: \.thread.id) { item in
-                        NavigationLink { T3ThreadView(machine: item.machine, thread: item.thread) } label: { T3ThreadRow(thread: item.thread, machine: multipleMachines ? item.machine.label : nil) }
+                        NavigationLink { T3ThreadView(machine: item.machine, thread: item.thread) } label: { T3ThreadRow(thread: item.thread, machine: multipleMachines ? item.machine.name : nil) }
                     }
                 }
             }
@@ -103,7 +103,7 @@ struct WorkView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 chip("All", selected: machineFilter == nil) { machineFilter = nil }
-                ForEach(t3.machines) { machine in chip(machine.label, selected: machineFilter == machine.id) { machineFilter = machine.id } }
+                ForEach(t3.machines) { machine in chip(machine.name, selected: machineFilter == machine.id) { machineFilter = machine.id } }
             }
             .padding(.horizontal, 2)
         }

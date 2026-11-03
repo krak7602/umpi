@@ -66,7 +66,10 @@ import { codingRequest, codingExecutorRequest } from "./coding-http.js";
 import { enqueueCodingControls, handleCodingCallback } from "./coding-telegram.js";
 import { CodingWorker } from "./coding-worker.js";
 import { TailnetBridge } from "./tailnet-bridge.js";
-import { tailnetFetch } from "./tailnet-fetch.js";
+import { cloudFetch, tailnetFetch } from "./tailnet-fetch.js";
+import { CloudMachine } from "./cloud-machine.js";
+import { CloudMachines, cloudMachineTools, type CloudMachineStart } from "./cloud-machines.js";
+import { CLOUD_MODEL_PATH, cloudModelRequest } from "./cloud-model.js";
 import { BrowserWorker } from "./browser-cloud.js";
 import type { BrowserCloudClient, BrowserWorkerEnvironment } from "./browser-cloud.js";
 import { BrowserStore } from "./browser-store.js";
@@ -95,7 +98,7 @@ import { MAX_VOICE_NOTE_BYTES, MAX_VOICE_NOTE_SECONDS, VoiceNoteError, type Tele
 import { classifyModelError, describeModelFailure, type ModelFailure } from "../model/failure.js";
 import { ModelFallback } from "./model-fallback.js";
 
-export { CodingWorker, BrowserWorker, TailnetBridge };
+export { CodingWorker, BrowserWorker, TailnetBridge, CloudMachine };
 
 registerBunOAuthFlows();
 /** Owner-facing conversations; subagents inherit it, coding and browser runs set their own. */
@@ -112,6 +115,11 @@ export interface Env extends TelegramConfig, CompanionPushConfig {
   /** The on-demand container that reaches the owner's tailnet, and the Tailscale OAuth client secret it joins with. */
   TAILNET_BRIDGE?: { getByName(name: string): { fetch(request: Request): Promise<Response> } };
   UMPI_TAILSCALE_AUTHKEY?: string;
+  /** Cloud machines: their containers, the SSH key and commit identity they use, and (local only) the gateway address. */
+  CLOUD_MACHINE?: { getByName(name: string): { fetch(request: Request): Promise<Response>; wake(start: CloudMachineStart, key: string): Promise<{ token: string; restored: boolean }>; save(): Promise<{ size: number }>; discard(): Promise<void>; isRunning(): Promise<boolean> } };
+  UMPI_GIT_SSH_KEY?: string;
+  UMPI_GIT_IDENTITY?: string;
+  UMPI_CLOUD_MODEL_URL?: string;
   CODING_ARCHIVE?: R2Bucket;
   BROWSER_WORKER?: { getByName(name: string): BrowserCloudClient };
   BROWSER_ARCHIVE?: R2Bucket;
@@ -151,7 +159,7 @@ class Coordinator extends LifecycleCapability {
     this.assistant.telegramInbox.recover();
     // Recover both new proposals and decisions committed before their SQL delivery projection.
     await reconcileMemoryTelegram(await this.assistant.harness.pi(), BACKGROUND_CONTEXT, this.assistant.store);
-    if (this.assistant.telegramInbox.hasPending() || this.assistant.store.pendingOperations().length || this.assistant.store.nextReminder() !== undefined || this.assistant.knocks.nextDue() !== undefined || this.assistant.knockPushes.nextDue() !== undefined || this.assistant.store.readyDeliveries().length || this.assistant.companion.nextPush() || this.assistant.chat.nextPush() || this.assistant.proactive.settings().enabled || this.assistant.planning.settings().enabled || this.assistant.brief.settings().enabled || this.assistant.dream.settings().enabled || this.assistant.mailRuntime.nextDue() !== undefined || this.assistant.coding.active().length || this.assistant.browserRuntime.nextDue() !== undefined || this.assistant.browser.active().length || await this.assistant.subagents.nextDue() !== undefined) await this.wake();
+    if (this.assistant.telegramInbox.hasPending() || this.assistant.store.pendingOperations().length || this.assistant.store.nextReminder() !== undefined || this.assistant.knocks.nextDue() !== undefined || this.assistant.knockPushes.nextDue() !== undefined || this.assistant.store.readyDeliveries().length || this.assistant.companion.nextPush() || this.assistant.chat.nextPush() || this.assistant.proactive.settings().enabled || this.assistant.planning.settings().enabled || this.assistant.brief.settings().enabled || this.assistant.dream.settings().enabled || this.assistant.mailRuntime.nextDue() !== undefined || this.assistant.coding.active().length || this.assistant.browserRuntime.nextDue() !== undefined || this.assistant.browser.active().length || await this.assistant.subagents.nextDue() !== undefined || this.assistant.cloud.nextDue() !== undefined) await this.wake();
   }
 
   async onJob({ job }: LifecycleJobContext): Promise<LifecycleJobOutcome> {
@@ -173,6 +181,7 @@ class Coordinator extends LifecycleCapability {
       this.assistant.planning.reconcile();
       await this.assistant.subagents.drive();
       await this.assistant.codingRuntime.drive();
+      await this.assistant.cloud.drive();
       await this.assistant.browserRuntime.drive();
       for (const op of store.pendingOperations()) {
         if (op.background) {
@@ -255,7 +264,7 @@ class Coordinator extends LifecycleCapability {
       // Missing credentials do not justify a two-second polling loop; auth updates wake the queue.
       const pending = store.pendingOperations().some(op => op.status === "submitted");
       const outbox = store.readyDeliveries().length > 0;
-      const wakeAt = Math.min(due ?? Infinity, proactive.nextDue(Date.now(), store.hasForegroundInput()) ?? Infinity, this.assistant.planning.nextDue() ?? Infinity, this.assistant.brief.nextDue() ?? Infinity, this.assistant.dream.nextDue() ?? Infinity, this.assistant.dreamRuntime.nextDue() ?? Infinity, this.assistant.alerts.nextDue() ?? Infinity, this.assistant.journal.nextDue() ?? Infinity, this.assistant.mailRuntime.nextDue() ?? Infinity, this.assistant.codingRuntime.nextDue() ?? Infinity, this.assistant.browserRuntime.nextDue() ?? Infinity, await this.assistant.subagents.nextDue() ?? Infinity, this.assistant.telegramInbox.nextDue() ?? Infinity, this.assistant.knocks.nextDue() ?? Infinity, this.assistant.knockPushes.nextDue() ?? Infinity, pending ? Date.now() + 2_000 : Infinity, outbox || this.assistant.companion.nextPush() || this.assistant.chat.nextPush() ? Date.now() + 100 : Infinity);
+      const wakeAt = Math.min(due ?? Infinity, proactive.nextDue(Date.now(), store.hasForegroundInput()) ?? Infinity, this.assistant.planning.nextDue() ?? Infinity, this.assistant.brief.nextDue() ?? Infinity, this.assistant.dream.nextDue() ?? Infinity, this.assistant.dreamRuntime.nextDue() ?? Infinity, this.assistant.alerts.nextDue() ?? Infinity, this.assistant.journal.nextDue() ?? Infinity, this.assistant.mailRuntime.nextDue() ?? Infinity, this.assistant.codingRuntime.nextDue() ?? Infinity, this.assistant.browserRuntime.nextDue() ?? Infinity, await this.assistant.subagents.nextDue() ?? Infinity, this.assistant.telegramInbox.nextDue() ?? Infinity, this.assistant.knocks.nextDue() ?? Infinity, this.assistant.knockPushes.nextDue() ?? Infinity, this.assistant.cloud.nextDue() ?? Infinity, pending ? Date.now() + 2_000 : Infinity, outbox || this.assistant.companion.nextPush() || this.assistant.chat.nextPush() ? Date.now() + 100 : Infinity);
       if (Number.isFinite(wakeAt)) return { rescheduleAt: wakeAt };
     } catch {
       this.assistant.modelIssue = "Coordinator reconciliation failed; work is retained and retry is scheduled. Check configuration and protected status.";
@@ -313,6 +322,8 @@ export class Assistant extends Agent<Env> {
   readonly knockPushes: KnockPushStore;
   readonly t3: T3CodeStore;
   readonly t3Requests: T3ActionRequests;
+  readonly cloud: CloudMachines;
+  private models?: ReturnType<typeof createAssistantModels>;
   private chatSocket?: ChatSocket;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -327,7 +338,13 @@ export class Assistant extends Agent<Env> {
     this.credentials = new DurableCredentials(this.store.db);
     // One bridge for every machine: tailnet addresses go through it, T3 Connect addresses go direct.
     const bridge = env.TAILNET_BRIDGE && env.UMPI_TAILSCALE_AUTHKEY ? () => env.TAILNET_BRIDGE!.getByName("tailnet") : undefined;
-    this.t3 = new T3CodeStore(this.store.db, tailnetFetch(bridge));
+    this.t3 = new T3CodeStore(this.store.db, cloudFetch(env.CLOUD_MACHINE ? id => env.CLOUD_MACHINE!.getByName(id) : undefined, tailnetFetch(bridge)));
+    this.store.db.all("CREATE TABLE IF NOT EXISTS umpi_public_origin (id INTEGER PRIMARY KEY, origin TEXT NOT NULL)");
+    this.cloud = new CloudMachines(this.store.db, this.t3, {
+      stub: id => env.CLOUD_MACHINE!.getByName(id),
+      start: () => this.cloudStart(),
+      deleteSaved: async key => { await env.CODING_ARCHIVE?.delete(key); },
+    });
     this.t3Requests = new T3ActionRequests(this.store.db, this.store, this.t3);
     this.providerId = env.UMPI_MODEL_PROVIDER || DEFAULT_PROVIDER;
     this.modelId = env.UMPI_MODEL_ID || DEFAULT_MODEL;
@@ -399,6 +416,7 @@ export class Assistant extends Agent<Env> {
       this.store.enqueue(`notice:retry-exhausted:${commitment.id}:${day}`, "telegram", `${label} did not go through after its retries. Cause: ${cause}.${hint}`);
     };
     const models = createAssistantModels(this.credentials, this.modelFallback);
+    this.models = models;
     let model: PiModel | undefined;
     try {
       model = selectAssistantModel(models, this.providerId, this.modelId);
@@ -452,7 +470,7 @@ export class Assistant extends Agent<Env> {
       track: work => this.lifecycle.trackAlarmWork(work),
     });
     const browserProfile = browserExtension(this.browserRuntime);
-    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...activityTools(this.store, this.activity, this.timezone, () => this.notifyExecutor()), ...journalTools(this.journal, id => this.store.isBackgroundSession(id)), ...widgetTools(this.widgets, () => this.coordinator.wake()), ...t3CodeTools(this.t3), ...t3ActionTools(this.t3, this.t3Requests), ...web, ...decision, ...historyTools(this.dream, this.history, id => this.store.isBackgroundSession(id)), ...contextTools(this.contextHealth, id => !this.store.isBackgroundSession(id)), ...delegation.tools ?? []];
+    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...activityTools(this.store, this.activity, this.timezone, () => this.notifyExecutor()), ...journalTools(this.journal, id => this.store.isBackgroundSession(id)), ...widgetTools(this.widgets, () => this.coordinator.wake()), ...t3CodeTools(this.t3), ...t3ActionTools(this.t3, this.t3Requests), ...cloudMachineTools(this.cloud), ...web, ...decision, ...historyTools(this.dream, this.history, id => this.store.isBackgroundSession(id)), ...contextTools(this.contextHealth, id => !this.store.isBackgroundSession(id)), ...delegation.tools ?? []];
     const guardedProactiveTools = guardDreamReviewTools(guardBriefReviewTools(guardMailReviewTools(guardPlanningReviewTools(proactiveTools(this.proactive, () => this.coordinator.wake()), this.planningRuntime), this.mailRuntime), this.brief), this.dream);
     const briefSources = { brief: this.brief, situation: this.situation, mail: this.mail, planning: this.planningRuntime, calendarCredentials: () => this.config.UMPI_CALENDAR_CREDENTIALS, activity: this.activity, dream: this.dream };
     const ownerSessions = () => (["telegram", "control"] as const).flatMap(channel => { const session = this.store.session(channel); return session ? [{ channel, session }] : []; });
@@ -848,6 +866,21 @@ export class Assistant extends Agent<Env> {
     this.store.enqueue(notice.id, "telegram", `Your Mac's Umpi executor has not connected since ${since}. Mac jobs, coding and browser tasks, and Aside context wait until it is back. On the Mac, run npm run mac -- service-status.`);
   }
 
+  /** What every cloud machine start needs, or undefined when cloud machines are not set up. */
+  private cloudStart(): Omit<CloudMachineStart, "modelToken"> | undefined {
+    const env = this.env as Env;
+    const origin = this.store.db.all<{ origin: string }>("SELECT origin FROM umpi_public_origin WHERE id=1")[0]?.origin;
+    const modelUrl = env.UMPI_CLOUD_MODEL_URL || (origin ? `${origin}/api/cloud/model` : undefined);
+    if (!env.CLOUD_MACHINE || !env.CODING_ARCHIVE || !modelUrl || !this.models) return undefined;
+    const ids = [this.modelId, "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"].filter((id, index, all) => all.indexOf(id) === index);
+    const models = ids.flatMap(id => {
+      const model = this.models!.getModel("anthropic", id);
+      return model ? [{ id: model.id, name: model.name, reasoning: model.reasoning, input: [...model.input], contextWindow: model.contextWindow, maxTokens: model.maxTokens }] : [];
+    });
+    if (!models.length) return undefined;
+    return { modelUrl, models, defaultModel: models[0]!.id, ...(env.UMPI_GIT_SSH_KEY ? { gitKey: env.UMPI_GIT_SSH_KEY } : {}), ...(env.UMPI_GIT_IDENTITY ? { gitIdentity: env.UMPI_GIT_IDENTITY } : {}) };
+  }
+
   private async status(): Promise<object> {
     const configured = await this.modelReady();
     const core = await readCoreContext(await this.harness.pi(), BACKGROUND_CONTEXT);
@@ -858,6 +891,7 @@ export class Assistant extends Agent<Env> {
       knocks: { ...this.knocks.status(), pushed: this.knockPushes.status() },
       chat: { ...this.chat.status(), sockets: this.chatSocket?.count() ?? 0 },
       t3Code: { ...this.t3.status(), awaitingApproval: this.t3Requests.pending().length },
+      cloudMachines: { ...this.cloud.status(), configured: this.cloudStart() !== undefined },
       conversations: this.contextHealth.status([
         { label: "telegram", id: this.store.session("telegram") }, { label: "control", id: this.store.session("control") },
         { label: "background:telegram", id: this.store.backgroundSession("telegram") }, { label: "background:control", id: this.store.backgroundSession("control") },
@@ -887,6 +921,13 @@ export class Assistant extends Agent<Env> {
 
   async onRequest(request: Request): Promise<Response> {
     try {
+      // Umpi's own public address, for cloud machines to reach the model gateway.
+      const origin = new URL(request.url);
+      if (origin.protocol === "https:") this.store.db.all("INSERT INTO umpi_public_origin VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET origin=excluded.origin", origin.origin);
+      if (origin.pathname === CLOUD_MODEL_PATH && request.method === "POST") {
+        if (!this.models) throw new StateError(503, "Models are not ready");
+        return await cloudModelRequest(request, { models: this.models, machineFor: token => this.cloud.machineFor(token), used: id => this.cloud.used(id) });
+      }
       const companion = await companionRequest(request, {
         companion: this.companion, config: this.config, wake: () => this.coordinator.wake(), chat: this.chat,
         admitApp: (id, deviceId, message) => this.admitApp(id, deviceId, message),
@@ -898,6 +939,11 @@ export class Assistant extends Agent<Env> {
         widget: () => this.widgetContent(),
         t3: this.t3,
         t3Requests: () => this.t3Requests.recent(),
+        cloud: async (id, action) => {
+          if (action === "wake") { await this.cloud.ensureAwake(id); return { awake: true }; }
+          if (action === "sleep") return this.cloud.sleep(id);
+          return this.cloud.remove(id);
+        },
         decideT3: async (id, approve) => {
           const button = this.t3Requests.button(id, approve);
           const seq = this.chat.seqOf(button.groupId);

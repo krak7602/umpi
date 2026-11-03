@@ -17,6 +17,8 @@ import { StateError, type Database } from "./store.js";
 export type T3Status = "pending" | "connected" | "expired" | "failed";
 interface MachineRecord {
   id: string;
+  /** A cloud machine Umpi runs itself; it is woken before use and has no OAuth approval. */
+  kind?: "cloud";
   label: string;
   url: string;
   status: T3Status;
@@ -35,7 +37,7 @@ interface MachineRecord {
 }
 /** What the app and the status show: no tokens, no state. */
 export interface T3Machine {
-  id: string; label: string; host: string; status: T3Status; addedAt: string;
+  id: string; label: string; host: string; status: T3Status; addedAt: string; kind?: "cloud"; asleep?: boolean;
   connectedAt?: string; expiresAt?: string; error?: string; environmentLabel?: string;
 }
 export interface T3Thread {
@@ -66,7 +68,7 @@ const CALLBACK_PATH = "/t3/callback";
 export class T3Error extends Error {}
 
 function view(row: MachineRecord): T3Machine {
-  return { id: row.id, label: row.label, host: new URL(row.url).host, status: row.status, addedAt: row.addedAt,
+  return { id: row.id, label: row.label, host: new URL(row.url).host, status: row.status, addedAt: row.addedAt, ...(row.kind ? { kind: row.kind } : {}),
     ...(row.connectedAt ? { connectedAt: row.connectedAt } : {}), ...(row.expiresAt ? { expiresAt: row.expiresAt } : {}),
     ...(row.error ? { error: row.error } : {}), ...(row.environment ? { environmentLabel: row.environment.label } : {}) };
 }
@@ -115,9 +117,18 @@ class MachineAuth implements OAuthClientProvider {
 }
 
 type Fetcher = typeof fetch;
+/** Umpi's own cloud machines, as the T3 store sees them. */
+export interface CloudAdapter {
+  /** Wakes the machine behind a T3 machine ID, if it sleeps, and refreshes its token. */
+  prepare(t3Id: string): Promise<void>;
+  /** Whether it sleeps now, and the threads it had when it went to sleep. */
+  asleep(t3Id: string): { threads?: T3Thread[] } | undefined;
+}
+export const CLOUD_HOST_SUFFIX = ".cloud.umpi.internal";
 type Session = { call(name: string, args: Record<string, unknown>): Promise<unknown> };
 
 export class T3CodeStore {
+  cloud?: CloudAdapter;
   constructor(private readonly db: Database, private readonly fetcher: Fetcher = (input, init) => fetch(input, init), private readonly now = () => Date.now()) {
     db.all("CREATE TABLE IF NOT EXISTS umpi_t3_machines (id TEXT PRIMARY KEY, state TEXT, data TEXT NOT NULL)");
   }
@@ -143,12 +154,32 @@ export class T3CodeStore {
     return row;
   }
 
-  list(): T3Machine[] { return this.rows().map(row => view(this.expire(row))); }
+  list(): T3Machine[] {
+    return this.rows().map(row => { const machine = view(this.expire(row)); return row.kind === "cloud" && this.cloud?.asleep(row.id) ? { ...machine, asleep: true } : machine; });
+  }
   connected(): T3Machine[] { return this.list().filter(machine => machine.status === "connected"); }
 
   /** A fetch that gives up on a machine that does not answer, such as a closed laptop behind T3 Connect. */
   private timed(): Fetcher {
-    return (input, init) => this.fetcher(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(REQUEST_MS)]) : AbortSignal.timeout(REQUEST_MS) });
+    return (input, init) => {
+      // A cloud machine may be starting; a laptop behind the tailnet either answers soon or not at all.
+      const limit = new URL(input instanceof Request ? input.url : String(input)).hostname.endsWith(CLOUD_HOST_SUFFIX) ? 240_000 : REQUEST_MS;
+      return this.fetcher(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(limit)]) : AbortSignal.timeout(limit) });
+    };
+  }
+
+  /** Registers (or refreshes) one of Umpi's cloud machines; its token comes from the machine itself. */
+  registerCloud(id: string, label: string, token: string, days = 30): T3Machine {
+    const existing = this.db.all<{ data: string }>("SELECT data FROM umpi_t3_machines WHERE id=?", id)[0];
+    const previous = existing ? JSON.parse(existing.data) as MachineRecord : undefined;
+    const row: MachineRecord = { id, kind: "cloud", label, url: `https://${id}${CLOUD_HOST_SUFFIX}/mcp`, status: "connected", addedAt: previous?.addedAt ?? new Date(this.now()).toISOString(),
+      connectedAt: new Date(this.now()).toISOString(), expiresAt: new Date(this.now() + days * 86_400_000).toISOString(), tokens: { access_token: token, token_type: "Bearer" } };
+    this.save(row);
+    return view(row);
+  }
+  /** Calls one tool on a machine. */
+  async call(id: string, name: string, args: Record<string, unknown>): Promise<unknown> {
+    return this.session(id, session => session.call(name, args));
   }
 
   /** Adds a machine and starts its approval; the owner opens the returned address and enters a pairing code there. */
@@ -249,6 +280,7 @@ export class T3CodeStore {
 
   /** One MCP session with a connected machine: open, run the calls, close. A rejected token marks it expired. */
   async session<T>(id: string, work: (session: Session) => Promise<T>): Promise<T> {
+    if (this.row(id).kind === "cloud" && this.cloud) await this.cloud.prepare(id);
     const row = this.expire(this.row(id));
     if (row.status !== "connected" || !row.tokens?.access_token) {
       throw new T3Error(row.status === "pending" ? `${row.label} is waiting for approval on the machine.` : `${row.label} needs approval again in the Umpi app (Settings → T3 Code).`);
@@ -301,7 +333,10 @@ export class T3CodeStore {
   }
 
   /** Recent threads, newest first, with project names. */
-  async threads(id: string, options: { limit?: number; cursor?: number; statuses?: string[]; titleContains?: string; settled?: boolean; projectId?: string } = {}): Promise<{ threads: T3Thread[]; nextCursor?: number; total?: number }> {
+  async threads(id: string, options: { limit?: number; cursor?: number; statuses?: string[]; titleContains?: string; settled?: boolean; projectId?: string } = {}): Promise<{ threads: T3Thread[]; nextCursor?: number; total?: number; asleep?: true }> {
+    // Listing does not wake a sleeping cloud machine; reading or acting on a thread does.
+    const sleeping = this.row(id).kind === "cloud" ? this.cloud?.asleep(id) : undefined;
+    if (sleeping) return { threads: (sleeping.threads ?? []).slice(0, options.limit ?? 20), asleep: true };
     return this.session(id, async session => {
       const [projects, list] = [await session.call("t3_project_list", { limit: 100 }), await session.call("t3_thread_list", {
         ...(options.projectId ? { projectId: options.projectId } : { allProjects: true }), limit: options.limit ?? 20,
@@ -414,6 +449,9 @@ export class T3CodeStore {
     const machines = this.list();
     return { machines: await Promise.all(machines.map(async machine => {
       if (machine.status !== "connected") return machine;
+      // A sleeping cloud machine is not woken to be listed: it shows the threads it had when it went to sleep.
+      const sleeping = machine.kind === "cloud" ? this.cloud?.asleep(machine.id) : undefined;
+      if (sleeping) return { ...machine, threads: sleeping.threads ?? [] };
       try { return { ...machine, threads: (await this.threads(machine.id, { limit })).threads }; }
       catch (error) { const latest = this.list().find(item => item.id === machine.id) ?? machine; return { ...latest, problem: error instanceof Error ? error.message : "The machine did not answer." }; }
     })) };

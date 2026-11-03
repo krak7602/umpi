@@ -31,7 +31,7 @@ function fixture(t: TestContext) {
   const chat = new ChatLog(db); owner.chat = chat;
   const appended: ChatEntry[] = []; chat.appended = entry => { appended.push(entry); };
   const companion = new CompanionStore(owner);
-  const context: CompanionHttpContext = { companion, config, chat, t3: new T3CodeStore(db), t3Requests: () => [], async decideT3() { return { text: "" }; }, async wake() {}, async requireModel() {},
+  const context: CompanionHttpContext = { companion, config, chat, t3: new T3CodeStore(db), t3Requests: () => [], async decideT3() { return { text: "" }; }, async cloud() { return {}; }, async wake() {}, async requireModel() {},
     async admitApp(id, deviceId, message) {
       companion.requireDevice(deviceId);
       return owner.admit(id, message.text || "[attachment]", "telegram", "telegram-session", { kind: message.images ? "app-image" : message.document ? "app-file" : message.voice ? "app-voice" : "app-text",

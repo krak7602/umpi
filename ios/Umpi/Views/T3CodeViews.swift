@@ -14,21 +14,21 @@ struct T3MachinesSection: View {
             ForEach(t3.machines) { machine in
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        Text(machine.label)
+                        Text(machine.name)
                         Spacer()
-                        if !machine.connected {
+                        if !machine.connected && !machine.cloud {
                             Button(machine.status == "pending" ? "Open approval" : "Approve again") { Task { await approve(machine) } }
                                 .buttonStyle(.borderless)
                         }
                     }
                     Text(machine.summary).font(.footnote).foregroundStyle(machine.connected ? Color.secondary : Color.orange)
                 }
-                .swipeActions { Button("Remove", role: .destructive) { Task { await t3.remove(store, machine) } } }
+                .swipeActions { Button(machine.cloud ? "Delete" : "Remove", role: .destructive) { Task { await t3.remove(store, machine) } } }
             }
             Button { adding = true } label: { Label("Add a machine", systemImage: "plus") }
             if let message { Text(message).font(.footnote).foregroundStyle(.secondary) }
         } header: { Text("T3 Code") } footer: {
-            Text("Umpi reaches your coding threads through your tailnet or T3 Connect; nothing runs on the machine. Approval lasts 30 days.")
+            Text("Umpi reaches your coding threads through your tailnet or T3 Connect; nothing runs on the machine. Approval lasts 30 days. Cloud machines (☁︎) are Umpi's own: one per task, asleep and saved when idle; deleting one deletes its saved state.")
         }
         .task { await t3.loadMachines(store) }
         // Back from the approval page in Safari: show the new state.
@@ -213,7 +213,19 @@ struct T3ThreadView: View {
     @State private var sending = false
     @State private var notice: String?
     @State private var confirmStop = false
+    @State private var waking = false
     @FocusState private var composing: Bool
+
+    /// A sleeping cloud machine is not woken just to be looked at: its saved threads show until the owner wakes it.
+    private var sleeping: Bool {
+        if let current = t3.machines.first(where: { $0.id == machine.id }) { return current.asleep ?? false }
+        return machine.asleep ?? false
+    }
+    private func wake() async {
+        waking = true; defer { waking = false }
+        do { try await t3.wake(store, machine); notice = "Awake. Continue here or in T3 Code."; await load() }
+        catch { notice = (error as? LocalizedError)?.errorDescription ?? "It did not wake." }
+    }
 
     private var current: T3Thread { read?.thread.map { fresh in var merged = thread; merged.status = fresh.status; return merged } ?? thread }
 
@@ -222,8 +234,17 @@ struct T3ThreadView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     header
+                    if machine.cloud && sleeping {
+                        HStack {
+                            Label("Asleep · saved", systemImage: "moon.zzz").font(.subheadline).foregroundStyle(.secondary)
+                            Spacer()
+                            Button(waking ? "Waking…" : "Wake") { Task { await wake() } }.buttonStyle(.borderedProminent).disabled(waking)
+                        }
+                        .padding(14)
+                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    }
                     if let read {
-                        if read.messages.isEmpty { Text("No messages yet").foregroundStyle(.secondary) }
+                        if read.messages.isEmpty && !(machine.cloud && sleeping) { Text("No messages yet").foregroundStyle(.secondary) }
                         ForEach(read.messages) { message in
                             if message.fromOwner {
                                 Text(message.text).lineLimit(14).textSelection(.enabled)
@@ -288,7 +309,7 @@ struct T3ThreadView: View {
                 Text(current.statusText).font(.caption.weight(.semibold)).foregroundStyle(current.tint)
                     .padding(.horizontal, 9).padding(.vertical, 4).background(current.tint.opacity(0.15), in: Capsule())
                 Spacer()
-                Text(machine.label).font(.caption).foregroundStyle(.secondary)
+                Text(machine.name).font(.caption).foregroundStyle(.secondary)
             }
             let place = [thread.project, thread.branch].compactMap { $0 }
             if !place.isEmpty { Text(place.joined(separator: " · ")).font(.footnote).foregroundStyle(.secondary).lineLimit(1) }
@@ -340,6 +361,7 @@ struct T3ThreadView: View {
     }
 
     private func load() async {
+        if machine.cloud && sleeping { problem = nil; read = T3ThreadRead(thread: thread, messages: [], nextPosition: nil, hasMore: false); return }
         do {
             read = try await t3.read(store, machine: machine.id, thread: thread.threadId); problem = nil
             questions = current.status == "waiting" ? await t3.questions(store, machine: machine.id, thread: thread.threadId) : []
