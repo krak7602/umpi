@@ -26,10 +26,16 @@ export class ObsyVaultClient implements VaultPlanningClient {
   private agent(run?: string): VaultAgent {
     return new VaultAgent({ storage: this.storage, env: webEnvironment(), actor: { id: OBSY_ACTOR, ...(run ? { run } : {}) }, presence: { mode: "ignore" } });
   }
+  /**
+   * One reader kept for the life of the coordinator. A new reader rebuilds the vault's state from the latest checkpoint
+   * and every commit since, one storage read each; a kept one only catches up on commits made since its last read.
+   */
+  #reader?: VaultAgent;
+  private reading(): VaultAgent { return this.#reader ??= this.agent(); }
 
   async getSnapshot(day: string): Promise<VaultPlanningSnapshot> {
     shiftPlanningDay(day, 0);
-    const agent = this.agent();
+    const agent = this.reading();
     let total = 0;
     const readNote = async (path: string): Promise<string | null> => {
       const file = await agent.read(path);
@@ -63,7 +69,7 @@ export class ObsyVaultClient implements VaultPlanningClient {
   /** The day's note for the app's Today view, or null when it does not exist yet. */
   async readDay(day: string): Promise<{ day: string; text: string | null; revision: string }> {
     shiftPlanningDay(day, 0);
-    const file = await this.agent().read(vaultDayPath(this.scope, day));
+    const file = await this.reading().read(vaultDayPath(this.scope, day));
     if (file && (file.text === null || file.size > MAX_NOTE_BYTES)) throw new Error("The daily note is not readable text");
     const text = file?.text ?? null;
     return { day, text, revision: vaultNoteRevision(text) };

@@ -10,7 +10,7 @@ struct TodayView: View {
     @State private var problem: String?
     @State private var notice: String?
 
-    struct DayNote: Decodable, Equatable { var day: String; var text: String?; var revision: String }
+    struct DayNote: Codable, Equatable { var day: String; var text: String?; var revision: String }
     struct TaskResult: Decodable { var status: String; var text: String?; var revision: String }
 
     var body: some View {
@@ -67,15 +67,34 @@ struct TodayView: View {
         return date.formatted(.dateTime.weekday(.wide).day().month(.abbreviated))
     }
 
+    /// Shows the last copy of the day's note at once, then refreshes it; a failed refresh keeps the copy on screen.
     private func load() async {
+        if note?.day != day { note = TodayView.cached(day) }
         guard let transport = store.chatTransport, !loading else { return }
         loading = true; defer { loading = false }
         do {
             let data = try await transport.send(path: "/api/device/today?day=\(day)", method: "GET", body: nil)
-            note = try JSONDecoder().decode(DayNote.self, from: data); problem = nil
+            let fresh = try JSONDecoder().decode(DayNote.self, from: data)
+            if fresh.day == day { note = fresh; TodayView.cache(fresh) }
+            problem = nil
         } catch {
-            problem = (error as? LocalizedError)?.errorDescription ?? "The note could not be loaded."
+            if note == nil { problem = (error as? LocalizedError)?.errorDescription ?? "The note could not be loaded." }
+            else { notice = "Showing the last copy; it could not be refreshed." }
         }
+    }
+
+    /// The last copy of each day's note, kept on the phone (excluded from backup) for the next time Today opens.
+    private static var cacheDirectory: URL? {
+        try? FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("Today", isDirectory: true)
+    }
+    static func cached(_ day: String) -> DayNote? {
+        guard let url = cacheDirectory?.appendingPathComponent("\(day).json"), let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(DayNote.self, from: data)
+    }
+    static func cache(_ note: DayNote) {
+        guard let directory = cacheDirectory, let data = try? JSONEncoder().encode(note) else { return }
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try? data.write(to: directory.appendingPathComponent("\(note.day).json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 
     /// Ticks the line optimistically; the server's answer is what stays.
@@ -91,6 +110,7 @@ struct TodayView: View {
                                                 body: JSONEncoder().encode(Body(day: day, line: sourceLine, text: expected, checked: checked)))
             let result = try JSONDecoder().decode(TaskResult.self, from: data)
             note = DayNote(day: day, text: result.text, revision: result.revision)
+            if let note { TodayView.cache(note) }
             if result.status == "conflict" { notice = "The note changed. Showing the latest." }
         } catch {
             notice = (error as? LocalizedError)?.errorDescription ?? "The note could not be changed."
