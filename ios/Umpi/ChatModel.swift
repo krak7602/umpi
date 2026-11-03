@@ -69,9 +69,13 @@ final class ChatModel {
         if entries.isEmpty { isLoading = true }
         defer { isLoading = false }
         do {
-            if entries.isEmpty {
+            if entries.isEmpty || !refreshedOnce {
+                // The first read after launch takes the newest page whole, so messages shown from the saved copy get
+                // their current buttons; later reads only fetch what is new.
                 let result = try await page(transport, query: "?limit=50")
-                entries = result.entries; hasOlder = result.more; latest = result.latest
+                entries = entries.isEmpty ? result.entries : ChatModel.merge(entries, result.entries)
+                hasOlder = result.more || (entries.first?.seq ?? 0) > (result.entries.first?.seq ?? 0); latest = result.latest
+                refreshedOnce = true
             } else {
                 var after = entries.last?.seq ?? 0
                 while true {
@@ -82,9 +86,32 @@ final class ChatModel {
                 }
             }
             errorMessage = nil
+            ChatModel.save(entries)
         } catch {
-            errorMessage = (error as? LocalizedError)?.errorDescription ?? "Chat could not be loaded."
+            // With a saved copy on screen, a failed refresh is not worth a banner; the socket retries.
+            if entries.isEmpty { errorMessage = (error as? LocalizedError)?.errorDescription ?? "Chat could not be loaded." }
         }
+    }
+
+    @ObservationIgnored private var refreshedOnce = false
+
+    init() {
+        // The last messages, kept on the phone, show at once; the first refresh brings them up to date.
+        entries = ChatModel.saved()
+        hasOlder = !entries.isEmpty
+    }
+
+    /// The newest 100 entries, kept in the app's caches (not backed up) for the next launch.
+    private static var savedURL: URL? {
+        try? FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("chat-recent.json")
+    }
+    static func saved() -> [ChatEntry] {
+        guard let url = savedURL, let data = try? Data(contentsOf: url) else { return [] }
+        return (try? JSONDecoder().decode([ChatEntry].self, from: data)) ?? []
+    }
+    static func save(_ entries: [ChatEntry]) {
+        guard let url = savedURL, let data = try? JSONEncoder().encode(Array(entries.suffix(100))) else { return }
+        try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 
     private(set) var notice: String?
@@ -111,7 +138,7 @@ final class ChatModel {
     func refreshAll(_ store: CompanionStore) async {
         guard let transport = store.chatTransport, !fetching else { return }
         fetching = true; defer { fetching = false }
-        if let result = try? await page(transport, query: "?limit=50") { entries = ChatModel.merge(entries, result.entries); latest = result.latest }
+        if let result = try? await page(transport, query: "?limit=50") { entries = ChatModel.merge(entries, result.entries); latest = result.latest; ChatModel.save(entries) }
     }
 
     func loadOlder(_ store: CompanionStore) async {

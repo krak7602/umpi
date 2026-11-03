@@ -359,6 +359,14 @@ final class CompanionStore {
     }
 
     func disconnect() async {
+        // Saved copies of the conversation, notes, and previews leave with the pairing.
+        let fileManager = FileManager.default
+        if let caches = try? fileManager.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: false) {
+            for name in ["chat-recent.json", "Today"] { try? fileManager.removeItem(at: caches.appendingPathComponent(name)) }
+        }
+        if let support = try? fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: false) {
+            for name in ["Companion/Media", "Companion/Attachments"] { try? fileManager.removeItem(at: support.appendingPathComponent(name)) }
+        }
         var oldClient = client
         if oldClient == nil, let credentials, let origin = try? CompanionClient.validateServer(credentials.server) {
             // A lost pairing reply may still have created this server-side device.
