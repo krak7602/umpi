@@ -33,7 +33,16 @@ struct ChatView: View {
                             description: Text("Messages from Telegram and this app appear here as one conversation."))
                             .padding(.top, 60)
                     }
-                    ForEach(chat.entries) { entry in
+                    ForEach(Array(chat.entries.enumerated()), id: \.element.id) { index, entry in
+                        let previous = index > 0 ? chat.entries[index - 1] : nil
+                        // WhatsApp-style: a centred time starts each new stretch of conversation; consecutive messages
+                        // from Umpi without one are parted by a thin line.
+                        if let header = ChatView.timeHeader(entry, after: previous) {
+                            Text(header).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity).padding(.top, index == 0 ? 0 : 6)
+                        } else if let previous, !previous.fromOwner, !entry.fromOwner {
+                            Divider().padding(.horizontal, 40).opacity(0.6)
+                        }
                         ChatBubble(entry: entry) { data in Task { await chat.press(store, seq: entry.seq, data: data) } }.id(entry.seq)
                     }
                     ForEach(pending, id: \.id) { message in
@@ -128,6 +137,16 @@ struct ChatView: View {
         Button { draft += draft.isEmpty || draft.hasSuffix("\n") ? "- " : "\n- " } label: { Label("List item", systemImage: "list.bullet") }
         Button { draft += draft.isEmpty || draft.hasSuffix("\n") ? "- [ ] " : "\n- [ ] " } label: { Label("Checklist item", systemImage: "checklist") }
         Button { draft += draft.isEmpty || draft.hasSuffix("\n") ? "```\n\n```" : "\n```\n\n```" } label: { Label("Code block", systemImage: "chevron.left.forwardslash.chevron.right") }
+    }
+
+    /// A centred time before a message that starts a new stretch: the first one, a new day, or 10 minutes after the last.
+    static func timeHeader(_ entry: ChatEntry, after previous: ChatEntry?) -> String? {
+        guard let date = entry.date else { return nil }
+        if let previous, let before = previous.date, Calendar.current.isDate(before, inSameDayAs: date), date.timeIntervalSince(before) < 600 { return nil }
+        let time = date.formatted(date: .omitted, time: .shortened)
+        if Calendar.current.isDateInToday(date) { return "Today \(time)" }
+        if Calendar.current.isDateInYesterday(date) { return "Yesterday \(time)" }
+        return date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)) + " " + time
     }
 
     /// One line of the message field: body text plus its vertical padding.
@@ -339,7 +358,7 @@ private struct ChatBubble: View {
         VStack(alignment: entry.fromOwner ? .trailing : .leading, spacing: 6) {
             if entry.fromOwner { ownerBubble } else if entry.kind == "message" { messageCard } else { reply }
             if let rows = entry.buttons { buttons(rows) }
-            Text(caption).font(.caption2).foregroundStyle(.tertiary)
+            if !caption.isEmpty { Text(caption).font(.caption2).foregroundStyle(.tertiary) }
         }
         .frame(maxWidth: .infinity, alignment: entry.fromOwner ? .trailing : .leading)
         .accessibilityElement(children: .contain)
@@ -374,7 +393,8 @@ private struct ChatBubble: View {
     /// A message Umpi started (a reminder, the brief, an alert): full width like a reply, with a small label naming it.
     private var messageCard: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label(cardTitle, systemImage: cardSymbol).font(.caption.weight(.semibold)).foregroundStyle(Color.accentColor)
+            // Only a label that says something: a reminder, a question, an approval. Plain messages need none.
+            if cardTitle != "Umpi" { Label(cardTitle, systemImage: cardSymbol).font(.caption.weight(.semibold)).foregroundStyle(Color.accentColor) }
             MarkdownView(entry.text).textSelection(.enabled)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -412,9 +432,9 @@ private struct ChatBubble: View {
         default: "sparkles"
         }
     }
+    /// Where a message came from, when that matters; times are shown as centred headers instead.
     private var caption: String {
         var parts: [String] = []
-        if let date = entry.date { parts.append(date.formatted(date: .omitted, time: .shortened)) }
         // Umpi's own messages belong to both places; only what was said in Telegram is marked.
         if entry.surface == "telegram" && entry.kind != "message" { parts.append("Telegram") }
         if entry.kind == "voice" { parts.append("voice note") }
