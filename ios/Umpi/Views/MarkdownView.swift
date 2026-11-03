@@ -127,7 +127,7 @@ indirect enum MarkdownBlock: Equatable {
     }
 
     private static func item(_ item: ListItem) -> MarkdownListItem {
-        MarkdownListItem(checkbox: item.checkbox.map { $0 == .checked }, blocks: item.children.compactMap(block))
+        MarkdownListItem(checkbox: item.checkbox.map { $0 == .checked }, blocks: item.children.compactMap(block), line: item.range?.lowerBound.line)
     }
 
     static func inline(_ children: some Sequence<Markup>) -> AttributedString {
@@ -194,6 +194,13 @@ indirect enum MarkdownBlock: Equatable {
 struct MarkdownListItem: Equatable {
     var checkbox: Bool?
     var blocks: [MarkdownBlock]
+    /// The item's first line in the source, from 1, so a checkbox can be ticked in the note it came from.
+    var line: Int? = nil
+}
+
+/// Set by a view that can tick checkboxes in its source note, such as Today: (source line from 1, new state).
+extension EnvironmentValues {
+    @Entry var markdownTaskToggle: (@MainActor @Sendable (Int, Bool) -> Void)? = nil
 }
 
 private struct MarkdownBlockView: View {
@@ -213,7 +220,7 @@ private struct MarkdownBlockView: View {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        marker(ordered: ordered, number: start + index, checkbox: item.checkbox)
+                        marker(ordered: ordered, number: start + index, checkbox: item.checkbox, line: item.line)
                         VStack(alignment: .leading, spacing: 4) {
                             ForEach(Array(item.blocks.enumerated()), id: \.offset) { _, inner in MarkdownBlockView(block: inner, onOwnerTint: onOwnerTint) }
                         }
@@ -248,20 +255,32 @@ private struct MarkdownBlockView: View {
         }
     }
 
-    @ViewBuilder private func marker(ordered: Bool, number: Int, checkbox: Bool?) -> some View {
-        if let checked = checkbox {
-            // Apple Notes checklist shape in the system tint: an empty circle, or a filled circle with a checkmark.
-            Image(systemName: checked ? "checkmark.circle.fill" : "circle")
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(checked ? Color.white : Color.secondary.opacity(0.6), checked ? (onOwnerTint ? Color.white.opacity(0.35) : Color.accentColor) : Color.clear)
-                .font(.title3)
-                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 6 }
+    @Environment(\.markdownTaskToggle) private var toggle
+
+    @ViewBuilder private func marker(ordered: Bool, number: Int, checkbox: Bool?, line: Int?) -> some View {
+        if let checked = checkbox, let toggle, let line {
+            Button { toggle(line, !checked) } label: { checkmark(checked) }
+                .buttonStyle(.plain)
                 .accessibilityLabel(checked ? "Done" : "Not done")
+                .accessibilityHint(checked ? "Marks it not done in the note" : "Marks it done in the note")
+        } else if let checked = checkbox {
+            checkmark(checked)
         } else if ordered {
             Text("\(number).").monospacedDigit().foregroundStyle(.secondary).frame(minWidth: 18, alignment: .trailing)
         } else {
             Text("•").foregroundStyle(.secondary).frame(minWidth: 10)
         }
+    }
+    private func checkmark(_ checked: Bool) -> some View {
+        Group {
+            // Apple Notes checklist shape in the system tint: an empty circle, or a filled circle with a checkmark.
+            Image(systemName: checked ? "checkmark.circle.fill" : "circle")
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(checked ? Color.white : Color.secondary.opacity(0.6), checked ? (onOwnerTint ? Color.white.opacity(0.35) : Color.accentColor) : Color.clear)
+                .font(.title3)
+                .accessibilityLabel(checked ? "Done" : "Not done")
+        }
+        .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 6 }
     }
 }
 

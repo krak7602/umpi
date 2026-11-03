@@ -18,6 +18,9 @@ export interface CompanionHttpContext {
   admitApp(id: string, deviceId: string, message: AppMessage): Promise<Operation>;
   readFile(name: string, bytes: Uint8Array): Promise<TelegramDocument>;
   press(seq: number, data: string): Promise<{ text: string }>;
+  /** The day's note (today by default); undefined when no vault is configured. */
+  today(day?: string): Promise<object>;
+  setTask(day: string, line: number, expected: string, checked: boolean): Promise<object>;
 }
 /** What an attachment was, for the history to show: the app sends its preview separately, never through the chat. */
 export interface AppMedia { kind: "photos" | "video" | "audio" | "file" | "voice"; name?: string; seconds?: number; count?: number }
@@ -105,6 +108,11 @@ export async function companionRequest(request: Request, context: CompanionHttpC
     return Response.json(context.chat.page({ ...(chatPosition(query.get("before")) !== undefined ? { before: chatPosition(query.get("before"))! } : {}),
       ...(chatPosition(query.get("after")) !== undefined ? { after: chatPosition(query.get("after"))! } : {}), ...(limit !== null ? { limit: Number(limit) } : {}) }));
   }
+  if (path === "/api/device/today" && request.method === "GET") {
+    const day = new URL(request.url).searchParams.get("day");
+    if (day !== null && !/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new InputError("Invalid day");
+    return Response.json(await context.today(day ?? undefined));
+  }
   if (path === "/api/device/chat/socket") throw new StateError(426, "Open the chat socket as a WebSocket");
   if (path === "/api/device/chat/settings" && request.method === "GET") return Response.json(context.chat.settings());
   if (path === "/api/device/session") {
@@ -121,6 +129,13 @@ export async function companionRequest(request: Request, context: CompanionHttpC
     if (typeof input.seq !== "number" || !Number.isSafeInteger(input.seq) || input.seq < 1) throw new InputError("Invalid chat position");
     const result = await context.press(input.seq, boundedText(input.data, 64, "button"));
     return Response.json({ text: result.text });
+  }
+  if (path === "/api/device/today/task") {
+    const input = record(body); exactKeys(input, ["day", "line", "text", "checked"]);
+    if (typeof input.day !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(input.day)) throw new InputError("Invalid day");
+    if (typeof input.line !== "number" || !Number.isSafeInteger(input.line) || input.line < 0 || input.line > 20_000) throw new InputError("Invalid line");
+    if (typeof input.checked !== "boolean") throw new InputError("checked must be true or false");
+    return Response.json(await context.setTask(input.day, input.line, boundedText(input.text, 4_000, "task line"), input.checked));
   }
   if (path === "/api/device/knocks") return Response.json(companion.owner.recordPhoneKnocks(device.id, body));
   const knock = /^\/api\/device\/reminders\/([^/]+)\/answer$/.exec(path);

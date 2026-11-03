@@ -214,7 +214,7 @@ private struct CommandApprovalView: View {
     }
 }
 
-private struct ChoiceDetailView: View {
+struct ChoiceDetailView: View {
     @Environment(CompanionStore.self) private var store
     let choice: Choice
     @State private var answer = ""
