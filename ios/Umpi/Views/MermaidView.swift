@@ -76,6 +76,10 @@ private struct MermaidWebView: UIViewRepresentable {
         .pele-node > rect, .pele-node > path, .pele-node > polygon, .pele-node > circle, .pele-node > ellipse,
         .pele-cluster > rect { stroke: none !important; filter: var(--shadow); }
         .pele-cluster > rect { fill: var(--pele-surface-alt) !important; filter: none; }
+        /* Diamonds and other pointed shapes get soft corners: a stroke in the fill colour, joined round. */
+        .pele-node > polygon, .pele-node > path { stroke: var(--pele-surface) !important; stroke-width: 9px !important; stroke-linejoin: round; paint-order: stroke; }
+        /* Arrowheads: rounded tips and corners, a touch smaller. */
+        .pele-marker { stroke: var(--pele-line); stroke-width: 1.5px; stroke-linejoin: round; stroke-linecap: round; }
         .pele-edge path, .pele-edges path { stroke-width: 1.6px !important; stroke-linecap: round; stroke-linejoin: round; }
         .pele-label, .pele-title, .pele-edge-label { font-family: -apple-system, system-ui; }
         .pele-title { font-weight: 600; }

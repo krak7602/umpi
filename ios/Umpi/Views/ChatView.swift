@@ -14,6 +14,8 @@ struct ChatView: View {
     @State private var showPhotos = false
     @State private var showFiles = false
     @State private var recorder = VoiceRecorder()
+    @State private var pinned = true
+    @State private var userScrolling = false
     /// The recording was started from the capture control: it is an idea to file in the notes.
     @State private var capturing = false
 
@@ -21,7 +23,7 @@ struct ChatView: View {
         let pending = store.pendingMessages
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 16) {
                     if chat.hasOlder {
                         Button("Load earlier messages") { Task { await chat.loadOlder(store) } }
                             .font(.footnote).frame(maxWidth: .infinity)
@@ -50,11 +52,27 @@ struct ChatView: View {
                 .padding(.vertical, 8)
             }
             .defaultScrollAnchor(.bottom)
+            // Content that grows after layout (a diagram, a photo) keeps the newest message in view, unless the owner
+            // had scrolled up to read.
+            // Pinned to the newest message while content grows (history loading, a diagram drawing, a reply), until the
+            // owner scrolls up; scrolling back near the end pins it again.
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { old, new in
+                if pinned && new > old { Task { @MainActor in proxy.scrollTo("bottom", anchor: .bottom) } }
+            }
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height - 120
+            } action: { _, nearEnd in
+                if userScrolling { pinned = nearEnd }
+            }
+            .onScrollPhaseChange { _, phase in userScrolling = phase == .interacting || phase == .decelerating }
             .scrollDismissesKeyboard(.interactively)
             .softScrollEdges()
             .onChange(of: chat.entries.last?.seq) { old, _ in
                 // The first load jumps to the newest message; later ones scroll there.
-                if old == nil { Task { @MainActor in try? await Task.sleep(for: .milliseconds(50)); proxy.scrollTo("bottom", anchor: .bottom) } }
+                // Diagrams and photos size themselves after they render, so it settles once more a moment later.
+                if old == nil { Task { @MainActor in
+                    for delay in [50, 700] { try? await Task.sleep(for: .milliseconds(delay)); proxy.scrollTo("bottom", anchor: .bottom) }
+                } }
                 else { withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
             }
             .onChange(of: pending.count) { _, _ in withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
@@ -549,3 +567,4 @@ private struct WaveformBars: View {
         return max(4, 22 * CGFloat(abs(first + second)))
     }
 }
+
