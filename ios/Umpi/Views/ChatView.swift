@@ -199,7 +199,9 @@ struct ChatView: View {
                 TextField("Message Umpi", text: $draft, axis: .vertical)
                     .lineLimit(1...8)
                     .focused($composing)
-                    .padding(.leading, 14).padding(.trailing, 42).padding(.vertical, 9)
+                    // Measured: body text sits optically high in its line, so a little more space above centres it, and the
+                    // one-line field is exactly as tall as the + button.
+                    .padding(.leading, 14).padding(.trailing, 42).padding(.top, 9.5).padding(.bottom, 7)
                     .frame(minHeight: ChatView.fieldHeight)
                     .accessibilityIdentifier("chat.input")
                 Group {
