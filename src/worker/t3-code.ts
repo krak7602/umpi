@@ -44,6 +44,11 @@ export interface T3Thread {
   /** From a search: the matching text. */
   snippet?: string;
 }
+/** One pending question from an agent: what it asks, and the choices it offers. Answers are keyed by question ID. */
+export interface T3Question {
+  requestId: string;
+  questions: { id: string; header?: string; question: string; options: { label: string; description?: string; value?: string }[]; multiSelect?: boolean; allowCustomAnswer?: boolean }[];
+}
 export interface T3Message { position: number; type: string; by?: string; text: string; truncated?: boolean; at?: string }
 
 /** What Umpi can do to a machine's threads. */
@@ -395,12 +400,12 @@ export class T3CodeStore {
   }
 
   /** Questions an agent is waiting on in a thread, with their choices. Permission requests are answered in T3 Code. */
-  async questions(id: string, threadId: string): Promise<unknown> {
+  async questions(id: string, threadId: string): Promise<{ requests: T3Question[]; note?: string }> {
     return this.session(id, async session => {
       const list = record(await session.call("t3_pending_request", { action: "list", threadId }));
-      const ids = (Array.isArray(list.requests) ? list.requests : Array.isArray(list.requestIds) ? list.requestIds : []).map(item => typeof item === "string" ? item : String(record(item).requestId ?? record(item).id ?? "")).filter(Boolean).slice(0, 5);
-      const read = await Promise.all(ids.map(requestId => session.call("t3_pending_request", { action: "read", threadId, requestId })));
-      return { questions: read, ...(ids.length ? {} : { note: "Nothing is waiting for an answer. Permission requests (approve a command or edit) are answered in T3 Code itself." }) };
+      const ids = (Array.isArray(list.requestIds) ? list.requestIds : []).map(String).filter(Boolean).slice(0, 5);
+      const requests = (await Promise.all(ids.map(requestId => session.call("t3_pending_request", { action: "read", threadId, requestId })))).map(question).filter((item): item is T3Question => !!item);
+      return { requests, ...(requests.length ? {} : { note: "Nothing is waiting for an answer. Permission requests (approve a command or edit) are answered in T3 Code itself." }) };
     });
   }
 
@@ -450,6 +455,22 @@ function thread(value: unknown, projects: Map<string, string>): T3Thread | undef
     ...(item.parentThreadId ? { subagent: true } : {}), ...(Array.isArray(item.pullRequests) && item.pullRequests.length ? { pullRequests: item.pullRequests.length } : {}),
     ...(text(item.snippet, 400) ? { snippet: text(item.snippet, 400)! } : {}),
     ...(!text(item.updatedAt, 40) && text(item.messageCreatedAt, 40) ? { updatedAt: text(item.messageCreatedAt, 40)! } : {}) };
+}
+function question(value: unknown): T3Question | undefined {
+  const body = record(value);
+  const requestId = text(body.requestId, 200);
+  if (!requestId || !Array.isArray(body.questions)) return undefined;
+  return { requestId, questions: body.questions.slice(0, 6).flatMap(item => {
+    const entry = record(item);
+    const id = text(entry.id, 200), asked = text(entry.question, 2_000);
+    if (!id || !asked) return [];
+    return [{ id, question: asked, ...(text(entry.header, 120) ? { header: text(entry.header, 120)! } : {}),
+      options: (Array.isArray(entry.options) ? entry.options : []).slice(0, 8).flatMap(option => {
+        const choice = record(option); const label = text(choice.label, 200);
+        return label ? [{ label, ...(text(choice.description, 400) ? { description: text(choice.description, 400)! } : {}), ...(text(choice.value, 200) ? { value: text(choice.value, 200)! } : {}) }] : [];
+      }),
+      ...(entry.multiSelect === true ? { multiSelect: true } : {}), ...(entry.allowCustomAnswer === true ? { allowCustomAnswer: true } : {}) }];
+  }) };
 }
 function message(value: unknown): T3Message | undefined {
   if (!value || typeof value !== "object") return undefined;

@@ -10,6 +10,7 @@ struct UmpiApp: App {
             RootView()
                 .environment(appDelegate.store)
                 .environment(appDelegate.capabilities)
+                .environment(appDelegate.t3)
                 .task(id: scenePhase) {
                     guard scenePhase == .active else { return }
                     while !Task.isCancelled {
@@ -33,7 +34,7 @@ private struct RootView: View {
     @State private var pairingCode = ""
     @State private var selectedTab = 0
     @State private var linkMessage: String?
-    @State private var t3 = T3CodeModel()
+    @Environment(T3CodeModel.self) private var t3
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -49,11 +50,11 @@ private struct RootView: View {
                     Tab("Work", systemImage: "tray.full", value: 2) {
                         NavigationStack { WorkView() }
                     }
+                    .badge(t3.needsYou + store.jobs.filter { $0.status == "pending_approval" }.count + store.choices.filter { $0.status == "pending" }.count)
                     Tab("Settings", systemImage: "gear", value: 3) {
                         NavigationStack { SettingsView() }
                     }
                 }
-                .environment(t3)
             } else {
                 NavigationStack {
                     PairingView(server: $pairingServer, code: $pairingCode)
@@ -80,6 +81,8 @@ private struct RootView: View {
             if let action = note.object as? String { _ = UmpiRoute.take(); route(action) }
         }
         .onChange(of: scenePhase) { _, phase in if phase == .active, let action = UmpiRoute.take() { route(action) } }
+        // The Work badge counts approvals; reading them needs no machine, so it is done on every return to the app.
+        .task(id: scenePhase) { if scenePhase == .active, store.isPaired { await t3.loadRequests(store) } }
         .onAppear { if let action = UmpiRoute.take() { route(action) } }
         .alert("Pairing link", isPresented: Binding(get: { linkMessage != nil }, set: { if !$0 { linkMessage = nil } })) {
             Button("OK", role: .cancel) { linkMessage = nil }

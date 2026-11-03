@@ -81,6 +81,64 @@ struct T3ThreadRead: Codable, Sendable {
     var hasMore: Bool
 }
 
+/// An action Umpi decided on and asked the owner to approve, as its card shows it.
+struct T3Request: Codable, Equatable, Identifiable, Sendable {
+    struct Action: Codable, Equatable, Sendable {
+        var kind: String
+        var threadId: String?
+        var message: String?
+        var title: String?
+        var project: String?
+        var branch: String?
+        var reason: String?
+    }
+    var id: String
+    var machineLabel: String
+    var action: Action
+    var summary: String
+    var threadTitle: String?
+    var why: String?
+    var status: String
+    var createdAt: String
+    var decidedAt: String?
+    var expiresAt: String
+    var outcome: String?
+
+    var pending: Bool { status == "pending" }
+    var expires: Date? { T3Date.parse(expiresAt) }
+    var decided: Date? { decidedAt.flatMap(T3Date.parse) }
+    /// One line saying what Umpi wants to do.
+    var headline: String {
+        let thread = threadTitle.map { "“\($0)”" } ?? "a thread"
+        switch action.kind {
+        case "send": return "Message \(thread)"
+        case "start": return "Start “\(action.title ?? "a thread")”"
+        case "stop": return "Stop \(thread)"
+        case "answer": return "Answer \(thread)"
+        default: return "Act on \(thread)"
+        }
+    }
+    /// The words that would be sent, if any.
+    var quoted: String? { action.kind == "stop" ? action.reason : action.message }
+    var place: String { [machineLabel, action.project, action.branch].compactMap { $0 }.joined(separator: " · ") }
+}
+
+/// Questions an agent is waiting on; answers are keyed by question ID.
+struct T3QuestionSet: Codable, Equatable, Identifiable, Sendable {
+    struct Question: Codable, Equatable, Identifiable, Sendable {
+        struct Option: Codable, Equatable, Sendable { var label: String; var description: String?; var value: String? }
+        var id: String
+        var header: String?
+        var question: String
+        var options: [Option]
+        var multiSelect: Bool?
+        var allowCustomAnswer: Bool?
+    }
+    var requestId: String
+    var questions: [Question]
+    var id: String { requestId }
+}
+
 enum T3Date {
     static func parse(_ value: String) -> Date? {
         (try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(value)) ?? (try? Date.ISO8601FormatStyle().parse(value))
@@ -93,6 +151,57 @@ final class T3CodeModel {
     private(set) var machines: [T3Machine] = []
     private(set) var loading = false
     private(set) var problem: String?
+    private(set) var requests: [T3Request] = []
+
+    var pendingRequests: [T3Request] { requests.filter(\.pending) }
+    /// Threads waiting on the owner, with their machine.
+    var waitingThreads: [(machine: T3Machine, thread: T3Thread)] {
+        machines.flatMap { machine in (machine.threads ?? []).filter { $0.status == "waiting" && $0.subagent != true }.map { (machine, $0) } }
+    }
+    /// What the Work badge counts: approvals and agents waiting on an answer.
+    var needsYou: Int { pendingRequests.count + waitingThreads.count }
+
+    private struct Requests: Decodable { var requests: [T3Request] }
+    func loadRequests(_ store: CompanionStore) async {
+        guard let transport = store.chatTransport,
+              let data = try? await transport.send(path: "/api/device/t3/requests", method: "GET", body: nil),
+              let list = try? JSONDecoder().decode(Requests.self, from: data) else { return }
+        if list.requests != requests { requests = list.requests }
+    }
+    func request(_ id: String) -> T3Request? { requests.first { $0.id == id } }
+
+    /// Approves or declines an action Umpi asked about; the card then shows what became of it.
+    @discardableResult func decide(_ store: CompanionStore, _ id: String, approve: Bool) async -> String? {
+        guard let transport = store.chatTransport else { return nil }
+        struct Answer: Decodable { var text: String }
+        let reply = try? await transport.send(path: "/api/device/t3/requests/\(id)/\(approve ? "approve" : "decline")", method: "POST", body: Data("{}".utf8))
+        await loadRequests(store)
+        return reply.flatMap { try? JSONDecoder().decode(Answer.self, from: $0) }?.text
+    }
+
+    private struct Questions: Decodable { var requests: [T3QuestionSet] }
+    func questions(_ store: CompanionStore, machine: String, thread: String) async -> [T3QuestionSet] {
+        guard let transport = store.chatTransport else { return [] }
+        var query = URLComponents()
+        query.queryItems = [URLQueryItem(name: "machine", value: machine), URLQueryItem(name: "id", value: thread)]
+        guard let data = try? await transport.send(path: "/api/device/t3/questions?\(query.percentEncodedQuery ?? "")", method: "GET", body: nil) else { return [] }
+        return (try? JSONDecoder().decode(Questions.self, from: data))?.requests ?? []
+    }
+
+    /// The owner's answer to an agent's question.
+    func answer(_ store: CompanionStore, machine: String, thread: String, question: String, answers: [String: AnswerValue]) async throws {
+        guard let transport = store.chatTransport else { throw CompanionClientError.invalidServer }
+        struct Body: Encodable { var machine: String; var requestId: String; var kind = "answer"; var threadId: String; var question: String; var answers: [String: AnswerValue] }
+        _ = try await transport.send(path: "/api/device/t3/act", method: "POST",
+                                     body: JSONEncoder().encode(Body(machine: machine, requestId: UUID().uuidString, threadId: thread, question: question, answers: answers)))
+    }
+    enum AnswerValue: Encodable, Sendable {
+        case one(String), many([String])
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            switch self { case .one(let value): try container.encode(value); case .many(let values): try container.encode(values) }
+        }
+    }
 
     init() { machines = T3CodeModel.saved() }
 
@@ -182,5 +291,6 @@ final class T3CodeModel {
         guard let url = savedURL, let data = try? JSONEncoder().encode(machines) else { return }
         try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
+    static func path(for query: [URLQueryItem]) -> String { var parts = URLComponents(); parts.queryItems = query; return parts.percentEncodedQuery ?? "" }
     static func clearSaved() { if let url = savedURL { try? FileManager.default.removeItem(at: url) } }
 }

@@ -26,6 +26,20 @@ final class KnockScheduler {
         }
     }
 
+    /// T3 Code actions Umpi decided on carry Approve and Decline; Approve asks for Face ID or the passcode first.
+    nonisolated static let approvalCategory = "UMPI_APPROVAL"
+    enum ApprovalAction: String { case approve = "APPROVAL_APPROVE", decline = "APPROVAL_DECLINE" }
+    static func registerApprovalCategory() {
+        let actions = [
+            UNNotificationAction(identifier: ApprovalAction.approve.rawValue, title: "Approve", options: [.authenticationRequired], icon: UNNotificationActionIcon(systemImageName: "checkmark")),
+            UNNotificationAction(identifier: ApprovalAction.decline.rawValue, title: "Decline", options: [], icon: UNNotificationActionIcon(systemImageName: "xmark")),
+        ]
+        let category = UNNotificationCategory(identifier: approvalCategory, actions: actions, intentIdentifiers: [], options: [])
+        UNUserNotificationCenter.current().getNotificationCategories { existing in
+            UNUserNotificationCenter.current().setNotificationCategories(existing.filter { $0.identifier != KnockScheduler.approvalCategory }.union([category]))
+        }
+    }
+
     static func identifier(_ reminder: Reminder, _ attempt: Int) -> String { "\(prefix)\(reminder.id).\(reminder.version).\(attempt)" }
 
     /// Brings the phone's pending knocks in line with the coordinator's scheduled reminders. Returns the reminders that

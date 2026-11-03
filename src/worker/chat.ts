@@ -122,6 +122,10 @@ export class ChatLog {
   /** Called when an existing entry changes, so open apps read it again. */
   changed: ((latest: number) => void) | undefined;
 
+  /** The entry for a message Umpi sent, by its group (the chat ID is `umpi:<group>`). */
+  seqOf(groupId: string): number | undefined {
+    return this.db.all<{ seq: number }>("SELECT seq FROM umpi_chat WHERE id=?", `umpi:${groupId}`)[0]?.seq;
+  }
   entry(seq: number): ChatEntry | undefined {
     const row = this.db.all<{ seq: number; at: number; data: string }>("SELECT seq, at, data FROM umpi_chat WHERE seq=?", seq)[0];
     return row ? { ...JSON.parse(row.data) as NewEntry, seq: row.seq, at: new Date(row.at).toISOString() } : undefined;

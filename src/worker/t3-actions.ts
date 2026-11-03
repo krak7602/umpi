@@ -15,6 +15,7 @@ export interface T3ActionRequest {
   machineLabel: string;
   action: T3Action;
   summary: string;
+  threadTitle?: string;
   why?: string;
   status: "pending" | "done" | "failed" | "declined" | "expired";
   createdAt: string;
@@ -80,7 +81,7 @@ export class T3ActionRequests {
   request(machine: unknown, action: T3Action, why: string | undefined, threadTitle?: string): T3ActionRequest {
     const target = this.t3.pick(machine);
     const id = `t3r-${crypto.randomUUID()}`;
-    const request: T3ActionRequest = { id, machineId: target.id, machineLabel: target.label, action, summary: describe(action, target.label, threadTitle),
+    const request: T3ActionRequest = { id, machineId: target.id, machineLabel: target.label, action, summary: describe(action, target.label, threadTitle), ...(threadTitle ? { threadTitle } : {}),
       ...(why ? { why } : {}), status: "pending", createdAt: new Date(this.now()).toISOString() };
     const approve = `${PREFIX}${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`, decline = `${PREFIX}${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
     this.db.all("INSERT INTO umpi_t3_requests VALUES (?, ?, ?, ?)", id, approve, decline, JSON.stringify(request));
@@ -125,6 +126,20 @@ export class T3ActionRequests {
     this.save(request);
     this.owner.enqueue(`${group}:outcome`, "telegram", `T3 Code: ${text}`, undefined, undefined, undefined, { quiet: true });
     return { text, replyMarkup: empty };
+  }
+
+  /** The Approve or Decline button of a request, and the message group that carries it. */
+  button(id: string, approve: boolean): { data: string; groupId: string } {
+    const row = this.db.all<{ approve: string; decline: string }>("SELECT approve, decline FROM umpi_t3_requests WHERE id=?", id)[0];
+    if (!row) throw new StateError(404, "No such request");
+    return { data: approve ? row.approve : row.decline, groupId: this.group(id) };
+  }
+
+  /** The latest requests, newest first, for the app's cards: what is asked, and what became of it. */
+  recent(limit = 30): (T3ActionRequest & { expiresAt: string })[] {
+    return this.db.all<{ data: string }>("SELECT data FROM umpi_t3_requests ORDER BY rowid DESC LIMIT ?", limit)
+      .map(row => this.expire(JSON.parse(row.data) as T3ActionRequest))
+      .map(request => ({ ...request, expiresAt: new Date(Date.parse(request.createdAt) + REQUEST_HOURS * 3_600_000).toISOString() }));
   }
 
   pending(): T3ActionRequest[] {

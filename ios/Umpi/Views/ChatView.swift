@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 /// The owner's shared conversation: what was said in Telegram and here, and what Umpi sent on its own.
 struct ChatView: View {
     @Environment(CompanionStore.self) private var store
+    @Environment(T3CodeModel.self) private var t3
     @State private var chat = ChatModel()
     @State private var draft = ""
     @State private var composing = false
@@ -36,8 +37,10 @@ struct ChatView: View {
                             description: Text("Messages from Telegram and this app appear here as one conversation."))
                             .padding(.top, 60)
                     }
-                    ForEach(Array(chat.entries.enumerated()), id: \.element.id) { index, entry in
-                        let previous = index > 0 ? chat.entries[index - 1] : nil
+                    // An approval's outcome note is for Telegram; here the card itself shows what became of it.
+                    let shown = chat.entries.filter { !($0.id.hasPrefix("umpi:t3-request:") && $0.id.hasSuffix(":outcome")) }
+                    ForEach(Array(shown.enumerated()), id: \.element.id) { index, entry in
+                        let previous = index > 0 ? shown[index - 1] : nil
                         // WhatsApp-style: a centred time starts each new stretch of conversation; consecutive messages
                         // from Umpi without one are parted by a thin line.
                         if let header = ChatView.timeHeader(entry, after: previous) {
@@ -110,6 +113,10 @@ struct ChatView: View {
             }
         }
         .task { await chat.stayLive(store) }
+        // Approval cards change in place: read the requests again whenever the chat changes and holds one.
+        .task(id: chat.entries.map(\.buttons).description.hashValue) {
+            if chat.entries.contains(where: { $0.id.hasPrefix("umpi:t3-request:") }) { await t3.loadRequests(store) }
+        }
         // On screen only when this tab shows and the app is in front; another tab keeps the view alive but hidden.
         .onAppear { onScreen = true; requests.chatVisible = scenePhase == .active }
         .onDisappear { onScreen = false; requests.chatVisible = false }
@@ -424,13 +431,25 @@ struct PickedMovie: Transferable {
 }
 
 private struct ChatBubble: View {
+    @Environment(CompanionStore.self) private var store
+    @Environment(T3CodeModel.self) private var t3
     let entry: ChatEntry
     let press: (String) -> Void
 
+    /// A T3 Code action Umpi asks about, drawn as its card once the app has the request.
+    private var approval: T3Request? {
+        guard entry.id.hasPrefix("umpi:t3-request:") else { return nil }
+        return t3.request(String(entry.id.dropFirst("umpi:t3-request:".count)))
+    }
+
     var body: some View {
         VStack(alignment: entry.fromOwner ? .trailing : .leading, spacing: 6) {
-            if entry.fromOwner { ownerBubble } else if entry.kind == "message" { messageCard } else { reply }
-            if let rows = entry.buttons { buttons(rows) }
+            if let approval {
+                T3ApprovalCard(request: approval) { approve in Task { await t3.decide(store, approval.id, approve: approve) } }
+            } else {
+                if entry.fromOwner { ownerBubble } else if entry.kind == "message" { messageCard } else { reply }
+                if let rows = entry.buttons { buttons(rows) }
+            }
             if !caption.isEmpty { Text(caption).font(.caption2).foregroundStyle(.tertiary) }
         }
         .frame(maxWidth: .infinity, alignment: entry.fromOwner ? .trailing : .leading)

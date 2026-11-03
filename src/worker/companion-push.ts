@@ -19,7 +19,7 @@ export interface CompanionPushEvent {
   jobs: readonly { jobId: string; status: JobStatus }[];
   alert?: boolean;
   /** A chat message announced on the phone: its preview and position in the shared conversation. */
-  message?: { body: string; seq: number };
+  message?: { body: string; seq: number; approval?: { request: string } };
   /** A reminder's knock, pushed when the phone had not set it itself; same category and buttons as a local knock. */
   knock?: { reminderId: string; version: number; attempt: number; text: string; hint?: string; gentle: boolean };
 }
@@ -102,8 +102,10 @@ function notifications(target: CompanionPushTarget, event: CompanionPushEvent, n
   } else if (target.apnsToken && event.message) {
     // The preview is cut so the payload stays within APNs' 4 KB limit.
     result.push({ token: target.apnsToken, type: "alert", body: JSON.stringify({
-      aps: { alert: { title: "Umpi", body: event.message.body.slice(0, 600) }, sound: "default", "thread-id": "chat", "content-available": 1 },
+      aps: { alert: { title: event.message.approval ? "Umpi asks first" : "Umpi", body: event.message.body.slice(0, 600) }, sound: "default", "thread-id": "chat", "content-available": 1,
+        ...(event.message.approval ? { category: "UMPI_APPROVAL" } : {}) },
       chat: event.message.seq,
+      ...(event.message.approval ? { approval: event.message.approval } : {}),
     }) });
   } else if (target.apnsToken) {
     result.push({ token: target.apnsToken, type: event.alert ? "alert" : "background", body: JSON.stringify({

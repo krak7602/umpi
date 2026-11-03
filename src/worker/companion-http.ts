@@ -27,6 +27,10 @@ export interface CompanionHttpContext {
   setWidgetActions(value: unknown): Promise<object>;
   /** T3 Code machines reached through T3 Connect. */
   t3: T3CodeStore;
+  /** Actions Umpi asked the owner to approve, for the app's cards. */
+  t3Requests(): object[];
+  /** Approves or declines a request the way its message's button does, so Telegram's copy changes too. */
+  decideT3(id: string, approve: boolean): Promise<{ text: string }>;
 }
 /** What an attachment was, for the history to show: the app sends its preview separately, never through the chat. */
 export interface AppMedia { kind: "photos" | "video" | "audio" | "file" | "voice"; name?: string; seconds?: number; count?: number }
@@ -129,6 +133,12 @@ export async function companionRequest(request: Request, context: CompanionHttpC
     try { return Response.json(await context.t3.read(machine, thread, after === null ? { latest: true, limit: 40, maxChars: 8_000 } : { afterPosition: Number(after), limit: 40, maxChars: 8_000 })); }
     catch (error) { if (error instanceof T3Error) throw new StateError(502, error.message); throw error; }
   }
+  if (path === "/api/device/t3/requests") return Response.json({ requests: context.t3Requests() });
+  if (path === "/api/device/t3/questions") {
+    const query = new URL(request.url).searchParams;
+    try { return Response.json(await context.t3.questions(identifier(query.get("machine"), "machine ID"), identifier(query.get("id"), "thread ID"))); }
+    catch (error) { if (error instanceof T3Error) throw new StateError(502, error.message); throw error; }
+  }
   const t3Machine = /^\/api\/device\/t3\/machines\/([^/]+)$/.exec(path);
   if (t3Machine && request.method === "DELETE") { await context.wake(); companion.requireDevice(device.id); return Response.json(context.t3.remove(t3Machine[1]!)); }
   if (path === "/api/device/chat/socket") throw new StateError(426, "Open the chat socket as a WebSocket");
@@ -160,12 +170,15 @@ export async function companionRequest(request: Request, context: CompanionHttpC
   if (path === "/api/device/t3/machines") return Response.json(await context.t3.add(body, new URL(request.url).origin));
   if (path === "/api/device/t3/act") {
     // The owner's own action from the app: it runs at once. The request ID makes a retried send act once.
-    const input = record(body); exactKeys(input, ["machine", "requestId", "kind", "threadId", "message", "mode", "reason", "whole"]);
-    if (input.kind !== "send" && input.kind !== "stop") throw new InputError("The app can send to or stop a thread");
-    const action = parseAction(input);
+    const input = record(body); exactKeys(input, ["machine", "requestId", "kind", "threadId", "message", "mode", "reason", "whole", "question", "answers"]);
+    if (input.kind !== "send" && input.kind !== "stop" && input.kind !== "answer") throw new InputError("The app can send to, stop, or answer a thread");
+    // requestId is this app action's own ID; an answer names the agent's question as `question`.
+    const action = parseAction(input.kind === "answer" ? { kind: "answer", threadId: input.threadId, requestId: input.question, answers: input.answers } : input);
     try { return Response.json({ result: await context.t3.act(identifier(input.machine, "machine ID"), action, `app-${identifier(input.requestId, "request ID")}`) }); }
     catch (error) { if (error instanceof T3Error) throw new StateError(502, error.message); throw error; }
   }
+  const t3Decision = /^\/api\/device\/t3\/requests\/([^/]+)\/(approve|decline)$/.exec(path);
+  if (t3Decision) return Response.json(await context.decideT3(t3Decision[1]!, t3Decision[2] === "approve"));
   const t3Connect = /^\/api\/device\/t3\/machines\/([^/]+)\/connect$/.exec(path);
   if (t3Connect) return Response.json(await context.t3.connect(t3Connect[1]!, new URL(request.url).origin));
   if (path === "/api/device/knocks") return Response.json(companion.owner.recordPhoneKnocks(device.id, body));
