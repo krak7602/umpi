@@ -18,6 +18,7 @@ struct ChatView: View {
     @State private var userScrolling = false
     /// The recording was started from the capture control: it is an idea to file in the notes.
     @State private var capturing = false
+    @State private var requests = ChatRequests.shared
 
     var body: some View {
         let pending = store.pendingMessages
@@ -107,14 +108,18 @@ struct ChatView: View {
             }
         }
         .task { await chat.stayLive(store) }
-        .onReceive(NotificationCenter.default.publisher(for: .umpiStartDraft)) { note in
-            if let text = note.object as? String, draft.isEmpty { draft = text }
-            composing = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .umpiCaptureIdea)) { _ in
+        .onChange(of: requests.capture, initial: true) { _, wanted in
+            guard wanted else { return }
+            requests.capture = false
             guard !recorder.isRecording else { return }
             capturing = true
             Task { await startRecording() }
+        }
+        .onChange(of: requests.draft, initial: true) { _, text in
+            guard let text else { return }
+            requests.draft = nil
+            if draft.isEmpty { draft = text }
+            composing = true
         }
         .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: MediaPrep.maxImages, matching: .any(of: [.images, .videos]))
         .onChange(of: photoItems) { _, items in

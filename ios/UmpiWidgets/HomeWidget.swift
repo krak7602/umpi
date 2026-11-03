@@ -86,7 +86,7 @@ struct HomeWidgetView: View {
     private func buttons(labels: Bool) -> some View {
         HStack(spacing: 0) {
             ForEach(actions.prefix(4)) { action in
-                Link(destination: action.url) {
+                Button(intent: OpenUmpiAction(action: action.id)) {
                     VStack(spacing: 6) {
                         Image(systemName: action.symbol).font(.title3.weight(.semibold)).foregroundStyle(.tint)
                             .frame(width: 52, height: 52).background(.tint.opacity(0.15), in: Circle())
@@ -94,6 +94,7 @@ struct HomeWidgetView: View {
                     }
                     .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(.plain)
                 .accessibilityLabel(action.label)
             }
         }
@@ -131,7 +132,7 @@ struct ButtonsWidgetView: View {
     }
 
     private func button(_ action: WidgetAction) -> some View {
-        Button(intent: OpenURLIntent(action.url)) {
+        Button(intent: OpenUmpiAction(action: action.id)) {
             Image(systemName: action.symbol).font(.title2.weight(.semibold)).foregroundStyle(.tint)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(.tint.opacity(0.15), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -146,7 +147,7 @@ struct ButtonsWidgetView: View {
 struct CaptureControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: "UmpiCapture") {
-            ControlWidgetButton(action: OpenURLIntent(URL(string: "umpi://capture")!)) {
+            ControlWidgetButton(action: OpenUmpiAction(action: "idea")) {
                 Label("Capture idea", systemImage: "mic")
             }
         }
