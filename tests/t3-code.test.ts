@@ -226,3 +226,16 @@ test("the approval callback is public and its page escapes the machine name", as
   assert.equal(companionRole("/api/device/t3/machines/t3-abc", "DELETE"), "device");
   assert.equal(companionRole("/api/device/t3/machines/t3-abc", "GET"), undefined);
 });
+
+test("tailnet addresses go through the bridge; other addresses go direct", async () => {
+  const { tailnetFetch } = await import("../src/worker/tailnet-fetch.js");
+  const seen: string[] = [];
+  const bridge = () => ({ async fetch(request: Request) { seen.push(`bridge ${request.method} ${request.headers.get("x-umpi-target")} ${request.headers.get("authorization")} ${await request.text()}`); return new Response("ok"); } });
+  const direct: typeof fetch = async input => { seen.push(`direct ${new Request(input).url}`); return new Response("ok"); };
+  const via = tailnetFetch(bridge, direct);
+  await via("https://mac.tail0.ts.net/mcp", { method: "POST", headers: { authorization: "Bearer t" }, body: "{}" });
+  await via("https://connect.example/mcp");
+  await via("http://mac.tail0.ts.net/mcp");
+  assert.deepEqual(seen, ["bridge POST https://mac.tail0.ts.net/mcp Bearer t {}", "direct https://connect.example/mcp", "direct http://mac.tail0.ts.net/mcp"]);
+  await assert.rejects(tailnetFetch(undefined, direct)("https://mac.tail0.ts.net/mcp"), /bridge is not configured/);
+});
