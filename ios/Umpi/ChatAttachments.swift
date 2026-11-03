@@ -146,10 +146,12 @@ final class VoiceRecorder {
     func start() async throws {
         guard await AVAudioApplication.requestRecordPermission() else { throw MediaError.speech("Allow the microphone in Settings to record a voice note.") }
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.record, mode: .spokenAudio)
+        // Plain recording mode: "spoken audio" is a playback mode, and iOS rejects it for recording (OSStatus -50).
+        try session.setCategory(.record, mode: .default)
         try session.setActive(true)
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("voice-\(UUID().uuidString).m4a")
-        let recorder = try AVAudioRecorder(url: url, settings: [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 16_000, AVNumberOfChannelsKey: 1])
+        let recorder = try AVAudioRecorder(url: url, settings: [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 44_100, AVNumberOfChannelsKey: 1,
+                                                               AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue])
         guard recorder.record(forDuration: 300) else {
             try? session.setActive(false)
             throw MediaError.speech("Recording could not start. Another app may be using the microphone.")
