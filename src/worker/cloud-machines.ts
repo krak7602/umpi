@@ -234,14 +234,18 @@ export class CloudMachines {
     if (!domain || !dns) throw new T3Error("Opening cloud machines in T3 Code's app is not set up on this Umpi");
     const hostname = `${id.replace(/^cloud-/, "")}-umpi.${domain}`, address = `https://${hostname}`;
     const firstTime = this.get(id).address !== address;
+    const step = async <T>(what: string, run: () => Promise<T>): Promise<T> => {
+      try { return await run(); }
+      catch (error) { throw error instanceof T3Error ? error : new T3Error(`${what}: ${error instanceof Error ? error.message.slice(0, 200) : "failed"}`); }
+    };
     if (firstTime) {
-      await dns.add(hostname);
+      await step("Its address could not be made", () => dns.add(hostname));
       const machine = this.get(id); machine.address = address; this.save(machine);
     }
     await this.ensureAwake(id);
     const stub = this.options.stub(id);
-    await stub.publish(hostname);
-    const pairing = await stub.pairing(address);
+    await step("It could not be published", () => stub.publish(hostname));
+    const pairing = await step("T3 Code did not issue a pairing link", () => stub.pairing(address));
     this.used(id);
     return { address, ...pairing, firstTime };
   }
