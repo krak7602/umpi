@@ -34,3 +34,22 @@ export function cloudFetch(machine: ((id: string) => { fetch(request: Request): 
     return machine(id).fetch(new Request(`http://machine/t3${url.pathname}${url.search}`, { method: request.method, headers: request.headers, body, signal: request.signal }));
   };
 }
+
+/** The forwarder's answer to a request it did not forward because it is shutting down. */
+export const BRIDGE_DRAINING = "draining";
+
+/**
+ * Sends one request to the bridge, past a shutdown. A stopping bridge (a deploy replaces it) finishes what it is
+ * forwarding and answers anything new with "draining" without forwarding it. Such a request never reached the tailnet,
+ * so it is safe to send again, even when it acts: once the old container has exited, it goes to a fresh one. A request
+ * that fails any other way may have been delivered and is never sent again.
+ */
+export async function sendPastDrain(send: () => Promise<Response>, bridge: { running(): boolean; wait(ms: number): Promise<void>; signal?: AbortSignal }, limitMs = 75_000): Promise<Response> {
+  const first = await send();
+  if (first.headers.get("x-umpi-bridge") !== BRIDGE_DRAINING) return first;
+  const until = Date.now() + limitMs;
+  while (bridge.running() && Date.now() < until && !bridge.signal?.aborted) await bridge.wait(250);
+  if (bridge.running()) return first;
+  await first.body?.cancel();
+  return send();
+}
