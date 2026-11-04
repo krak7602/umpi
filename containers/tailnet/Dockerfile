@@ -5,8 +5,11 @@ FROM tailscale/tailscale:v1.104.4 AS tailscale
 FROM node:24.20.0-alpine
 COPY --from=tailscale /usr/local/bin/tailscale /usr/local/bin/tailscaled /usr/local/bin/
 WORKDIR /app
-COPY containers/tailnet/bridge.mjs containers/tailnet/start.sh ./
-RUN chmod 755 /app/start.sh && mkdir -p /tmp/tailscale && chown node:node /tmp/tailscale
+COPY containers/tailnet/bridge.mjs ./
+RUN mkdir -p /tmp/tailscale && chown node:node /tmp/tailscale
 USER node
+# The forwarder reaches the tailnet through tailscaled's proxy; Node reads these at startup.
+ENV HTTPS_PROXY=http://127.0.0.1:1055 HTTP_PROXY=http://127.0.0.1:1055 NODE_USE_ENV_PROXY=1
 EXPOSE 8080
-CMD ["/app/start.sh"]
+# The forwarder starts tailscaled itself, so the two stop together.
+CMD ["node", "/app/bridge.mjs"]
