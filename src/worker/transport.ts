@@ -297,6 +297,8 @@ export async function authorize(request: Request, env: TelegramConfig & { UMPI_C
   if (path === "/t3/callback" && request.method === "GET") return;
   // A cloud machine's Pi asking for a model turn; the coordinator checks the machine's own token.
   if (path === "/api/cloud/model/messages" && request.method === "POST") return;
+  // A cloud machine that is being stopped asks to be saved first; the coordinator checks the machine's own token.
+  if (path === "/api/cloud/stopping" && request.method === "POST") return;
   if (path === "/telegram/webhook" && request.method === "POST") {
     const missing = telegramMissing(env);
     if (missing.length) throw new StateError(503, `Telegram is not configured: ${missing.join(", ")}`);

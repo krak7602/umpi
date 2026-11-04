@@ -14,6 +14,9 @@ import { createHash, randomBytes } from "node:crypto";
 const HOME = "/home/agent";
 const run = promisify(execFile);
 let t3;
+/** Where Umpi is, and this machine's own token for it; known once Umpi starts the machine. */
+let umpi;
+let stopping = false;
 
 const json = (res, status, body) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
 const readBody = async req => { const parts = []; for await (const chunk of req) parts.push(chunk); return Buffer.concat(parts).toString("utf8"); };
@@ -116,13 +119,33 @@ async function stopT3() {
 const EXCLUDE = ["./.ssh", "./.umpi/mcp.json", "./.pi/agent/models.json", "./.t3/runtime", "./.t3/caches", "./.npm", "./.cache",
   "node_modules", ".next", ".turbo", "target", ".venv", "__pycache__"];
 
-// As the container's first process, Node would ignore SIGTERM; stop T3 Code and exit instead.
-for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, async () => { await stopT3().catch(() => {}); process.exit(0); });
+/**
+ * A stop signal (an image rollout or a platform restart) gives 15 minutes before the machine is killed. Work since the
+ * last save would be lost, so the machine asks Umpi to save it now: Umpi takes its usual last look, packs the state
+ * through /snapshot, stores it, and stops the machine. T3 Code keeps running until then. If Umpi never comes, the
+ * machine stops T3 Code cleanly and exits before the deadline.
+ */
+const GRACE_MS = Number(process.env.UMPI_STOP_GRACE_MS ?? 13 * 60_000);
+async function stop() {
+  if (stopping) return;
+  stopping = true;
+  if (!umpi) { await stopT3().catch(() => {}); process.exit(0); }
+  setTimeout(async () => { await stopT3().catch(() => {}); process.exit(0); }, GRACE_MS).unref?.();
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      const res = await fetch(`${umpi.origin}/api/cloud/stopping`, { method: "POST", headers: { authorization: `Bearer ${umpi.token}` }, signal: AbortSignal.timeout(15_000) });
+      if (res.ok) return;
+    } catch {}
+    await new Promise(resolve => setTimeout(resolve, 20_000));
+  }
+  // Umpi also notices a stopping machine on its own two-minute check.
+}
+for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => { void stop(); });
 
 createServer(async (req, res) => {
   try {
     const path = (req.url ?? "/").split("?")[0];
-    if (path === "/ready") return json(res, 200, { ok: true, t3: !!t3 && t3.exitCode === null });
+    if (path === "/ready") return json(res, 200, { ok: true, t3: !!t3 && t3.exitCode === null, stopping });
     if (path === "/restore" && req.method === "POST") {
       const tar = spawn("tar", ["--zstd", "-xf", "-", "-C", HOME], { stdio: ["pipe", "ignore", "pipe"] });
       let errors = ""; tar.stderr.on("data", chunk => { errors += chunk; });
@@ -131,7 +154,9 @@ createServer(async (req, res) => {
       return code === 0 ? json(res, 200, { restored: true }) : json(res, 500, { error: `restore failed: ${errors.slice(0, 300)}` });
     }
     if (path === "/start" && req.method === "POST") {
+      if (stopping) return json(res, 503, { error: "This machine is stopping" });
       const input = JSON.parse(await readBody(req));
+      if (typeof input.modelUrl === "string" && typeof input.modelToken === "string") umpi = { origin: new URL(input.modelUrl).origin, token: input.modelToken };
       await configure(input);
       await settings(input);
       await startT3();

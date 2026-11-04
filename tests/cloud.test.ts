@@ -45,6 +45,7 @@ function fixture(t: TestContext) {
   let now = Date.parse("2026-11-04T10:00:00Z");
   const app = { sockets: 0, appAt: 0 };
   const published = new Map<string, string>();
+  const stopping = new Set<string>();
   const t3 = new T3CodeStore(database(t), cloudFetch(() => machine, async () => { throw new Error("no other machines"); }), () => now);
   const start: Omit<CloudMachineStart, "modelToken"> = { modelUrl: "https://umpi.example/api/cloud/model", models: [{ id: "claude-x", name: "X", reasoning: true, input: ["text"], contextWindow: 1000, maxTokens: 100 }], defaultModel: "claude-x" };
   const cloud = new CloudMachines(database(t), t3, {
@@ -53,6 +54,7 @@ function fixture(t: TestContext) {
       async save() { events.push(`save ${id}`); running.delete(id); return { size: 1234 }; },
       async discard() { events.push(`discard ${id}`); running.delete(id); },
       isRunning: () => running.has(id),
+      condition: () => ({ running: running.has(id), stopping: running.has(id) && stopping.has(id) }),
       async publish(hostname) { published.set(id, hostname); },
       async pairing(baseUrl) { events.push(`pair ${id} ${baseUrl}`); return { pairUrl: `${baseUrl}/pair#token=one-time`, expiresAt: "2026-11-04T10:15:00Z" }; },
       inUse: () => app,
@@ -62,7 +64,7 @@ function fixture(t: TestContext) {
     publicDomain: () => "example.com",
     dns: () => ({ async add(hostname) { events.push(`dns add ${hostname}`); }, async remove(hostname) { events.push(`dns remove ${hostname}`); } }),
   }, () => now);
-  return { cloud, t3, machine, events, running, app, published, now: () => now, advance: (ms: number) => { now += ms; } };
+  return { cloud, t3, machine, events, running, app, published, stopping, now: () => now, advance: (ms: number) => { now += ms; } };
 }
 
 test("GitHub repositories are cloned over SSH", () => {
@@ -241,4 +243,27 @@ test("a machine's DNS name is one proxied record, made once and removed with the
   await dns.remove("0123456789-umpi.example.com");
   assert.equal(records.size, 0);
   await assert.rejects(cloudflareDns("dns-token", "other.example", fetcher).add("x-umpi.other.example"), /cannot see the zone/);
+});
+
+test("a machine being stopped by the platform is saved first: at its request, or on the next check", async t => {
+  const { cloud, events, running, stopping, advance, machine: t3 } = fixture(t);
+  const { machine } = await cloud.create({ title: "Fix login", task: "Fix the login bug" });
+  const token = (cloud as unknown as { token(id: string): string }).token(machine.id);
+  assert.equal(cloud.stopping("not-a-machine-token-000000"), undefined);
+  // The machine's own request; two at once share one save.
+  const first = cloud.stopping(token)!, second = cloud.stopping(token)!;
+  assert.equal(first.id, machine.id);
+  await Promise.all([first.save, second.save]);
+  assert.equal(events.filter(event => event === `save ${machine.id}`).length, 1, "saved once");
+  assert.equal(running.has(machine.id), false);
+  assert.equal(cloud.list()[0]!.status, "asleep");
+
+  // Its request did not arrive: the next check sees it stopping and saves it, though a thread is still working.
+  await cloud.ensureAwake(machine.id);
+  stopping.add(machine.id);
+  events.length = 0;
+  advance(125_000); await cloud.drive();
+  assert.deepEqual(events, [`save ${machine.id}`]);
+  assert.equal(cloud.list()[0]!.status, "asleep");
+  void t3;
 });
