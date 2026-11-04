@@ -189,7 +189,7 @@ The agent tools are `read_companion_state`, `update_companion`, and `request_dev
 | `POST /api/device/t3/machines` | Device credential; `{url, label?}` adds a machine and returns `{machine, authorizeUrl}` |
 | `POST /api/device/t3/machines/:id/connect` | Device credential; starts approval again, returns `{machine, authorizeUrl}` |
 | `DELETE /api/device/t3/machines/:id` | Device credential; removes the machine and its access |
-| `POST /api/device/t3/act` | Device credential; `{machine, requestId, kind, threadId, message?, question?, answers?}` sends to, stops, or answers a thread |
+| `POST /api/device/t3/act` | Device credential; `{machine, requestId, kind, threadId, message?, question?, answers?}` sends to, stops, or answers a thread; Umpi follows that thread, and when the Mac does not answer it returns `{result: {held: true}}` and sends the action when the Mac is back |
 | `GET /api/device/t3/requests` | Device credential; the latest actions Umpi asked to approve, with their state |
 | `POST /api/device/t3/requests/:id/approve` or `/decline` | Device credential; answers a request as its message's button does |
 | `GET /api/device/t3/questions` | Device credential; `?machine=&id=` the questions a thread's agent waits on |

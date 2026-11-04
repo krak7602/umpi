@@ -66,6 +66,14 @@ const REQUEST_MS = 20_000;
 const CALLBACK_PATH = "/t3/callback";
 
 export class T3Error extends Error {}
+/** The machine did not answer at all (asleep, offline, or its network path is down); the action can wait for it. */
+export class T3Unreachable extends T3Error {}
+
+/** A thread's state for following it: its status, its latest run, and whether something waits on the owner. */
+export interface T3ThreadState {
+  threadId: string; title: string; status: string; pendingRequests: number; updatedAt?: string; branch?: string; pullRequests?: number;
+  run?: { id: string; status: string; requestedAt?: string; completedAt?: string };
+}
 
 function view(row: MachineRecord): T3Machine {
   return { id: row.id, label: row.label, host: new URL(row.url).host, status: row.status, addedAt: row.addedAt, ...(row.kind ? { kind: row.kind } : {}),
@@ -310,7 +318,9 @@ export class T3CodeStore {
         throw new T3Error(`${row.label}: ${latest.error ?? "access was refused"}`);
       }
       if (error instanceof T3Error) throw error;
-      throw new T3Error(`${row.label} did not answer: ${reason(error)}`);
+      // A request the machine refused (not found, bad input) is its answer; anything else means it did not answer.
+      if (error instanceof StreamableHTTPError && typeof error.code === "number" && error.code >= 400 && error.code < 500) throw new T3Error(`${row.label} refused the request: ${reason(error)}`);
+      throw new T3Unreachable(`${row.label} did not answer: ${reason(error)}`);
     } finally {
       await transport.terminateSession().catch(() => undefined);
       await client.close().catch(() => undefined);
@@ -393,6 +403,18 @@ export class T3CodeStore {
       }
       return { ...(head.thread ? { thread: thread(head.thread, new Map()) } : {}), messages: kept,
         ...(typeof last.nextPosition === "number" ? { nextPosition: last.nextPosition } : {}), hasMore: false };
+    });
+  }
+
+  /** The state of some threads on one machine, in one session. A thread the machine does not know maps to undefined. */
+  async states(id: string, threadIds: string[]): Promise<Map<string, T3ThreadState | undefined>> {
+    return this.session(id, async session => {
+      const found = new Map<string, T3ThreadState | undefined>();
+      for (const threadId of threadIds) {
+        try { found.set(threadId, threadState(await session.call("t3_thread_read", { threadId, view: "messages", limit: 1, maxCharsPerItem: 1, runLimit: 1 }))); }
+        catch (error) { if (error instanceof T3Unreachable || !(error instanceof T3Error)) throw error; found.set(threadId, undefined); }
+      }
+      return found;
     });
   }
 
@@ -494,6 +516,20 @@ function thread(value: unknown, projects: Map<string, string>): T3Thread | undef
     ...(text(item.snippet, 400) ? { snippet: text(item.snippet, 400)! } : {}),
     ...(!text(item.updatedAt, 40) && text(item.messageCreatedAt, 40) ? { updatedAt: text(item.messageCreatedAt, 40)! } : {}) };
 }
+function threadState(value: unknown): T3ThreadState | undefined {
+  const body = record(value), item = record(body.thread);
+  const threadId = text(item.threadId, 100);
+  if (!threadId) return undefined;
+  const runs = Array.isArray(body.recentRuns) ? body.recentRuns.map(entry => record(entry)) : [];
+  const latest = runs.find(entry => entry.runId === item.latestRunId) ?? runs[0];
+  const runId = latest ? text(latest.runId, 200) : undefined;
+  return { threadId, title: text(item.title, 200) ?? "Untitled", status: text(item.status, 30) ?? "unknown",
+    pendingRequests: typeof item.pendingRequestCount === "number" ? item.pendingRequestCount : 0,
+    ...(text(item.updatedAt, 40) ? { updatedAt: text(item.updatedAt, 40)! } : {}), ...(text(item.branch, 200) ? { branch: text(item.branch, 200)! } : {}),
+    ...(Array.isArray(item.pullRequests) && item.pullRequests.length ? { pullRequests: item.pullRequests.length } : {}),
+    ...(latest && runId ? { run: { id: runId, status: text(latest.status, 30) ?? "unknown", ...(text(latest.requestedAt, 40) ? { requestedAt: text(latest.requestedAt, 40)! } : {}),
+      ...(text(latest.completedAt, 40) ? { completedAt: text(latest.completedAt, 40)! } : {}) } } : {}) };
+}
 function question(value: unknown): T3Question | undefined {
   const body = record(value);
   const requestId = text(body.requestId, 200);
@@ -523,14 +559,14 @@ function message(value: unknown): T3Message | undefined {
 const STATUSES = ["idle", "preparing", "queued", "starting", "running", "waiting", "completed", "interrupted", "failed", "cancelled", "rolled_back"] as const;
 
 /** Umpi's read-only view of the owner's T3 Code threads. */
-export function t3CodeTools(store: T3CodeStore): ToolRegistration[] {
+export function t3CodeTools(store: T3CodeStore, notices?: () => object[]): ToolRegistration[] {
   const result = async (run: () => Promise<unknown>): Promise<ToolExecutionResult> => {
     try { return { content: [{ type: "text", text: JSON.stringify(await run()) }] }; }
     catch (error) { return { isError: true, content: [{ type: "text", text: error instanceof T3Error || error instanceof InputError || error instanceof StateError ? error.message : "T3 Code could not be read." }] }; }
   };
   const machine = Type.Optional(Type.String({ maxLength: 100, description: "Machine name or ID; needed only when more than one is connected" }));
   return [
-    defineTool({ name: "t3_code_threads", description: "List the owner's T3 Code coding threads (agent sessions on their machines), newest first, with status (running, waiting, completed, failed, …), project, and branch. Use it when the owner asks what their coding agents are doing, what finished, or what waits on them. With no machine, lists every connected machine. Read-only.",
+    defineTool({ name: "t3_code_threads", description: "List the owner's T3 Code coding threads (agent sessions on their machines), newest first, with status (running, waiting, completed, failed, …), project, and branch. Use it when the owner asks what their coding agents are doing, what finished, or what waits on them. With no machine, lists every connected machine. recentNotices are what Umpi told the owner about threads it follows (finished, waiting), so a short follow-up such as \"push it\" can name its thread. Read-only.",
       parameters: Type.Object({ machine, limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })), cursor: Type.Optional(Type.Integer({ minimum: 0 })),
         statuses: Type.Optional(Type.Array(Type.Union(STATUSES.map(status => Type.Literal(status))), { maxItems: 10 })),
         titleContains: Type.Optional(Type.String({ maxLength: 100 })), settled: Type.Optional(Type.Boolean({ description: "false: only threads not yet settled (not marked done)" })) }, { additionalProperties: false }),
@@ -543,10 +579,11 @@ export function t3CodeTools(store: T3CodeStore): ToolRegistration[] {
             ...(typeof body.settled === "boolean" ? { settled: body.settled } : {}) };
           const machines = body.machine ? [store.pick(body.machine)] : store.connected();
           if (!machines.length) store.pick(undefined);
+          const recent = notices?.() ?? [];
           return { machines: await Promise.all(machines.map(async item => {
             try { return { machine: item.label, ...(await store.threads(item.id, options)) }; }
             catch (error) { return { machine: item.label, problem: error instanceof Error ? error.message : "did not answer" }; }
-          })) };
+          })), ...(recent.length ? { recentNotices: recent } : {}) };
         });
       } }),
     defineTool({ name: "t3_code_read_thread", description: "Read a T3 Code thread's user and assistant messages, by threadId from t3_code_threads or t3_code_search. By default reads the latest messages; with from \"start\" reads from the beginning, then page with afterPosition = nextPosition. Read-only.",

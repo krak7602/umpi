@@ -7,7 +7,7 @@ import { CompanionStore, companionHash } from "./companion-store.js";
 import { companionRole } from "./companion-routes.js";
 import { authorize, readJson, secretEqual, type TelegramConfig } from "./transport.js";
 import { StateError, type Operation } from "./store.js";
-import { T3Error, type T3CodeStore } from "./t3-code.js";
+import { T3Error, type T3Action, type T3CodeStore } from "./t3-code.js";
 import { parseAction } from "./t3-actions.js";
 
 export interface CompanionHttpContext {
@@ -29,6 +29,8 @@ export interface CompanionHttpContext {
   t3: T3CodeStore;
   /** Actions Umpi asked the owner to approve, for the app's cards. */
   t3Requests(): object[];
+  /** The owner's own action from the app; Umpi follows the thread, and holds it when the Mac does not answer. */
+  t3Act(machine: string, action: T3Action, requestId: string): Promise<{ result?: unknown; held?: object }>;
   /** Approves or declines a request the way its message's button does, so Telegram's copy changes too. */
   decideT3(id: string, approve: boolean): Promise<{ text: string }>;
   /** Umpi's cloud machines: wake, sleep, delete. */
@@ -178,7 +180,7 @@ export async function companionRequest(request: Request, context: CompanionHttpC
     if (input.kind !== "send" && input.kind !== "stop" && input.kind !== "answer") throw new InputError("The app can send to, stop, or answer a thread");
     // requestId is this app action's own ID; an answer names the agent's question as `question`.
     const action = parseAction(input.kind === "answer" ? { kind: "answer", threadId: input.threadId, requestId: input.question, answers: input.answers } : input);
-    try { return Response.json({ result: await context.t3.act(identifier(input.machine, "machine ID"), action, `app-${identifier(input.requestId, "request ID")}`) }); }
+    try { const ran = await context.t3Act(identifier(input.machine, "machine ID"), action, `app-${identifier(input.requestId, "request ID")}`); return Response.json(ran.held ? { result: { held: true } } : { result: ran.result }); }
     catch (error) { if (error instanceof T3Error) throw new StateError(502, error.message); throw error; }
   }
   const cloudAction = /^\/api\/device\/cloud\/([^/]+)\/(wake|sleep)$/.exec(path);

@@ -293,6 +293,8 @@ export class ProactiveStore {
     }
     const wake = this.liveWake(id); if (wake) this.writeWakeup({ ...wake, version: wake.version + 1, status: "cancelled" });
   }
+  /** Whether it is the owner's quiet hours now: notices still arrive, without a sound. */
+  quiet(now = Date.now()): boolean { return this.isQuiet(instant(now)); }
   private isQuiet(now: number, quiet = this.settings().quietHours): boolean {
     if (!quiet) return false;
     const local = this.clock.format(now);
