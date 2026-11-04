@@ -16,7 +16,7 @@ function publicItem(item: ReturnType<MailRuntime["store"]["attention"]>[number])
 /** The parent router authenticates the owner control credential before calling this. */
 export async function mailRequest(request: Request, runtime: MailRuntime, telegramSession: () => string | undefined): Promise<Response | undefined> {
   const path = new URL(request.url).pathname, { store } = runtime;
-  if (path === "/api/mail" && request.method === "GET") return Response.json(runtime.status());
+  if (path === "/api/mail" && request.method === "GET") return Response.json({ ...runtime.status(), recentReplies: store.recentReplies() });
   if (path === "/api/mail/items" && request.method === "GET") return Response.json({ items: store.attention(50).map(publicItem) });
   if (path === "/api/mail/settings" && request.method === "PUT") {
     const body = fields(await readJson(request, 8_192), ["expectedVersion", "enabled", "lookbackDays", "pollMinutes", "bootstrapAfter"]);
