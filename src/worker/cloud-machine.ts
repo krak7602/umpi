@@ -1,5 +1,5 @@
 import type { R2Bucket } from "@cloudflare/workers-types";
-import { Container } from "@cloudflare/containers";
+import { Container, type StopParams } from "@cloudflare/containers";
 import type { CloudMachineStart } from "./cloud-machines.js";
 
 export interface CloudMachineEnvironment { CODING_ARCHIVE?: R2Bucket }
@@ -147,6 +147,19 @@ export class CloudMachine extends Container<CloudMachineEnvironment> {
   }
 
   isRunning(): boolean { return this.ctx.container?.running === true; }
+
+  /** Whether the container answers on its control port, asked directly, so nothing is started. */
+  async reachable(): Promise<boolean> {
+    try { return (await this.ctx.container!.getTcpPort(8080).fetch("http://machine/ready", { signal: AbortSignal.timeout(5_000) })).ok; }
+    catch { return false; }
+  }
+
+  /** Sends the stop signal a rollout or platform restart sends, to check that the machine is saved first. */
+  async signalStop(): Promise<void> { if (this.ctx.container?.running) await this.stop(15); }
+
+  override onStop(params: StopParams): void {
+    console.log(JSON.stringify({ event: "cloud-machine-stopped", exitCode: params.exitCode, reason: params.reason }));
+  }
 
   /** Running, and whether it is stopping (it got a stop signal and waits for Umpi to save it). */
   async condition(): Promise<{ running: boolean; stopping: boolean }> {

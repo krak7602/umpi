@@ -119,7 +119,7 @@ export interface Env extends TelegramConfig, CompanionPushConfig {
   TAILNET_BRIDGE?: { getByName(name: string): { fetch(request: Request): Promise<Response> } };
   UMPI_TAILSCALE_AUTHKEY?: string;
   /** Cloud machines: their containers, the SSH key and commit identity they use, and (local only) the gateway address. */
-  CLOUD_MACHINE?: { getByName(name: string): { fetch(request: Request): Promise<Response>; wake(start: CloudMachineStart, key: string): Promise<{ token: string; restored: boolean }>; save(): Promise<{ size: number }>; discard(): Promise<void>; isRunning(): Promise<boolean>; condition(): Promise<{ running: boolean; stopping: boolean }>;
+  CLOUD_MACHINE?: { getByName(name: string): { fetch(request: Request): Promise<Response>; wake(start: CloudMachineStart, key: string): Promise<{ token: string; restored: boolean }>; save(): Promise<{ size: number }>; discard(): Promise<void>; isRunning(): Promise<boolean>; reachable(): Promise<boolean>; signalStop(): Promise<void>; condition(): Promise<{ running: boolean; stopping: boolean }>;
     publish(hostname: string): Promise<void>; pairing(baseUrl: string): Promise<{ pairUrl: string; expiresAt?: string }>; inUse(): Promise<{ sockets: number; appAt: number }> } };
   /** A Cloudflare API token for the owner's zone (Zone Read, DNS Edit): cloud machines' public names. */
   UMPI_CLOUDFLARE_DNS_TOKEN?: string;
@@ -956,6 +956,7 @@ export class Assistant extends Agent<Env> {
         const token = /^Bearer ([A-Za-z0-9_-]{20,200})$/.exec(request.headers.get("authorization") ?? "")?.[1];
         const stopping = token ? this.cloud.stopping(token) : undefined;
         if (!stopping) throw new StateError(401, "Unknown cloud machine");
+        console.log(JSON.stringify({ event: "cloud-machine-stopping", id: stopping.id }));
         this.lifecycle.trackAlarmWork(stopping.save);
         return Response.json({ saving: true }, { status: 202 });
       }
@@ -1027,6 +1028,14 @@ export class Assistant extends Agent<Env> {
       const schedule = await scheduleRequest(request, this.proactive, () => this.coordinator.wake(), () => this.session("control"), id => this.planning.ownsCommitment(id) || this.mail.ownsCommitment(id) || this.brief.ownsCommitment(id) || this.dream.ownsCommitment(id));
       if (schedule) return schedule;
       if (path === "/api/status" && request.method === "GET") return Response.json(await this.status());
+      // Operation check: send a cloud machine the stop signal a rollout sends; it should be saved, not lost.
+      const stopCheck = /^\/api\/cloud\/machines\/(cloud-[a-z0-9]{6,20})\/stop-signal$/.exec(path);
+      if (stopCheck && request.method === "POST") {
+        const machine = this.cloud.list().find(item => item.id === stopCheck[1]);
+        if (!machine || machine.status !== "awake") throw new StateError(409, "That cloud machine is not awake");
+        await this.config.CLOUD_MACHINE!.getByName(machine.id).signalStop();
+        return Response.json({ signalled: true });
+      }
       if (path === "/api/model/fallback/check" && request.method === "POST") return Response.json(await this.modelFallback.check());
       if (path === "/api/jobs" && request.method === "GET") return Response.json({ jobs: this.store.jobs() });
       if (path === "/api/reminders" && request.method === "GET") return Response.json({ reminders: this.store.reminders() });
