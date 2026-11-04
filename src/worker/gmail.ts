@@ -339,13 +339,16 @@ async function threadSnapshot(api: GmailClient, threadId: string, cutoff: number
   const contexts = selected.map(context);
   const lastOutgoingAt = latestOutgoing?.sentAt ?? null;
   const awaitingReply = !lastOutgoingAt || lastOutgoingAt < latestIncoming.sentAt;
-  const latestIndex = selected.findIndex(message => message.id === latestIncoming.id);
-  if (awaitingReply && latestIndex >= 0) {
+  // The message that decides the thread is read in full: their latest while it waits for the owner, or the owner's
+  // reply that answered it, so the reply can settle the item it answered. Other messages keep Gmail's snippet.
+  const decisive = awaitingReply ? latestIncoming : latestOutgoing!;
+  const decisiveIndex = selected.findIndex(message => message.id === decisive.id);
+  if (decisiveIndex >= 0) {
     try {
-      const full = await api.get(`/messages/${encodeURIComponent(latestIncoming.id)}`, new URLSearchParams({ format: "full" }), 393_216);
+      const full = await api.get(`/messages/${encodeURIComponent(decisive.id)}`, new URLSearchParams({ format: "full" }), 393_216);
       if (full.response.ok) {
         const value = object(full.value), parsed = metadata(value);
-        contexts[latestIndex] = { ...context(parsed), excerpt: bodyText(value.payload) || parsed.excerpt };
+        contexts[decisiveIndex] = { ...context(parsed), excerpt: bodyText(value.payload) || parsed.excerpt };
       }
     } catch (error) {
       if (!(error instanceof Error) || error.message !== "Gmail message body exceeded the bounded read limit") throw error;
