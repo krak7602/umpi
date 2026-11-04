@@ -250,6 +250,31 @@ test("tailnet addresses go through the bridge; other addresses go direct", async
   await assert.rejects(tailnetFetch(undefined, direct)("https://mac.tail0.ts.net/mcp"), /bridge is not configured/);
 });
 
+test("a request a stopping bridge did not forward goes to the next bridge; nothing else is sent twice", async () => {
+  const { sendPastDrain } = await import("../src/worker/tailnet-fetch.js");
+  const draining = () => new Response("{}", { status: 503, headers: { "x-umpi-bridge": "draining" } });
+  const bridge = (runningFor: number) => { let checks = 0; return { running: () => checks++ < runningFor, wait: async () => undefined }; };
+
+  // Not forwarded by the old bridge: sent again once the old container has exited.
+  let sends = 0;
+  const answers = [draining(), new Response("fresh")];
+  const resent = await sendPastDrain(async () => { sends++; return answers.shift()!; }, bridge(3));
+  assert.equal(await resent.text(), "fresh");
+  assert.equal(sends, 2);
+
+  // An error with an unknown outcome (the container vanished mid-request) is never sent again.
+  sends = 0;
+  const lost = await sendPastDrain(async () => { sends++; return new Response("Container suddenly disconnected, try again", { status: 500 }); }, bridge(0));
+  assert.equal(lost.status, 500);
+  assert.equal(sends, 1);
+
+  // An old bridge that does not exit in time: the caller gets the draining answer, not a second send.
+  sends = 0;
+  const stuck = await sendPastDrain(async () => { sends++; return draining(); }, bridge(Number.MAX_SAFE_INTEGER), 0);
+  assert.equal(stuck.headers.get("x-umpi-bridge"), "draining");
+  assert.equal(sends, 1);
+});
+
 async function connected(t: TestContext) {
   const t3 = fakeT3();
   const db = database(t);

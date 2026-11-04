@@ -1,4 +1,5 @@
 import { Container } from "@cloudflare/containers";
+import { sendPastDrain } from "./tailnet-fetch.js";
 
 /** Longer than the forwarder's own 60-second limit, so the forwarder normally answers first. */
 const REQUEST_LIMIT_MS = 90_000;
@@ -25,9 +26,14 @@ export class TailnetBridge extends Container<TailnetBridgeEnvironment> {
   /**
    * The library counts the bridge as busy while any request is open, and a request to an offline machine may never
    * end; Umpi's own 20-second limit does not reach in here. A limit on each request lets the bridge become idle.
+   * A request a stopping bridge answered "draining" was not forwarded, so it goes to the next bridge (sendPastDrain).
    */
   override async fetch(request: Request): Promise<Response> {
-    return super.fetch(new Request(request, { signal: AbortSignal.any([request.signal, AbortSignal.timeout(REQUEST_LIMIT_MS)]) }));
+    const signal = AbortSignal.any([request.signal, AbortSignal.timeout(REQUEST_LIMIT_MS)]);
+    // Kept, so a request a stopping bridge did not forward can go to the next one.
+    const body = request.method === "GET" || request.method === "HEAD" ? null : await request.arrayBuffer();
+    return sendPastDrain(() => super.fetch(new Request(request, { body, signal })),
+      { running: () => this.ctx.container?.running === true, wait: ms => new Promise(resolve => setTimeout(resolve, ms)), signal });
   }
 
   /**

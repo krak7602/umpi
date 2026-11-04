@@ -33,8 +33,18 @@ function stop(code, why) {
   tailscaled?.kill("SIGTERM");
   process.exit(code);
 }
-// As the container's main process, Node ignores stop signals unless it handles them; without this the bridge never sleeps.
-for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => stop(0));
+// A stop signal (a deploy replacing the bridge) drains: requests already forwarding finish, anything new is answered
+// "draining" without being forwarded, so Umpi can send it to the next bridge. Then both processes stop. As the
+// container's main process, Node ignores stop signals unless it handles them; without this the bridge never sleeps.
+let forwarding = 0;
+let draining = false;
+function drain() {
+  if (draining) return;
+  draining = true;
+  if (forwarding === 0) return stop(0);
+  setTimeout(() => stop(0), UPSTREAM_MS + 5_000).unref();
+}
+for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, drain);
 
 const key = process.env.TS_AUTHKEY;
 delete process.env.TS_AUTHKEY;
@@ -76,6 +86,12 @@ function fail(res, status, message) {
 createServer(async (req, res) => {
   if (req.url === "/ready") { res.writeHead(200); res.end("ok"); return; }
   if (req.url !== "/forward") return fail(res, 404, "Not found");
+  if (draining) {
+    res.writeHead(503, { "content-type": "application/json", "x-umpi-bridge": "draining" });
+    return res.end(JSON.stringify({ error: "The bridge is restarting; this request was not forwarded" }));
+  }
+  forwarding++;
+  res.on("close", () => { forwarding--; if (draining && forwarding === 0) stop(0); });
   let target;
   try { target = new URL(String(req.headers["x-umpi-target"] ?? "")); } catch { return fail(res, 400, "Invalid target"); }
   if (target.protocol !== "https:" || !TAILNET_HOST.test(target.hostname) || (target.port && target.port !== "443") || target.username || target.password) {
