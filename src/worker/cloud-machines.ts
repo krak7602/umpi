@@ -44,6 +44,7 @@ export interface CloudMachineRecord {
 export interface CloudMachineStub {
   wake(start: CloudMachineStart, snapshotKey: string): Promise<{ token: string; restored: boolean }>;
   isRunning(): Promise<boolean> | boolean;
+  reachable?(): Promise<boolean>;
   condition(): Promise<{ running: boolean; stopping: boolean }> | { running: boolean; stopping: boolean };
   save(): Promise<{ size: number }>;
   discard(): Promise<void>;
@@ -135,7 +136,7 @@ export class CloudMachines {
     const machine = this.get(id);
     if (machine.status === "awake") {
       if (await this.options.stub(id).isRunning()) return;
-      this.lost(id);
+      await this.lost(id, "wake");
     }
     const pending = this.waking.get(id);
     if (pending) return pending;
@@ -165,7 +166,9 @@ export class CloudMachines {
   }
 
   /** A machine marked awake whose container is gone: it wakes again from its last save. */
-  private lost(id: string): void {
+  private async lost(id: string, where: string): Promise<void> {
+    const reachable = await this.options.stub(id).reachable?.().catch(() => false);
+    console.log(JSON.stringify({ event: "cloud-machine-lost", id, where, reachable }));
     const machine = this.get(id);
     Object.assign(machine, { status: "asleep", idleChecks: 0, error: "It stopped unexpectedly; work since its last save was lost" });
     this.save(machine);
@@ -277,7 +280,7 @@ export class CloudMachines {
       if (machine.checkedAt && this.now() - Date.parse(machine.checkedAt) < IDLE_CHECK_MS - 5_000) continue;
       try {
         const state = await this.options.stub(machine.id).condition();
-        if (!state.running) { this.lost(machine.id); continue; }
+        if (!state.running) { await this.lost(machine.id, "check"); continue; }
         // It got a stop signal and its request to be saved did not arrive: save it now, within its 15 minutes.
         if (state.stopping) { await this.sleep(machine.id); continue; }
         const { threads } = await this.t3.threads(machine.id, { limit: 20 });
