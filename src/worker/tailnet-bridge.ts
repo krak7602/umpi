@@ -1,5 +1,8 @@
 import { Container } from "@cloudflare/containers";
 
+/** Longer than the forwarder's own 60-second limit, so the forwarder normally answers first. */
+const REQUEST_LIMIT_MS = 90_000;
+
 export interface TailnetBridgeEnvironment { UMPI_TAILSCALE_AUTHKEY?: string }
 
 /**
@@ -17,6 +20,14 @@ export class TailnetBridge extends Container<TailnetBridgeEnvironment> {
   constructor(ctx: DurableObjectState<{}>, env: TailnetBridgeEnvironment) {
     super(ctx, env);
     this.envVars = { TS_AUTHKEY: env.UMPI_TAILSCALE_AUTHKEY ?? "" };
+  }
+
+  /**
+   * The library counts the bridge as busy while any request is open, and a request to an offline machine may never
+   * end; Umpi's own 20-second limit does not reach in here. A limit on each request lets the bridge become idle.
+   */
+  override async fetch(request: Request): Promise<Response> {
+    return super.fetch(new Request(request, { signal: AbortSignal.any([request.signal, AbortSignal.timeout(REQUEST_LIMIT_MS)]) }));
   }
 
   /**
