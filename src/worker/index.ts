@@ -119,7 +119,7 @@ export interface Env extends TelegramConfig, CompanionPushConfig {
   TAILNET_BRIDGE?: { getByName(name: string): { fetch(request: Request): Promise<Response> } };
   UMPI_TAILSCALE_AUTHKEY?: string;
   /** Cloud machines: their containers, the SSH key and commit identity they use, and (local only) the gateway address. */
-  CLOUD_MACHINE?: { getByName(name: string): { fetch(request: Request): Promise<Response>; wake(start: CloudMachineStart, key: string): Promise<{ token: string; restored: boolean }>; save(): Promise<{ size: number }>; discard(): Promise<void>; isRunning(): Promise<boolean>;
+  CLOUD_MACHINE?: { getByName(name: string): { fetch(request: Request): Promise<Response>; wake(start: CloudMachineStart, key: string): Promise<{ token: string; restored: boolean }>; save(): Promise<{ size: number }>; discard(): Promise<void>; isRunning(): Promise<boolean>; condition(): Promise<{ running: boolean; stopping: boolean }>;
     publish(hostname: string): Promise<void>; pairing(baseUrl: string): Promise<{ pairUrl: string; expiresAt?: string }>; inUse(): Promise<{ sockets: number; appAt: number }> } };
   /** A Cloudflare API token for the owner's zone (Zone Read, DNS Edit): cloud machines' public names. */
   UMPI_CLOUDFLARE_DNS_TOKEN?: string;
@@ -952,6 +952,13 @@ export class Assistant extends Agent<Env> {
       // Umpi's own public address, for cloud machines to reach the model gateway.
       const origin = new URL(request.url);
       if (origin.protocol === "https:") this.store.db.all("INSERT INTO umpi_public_origin VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET origin=excluded.origin", origin.origin);
+      if (origin.pathname === "/api/cloud/stopping" && request.method === "POST") {
+        const token = /^Bearer ([A-Za-z0-9_-]{20,200})$/.exec(request.headers.get("authorization") ?? "")?.[1];
+        const stopping = token ? this.cloud.stopping(token) : undefined;
+        if (!stopping) throw new StateError(401, "Unknown cloud machine");
+        this.lifecycle.trackAlarmWork(stopping.save);
+        return Response.json({ saving: true }, { status: 202 });
+      }
       if (origin.pathname === CLOUD_MODEL_PATH && request.method === "POST") {
         if (!this.models) throw new StateError(503, "Models are not ready");
         return await cloudModelRequest(request, { models: this.models, machineFor: token => this.cloud.machineFor(token), used: id => this.cloud.used(id) });

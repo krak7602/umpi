@@ -148,6 +148,16 @@ export class CloudMachine extends Container<CloudMachineEnvironment> {
 
   isRunning(): boolean { return this.ctx.container?.running === true; }
 
+  /** Running, and whether it is stopping (it got a stop signal and waits for Umpi to save it). */
+  async condition(): Promise<{ running: boolean; stopping: boolean }> {
+    if (!this.ctx.container?.running) return { running: false, stopping: false };
+    try {
+      const response = await this.containerFetch(new Request("http://machine/ready"), 8080);
+      const body = await response.json() as { stopping?: boolean };
+      return { running: true, stopping: body.stopping === true };
+    } catch { return { running: true, stopping: false }; }
+  }
+
   /** MCP relay to T3 Code for Umpi (host `machine`), or the owner's app at the public address. */
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);

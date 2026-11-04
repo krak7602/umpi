@@ -44,6 +44,7 @@ export interface CloudMachineRecord {
 export interface CloudMachineStub {
   wake(start: CloudMachineStart, snapshotKey: string): Promise<{ token: string; restored: boolean }>;
   isRunning(): Promise<boolean> | boolean;
+  condition(): Promise<{ running: boolean; stopping: boolean }> | { running: boolean; stopping: boolean };
   save(): Promise<{ size: number }>;
   discard(): Promise<void>;
   publish(hostname: string): Promise<void>;
@@ -170,8 +171,27 @@ export class CloudMachines {
     this.save(machine);
   }
 
-  /** Saves a machine to R2 and stops it. */
+  private sleeping = new Map<string, Promise<CloudMachineRecord>>();
+  /** Saves a machine to R2 and stops it; concurrent callers share one save. */
   async sleep(id: string): Promise<CloudMachineRecord> {
+    const pending = this.sleeping.get(id);
+    if (pending) return pending;
+    const work = this.save_(id).finally(() => this.sleeping.delete(id));
+    this.sleeping.set(id, work);
+    return work;
+  }
+
+  /**
+   * A machine that got a stop signal (an image rollout or a platform restart) asks to be saved, with its own token.
+   * It has 15 minutes; the save starts at once. Returns the machine, or undefined for an unknown token.
+   */
+  stopping(token: string): { id: string; save: Promise<unknown> } | undefined {
+    const id = this.machineFor(token);
+    if (!id) return undefined;
+    return { id, save: this.sleep(id).catch(() => undefined) };
+  }
+
+  private async save_(id: string): Promise<CloudMachineRecord> {
     const machine = this.get(id);
     if (machine.status !== "awake") return machine;
     try { await this.beforeSleep?.(id); } catch { /* sleeping matters more than one notice */ }
@@ -256,7 +276,10 @@ export class CloudMachines {
       // The coordinator runs often; each machine is checked at most every two minutes.
       if (machine.checkedAt && this.now() - Date.parse(machine.checkedAt) < IDLE_CHECK_MS - 5_000) continue;
       try {
-        if (!(await this.options.stub(machine.id).isRunning())) { this.lost(machine.id); continue; }
+        const state = await this.options.stub(machine.id).condition();
+        if (!state.running) { this.lost(machine.id); continue; }
+        // It got a stop signal and its request to be saved did not arrive: save it now, within its 15 minutes.
+        if (state.stopping) { await this.sleep(machine.id); continue; }
         const { threads } = await this.t3.threads(machine.id, { limit: 20 });
         const latest = this.get(machine.id);
         latest.threads = threads;
