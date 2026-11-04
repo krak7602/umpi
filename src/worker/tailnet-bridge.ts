@@ -18,4 +18,12 @@ export class TailnetBridge extends Container<TailnetBridgeEnvironment> {
     super(ctx, env);
     this.envVars = { TS_AUTHKEY: env.UMPI_TAILSCALE_AUTHKEY ?? "" };
   }
+
+  /**
+   * The bridge keeps nothing, so idle means stop outright. The default only sends a stop signal, and a container
+   * that ignores it keeps running (and billing) with the library asking again every five minutes.
+   */
+  override async onActivityExpired(): Promise<void> {
+    if (this.ctx.container?.running) await this.destroy();
+  }
 }

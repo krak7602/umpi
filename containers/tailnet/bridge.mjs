@@ -40,3 +40,6 @@ createServer(async (req, res) => {
   if (!response.body) { res.end(); return; }
   Readable.fromWeb(response.body).on("error", () => res.destroy()).pipe(res);
 }).listen(8080, "0.0.0.0");
+
+// As the container's main process, Node ignores stop signals unless it handles them; without this the bridge never sleeps.
+for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => process.exit(0));
