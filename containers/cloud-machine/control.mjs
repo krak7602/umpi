@@ -95,7 +95,9 @@ async function settings(input) {
 
 async function startT3() {
   if (t3 && t3.exitCode === null) return;
-  t3 = spawn("t3", ["serve", "--port", "3773"], { cwd: HOME, stdio: ["ignore", "ignore", "ignore"], detached: false });
+  // All interfaces: the machine's Durable Object reaches T3 Code on this port for the owner's T3 Code apps. Nothing
+  // else can reach a container port, and T3 Code asks every client for its own pairing.
+  t3 = spawn("t3", ["serve", "--host", "0.0.0.0", "--port", "3773"], { cwd: HOME, stdio: ["ignore", "ignore", "ignore"], detached: false });
   for (let attempt = 0; attempt < 120; attempt++) {
     try { const res = await fetch("http://127.0.0.1:3773/mcp", { method: "POST", signal: AbortSignal.timeout(2000) }); if (res.status) return; } catch {}
     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -144,6 +146,15 @@ createServer(async (req, res) => {
       const { size } = await stat(file);
       res.writeHead(200, { "content-type": "application/zstd", "content-length": String(size) });
       return void createReadStream(file).pipe(res);
+    }
+    if (path === "/pairing" && req.method === "POST") {
+      // A one-time link for the owner's T3 Code app, at the machine's public address.
+      const { baseUrl } = JSON.parse(await readBody(req));
+      if (typeof baseUrl !== "string" || !/^https:\/\/[a-z0-9.-]+$/.test(baseUrl)) return json(res, 400, { error: "baseUrl must be https://host" });
+      const { stdout } = await run("t3", ["auth", "pairing", "create", "--json", "--label", "T3 mobile", "--ttl", "15m", "--base-url", baseUrl], { cwd: HOME, timeout: 60_000 });
+      const issued = JSON.parse(stdout.slice(stdout.indexOf("{")));
+      if (typeof issued.pairUrl !== "string") throw new Error("T3 Code did not issue a pairing link");
+      return json(res, 200, { pairUrl: issued.pairUrl, expiresAt: issued.expiresAt });
     }
     if (path.startsWith("/t3/")) {
       const target = `http://127.0.0.1:3773${req.url.slice(3)}`;

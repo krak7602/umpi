@@ -11,5 +11,5 @@ WORKDIR /home/agent
 # Fetch T3 Code's server runtime into the image, so a wake does not download it.
 RUN t3 --version && test -d /home/agent/.t3/runtime
 COPY --chown=agent:agent containers/cloud-machine/control.mjs /app/control.mjs
-EXPOSE 8080
+EXPOSE 8080 3773
 CMD ["node", "/app/control.mjs"]

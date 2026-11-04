@@ -4,6 +4,7 @@ import { InputError, boundedText, record } from "../shared/protocol.js";
 import { StateError, type Database } from "./store.js";
 import { T3Error, type T3CodeStore, type T3Thread } from "./t3-code.js";
 import type { T3Watcher } from "./t3-watch.js";
+import type { MachineDns } from "./cloudflare-dns.js";
 
 /** What a cloud machine needs at each start; secrets travel in the request body, never into saved state. */
 export interface CloudMachineStart {
@@ -35,18 +36,28 @@ export interface CloudMachineRecord {
   savedBytes?: number;
   threads?: T3Thread[];
   error?: string;
+  /** The public address the owner's T3 Code apps use, once opened there. */
+  address?: string;
+  /** When one of its threads was last seen working. */
+  activeAt?: string;
 }
 export interface CloudMachineStub {
   wake(start: CloudMachineStart, snapshotKey: string): Promise<{ token: string; restored: boolean }>;
   isRunning(): Promise<boolean> | boolean;
   save(): Promise<{ size: number }>;
   discard(): Promise<void>;
+  publish(hostname: string): Promise<void>;
+  pairing(baseUrl: string): Promise<{ pairUrl: string; expiresAt?: string }>;
+  inUse(): Promise<{ sockets: number; appAt: number }> | { sockets: number; appAt: number };
 }
 export interface CloudMachineOptions {
   stub(id: string): CloudMachineStub;
   /** Everything a start needs except the machine's own gateway token; undefined when cloud machines are not set up. */
   start(): Omit<CloudMachineStart, "modelToken"> | undefined;
   deleteSaved(key: string): Promise<void>;
+  /** The domain whose `<machine>-umpi.<domain>` names reach Umpi, and the DNS to create them; unset when not set up. */
+  publicDomain?(): string | undefined;
+  dns?(): MachineDns | undefined;
 }
 
 export const CLOUD_MAX_AWAKE = 6;
@@ -54,6 +65,9 @@ export const CLOUD_MAX_MACHINES = 24;
 const IDLE_CHECK_MS = 120_000;
 const SAVE_LIMIT_MS = 600_000;
 const RECENT_USE_MS = 180_000;
+/** A connected T3 Code app keeps a machine awake while it sends anything, up to two hours after a thread last worked. */
+const APP_QUIET_MS = 10 * 60_000;
+const APP_AWAKE_MS = 2 * 3_600_000;
 const ACTIVE = new Set(["preparing", "queued", "starting", "running", "waiting"]);
 
 /** `owner/name`, or a GitHub SSH or HTTPS address, as an SSH address. */
@@ -197,13 +211,39 @@ export class CloudMachines {
   }
 
   /** Deletes a machine and its saved state. */
-  async remove(id: string): Promise<{ removed: true }> {
-    this.get(id);
+  async remove(id: string): Promise<{ removed: true; note?: string }> {
+    const machine = this.get(id);
+    let note: string | undefined;
+    if (machine.address) {
+      try { await this.options.dns?.()?.remove(new URL(machine.address).hostname); }
+      catch (error) { note = `Its address could not be removed (${error instanceof Error ? error.message.slice(0, 150) : "unknown"}); it now leads nowhere.`; }
+    }
     await this.options.stub(id).discard();
     await this.options.deleteSaved(this.key(id));
     try { this.t3.remove(id); } catch { /* never registered */ }
     this.db.all("DELETE FROM umpi_cloud_machines WHERE id=?", id);
-    return { removed: true };
+    return { removed: true, ...(note ? { note } : {}) };
+  }
+
+  /**
+   * Opens a machine in the owner's T3 Code app: wakes it, gives it its public address (a DNS name the first time), and
+   * returns a one-time pairing link for that address. Pairing is once per machine; it survives sleep, for 30 days.
+   */
+  async open(id: string): Promise<{ address: string; pairUrl: string; expiresAt?: string; firstTime: boolean }> {
+    const domain = this.options.publicDomain?.(), dns = this.options.dns?.();
+    if (!domain || !dns) throw new T3Error("Opening cloud machines in T3 Code's app is not set up on this Umpi");
+    const hostname = `${id.replace(/^cloud-/, "")}-umpi.${domain}`, address = `https://${hostname}`;
+    const firstTime = this.get(id).address !== address;
+    if (firstTime) {
+      await dns.add(hostname);
+      const machine = this.get(id); machine.address = address; this.save(machine);
+    }
+    await this.ensureAwake(id);
+    const stub = this.options.stub(id);
+    await stub.publish(hostname);
+    const pairing = await stub.pairing(address);
+    this.used(id);
+    return { address, ...pairing, firstTime };
   }
 
   /** Every two minutes while a machine is awake: a machine with nothing working for two checks is saved and stopped. */
@@ -218,7 +258,13 @@ export class CloudMachines {
         latest.threads = threads;
         latest.checkedAt = new Date(this.now()).toISOString();
         const recent = latest.lastUseAt ? this.now() - Date.parse(latest.lastUseAt) < RECENT_USE_MS : false;
-        latest.idleChecks = threads.some(thread => ACTIVE.has(thread.status) && thread.status !== "waiting") || recent ? 0 : latest.idleChecks + 1;
+        const working = threads.some(thread => ACTIVE.has(thread.status) && thread.status !== "waiting");
+        if (working) latest.activeAt = latest.checkedAt;
+        // The owner's T3 Code app, while connected and in use, keeps it awake, but not for ever.
+        const app = latest.address ? await this.options.stub(machine.id).inUse() : undefined;
+        const since = Math.max(latest.activeAt ? Date.parse(latest.activeAt) : 0, latest.wokeAt ? Date.parse(latest.wokeAt) : 0);
+        const appInUse = !!app && app.sockets > 0 && this.now() - app.appAt < APP_QUIET_MS && this.now() - since < APP_AWAKE_MS;
+        latest.idleChecks = working || recent || appInUse ? 0 : latest.idleChecks + 1;
         this.save(latest);
         if (latest.idleChecks >= 2) await this.sleep(machine.id);
       } catch { /* the next check tries again */ }
@@ -261,6 +307,15 @@ export function cloudMachineTools(machines: CloudMachines, watcher?: T3Watcher):
     defineTool({ name: "cloud_machines", description: "List the owner's cloud machines: awake or asleep, repository, and their threads as last seen. Read-only; does not wake anything.",
       parameters: Type.Object({}, { additionalProperties: false }), replay: "safe",
       async execute() { return result(async () => ({ machines: machines.list().map(view) })); } }),
+    defineTool({ name: "cloud_machine_open", description: "When the owner wants to open a cloud machine in T3 Code's own app (phone or desktop): wakes it and returns its address and a one-time pairing link, valid 15 minutes. Give the owner the pairLink exactly as returned, and say: copy it, then in T3 Code add an environment and paste it. Pairing is needed once per machine (firstTime); after that the app finds it at its address whenever it is awake, for 30 days. A sleeping machine is not reachable from the app: it is woken from Umpi.",
+      parameters: Type.Object({ machine: Type.String({ maxLength: 100 }) }, { additionalProperties: false }), replay: "safe",
+      async execute(input) {
+        return result(async () => {
+          const machine = machines.pick(record(input).machine);
+          const opened = await machines.open(machine.id);
+          return { machine: machine.label, address: opened.address, pairLink: opened.pairUrl, expiresAt: opened.expiresAt, firstTime: opened.firstTime };
+        });
+      } }),
     defineTool({ name: "cloud_machine_wake", description: "Wake a sleeping cloud machine, restoring its saved state, so the owner can continue in T3 Code. Messaging one of its threads wakes it too.",
       parameters: Type.Object({ machine: Type.String({ maxLength: 100 }) }, { additionalProperties: false }), replay: "safe",
       async execute(input) { return result(async () => { const machine = machines.pick(record(input).machine); await machines.ensureAwake(machine.id); return { awake: true, machine: machine.label }; }); } }),

@@ -192,6 +192,11 @@ Cloud machines need the `CloudMachine` container (in both Worker configs), the `
 2. Store the commit identity with `npx wrangler secret put UMPI_GIT_IDENTITY --config wrangler.local.jsonc`: a JSON object such as `{"name": "Example Person", "email": "person@example.com", "byRemote": [{"remote": "git@github.com:example-org/**", "email": "person@example.org"}]}`. List each remote form the organization uses (SSH and HTTPS).
 3. Deploy without `--containers-rollout=none` the first time, so the image is built and pushed. Docker must be running.
 
+To open cloud machines in T3 Code's own apps (optional):
+
+1. In the Cloudflare dashboard, create an API token limited to the zone that holds Umpi's hostname, with Zone → Zone → Read and Zone → DNS → Edit. Store it with `npx wrangler secret put UMPI_CLOUDFLARE_DNS_TOKEN --config wrangler.local.jsonc` from standard input.
+2. Add a route `{ "pattern": "*-umpi.<zone>/*", "zone_name": "<zone>" }` to `wrangler.local.jsonc`, next to Umpi's own custom domain. Umpi's hostname must be `<name>.<zone>`: machine names are `<id>-umpi.<zone>`, one level under the zone, so the zone's free certificate covers them.
+
 Umpi learns its own public address from incoming HTTPS requests and gives machines `<origin>/api/cloud/model` as Pi's endpoint. A local copy sets `UMPI_CLOUD_MODEL_URL` (for example `http://host.docker.internal:8788/api/cloud/model`) and `dev.enable_containers`. Local reloads stop running containers; Umpi then marks those machines asleep and wakes them from their last save.
 
 ### Operate subagents
