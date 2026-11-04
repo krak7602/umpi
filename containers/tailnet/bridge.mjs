@@ -5,6 +5,8 @@ import { Readable } from "node:stream";
 
 const TAILNET_HOST = /^[a-z0-9-]{1,63}\.[a-z0-9-]{1,63}\.ts\.net$/i;
 const DROP_REQUEST = new Set(["host", "connection", "keep-alive", "transfer-encoding", "upgrade", "content-length", "x-umpi-target", "proxy-authorization", "proxy-connection"]);
+// Umpi itself waits 20 seconds for a tailnet machine.
+const UPSTREAM_MS = 60_000;
 const DROP_RESPONSE = new Set(["connection", "keep-alive", "transfer-encoding", "content-encoding", "content-length"]);
 
 function fail(res, status, message) {
@@ -28,7 +30,8 @@ createServer(async (req, res) => {
   res.on("close", () => abort.abort());
   let response;
   try {
-    response = await fetch(target, { method: req.method, headers, redirect: "manual", signal: abort.signal,
+    // An offline machine may never answer. A request that never ends keeps the bridge awake, so each one has a limit.
+    response = await fetch(target, { method: req.method, headers, redirect: "manual", signal: AbortSignal.any([abort.signal, AbortSignal.timeout(UPSTREAM_MS)]),
       ...(req.method === "GET" || req.method === "HEAD" ? {} : { body: Readable.toWeb(req), duplex: "half" }) });
   } catch (error) {
     const cause = error?.cause?.code ?? error?.cause?.message ?? error?.message ?? "unknown";
