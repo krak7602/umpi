@@ -3,6 +3,7 @@ import { defineTool, type ToolExecutionResult, type ToolRegistration } from "@ea
 import { InputError, boundedText, record } from "../shared/protocol.js";
 import { StateError, type Database, type Store, type TelegramMarkup } from "./store.js";
 import { T3Error, type T3Action, type T3CodeStore } from "./t3-code.js";
+import type { T3Watcher } from "./t3-watch.js";
 
 /**
  * Actions on the owner's T3 Code threads. When the owner asked for an action in the conversation, Umpi acts at once.
@@ -61,6 +62,8 @@ export function parseAction(input: Record<string, unknown>): T3Action {
 }
 
 export class T3ActionRequests {
+  /** Follows the thread an approved action touched, and holds it when the Mac does not answer. */
+  watcher?: T3Watcher;
   constructor(private readonly db: Database, private readonly owner: Store, private readonly t3: T3CodeStore, private readonly now = () => Date.now()) {
     db.all("CREATE TABLE IF NOT EXISTS umpi_t3_requests (id TEXT PRIMARY KEY, approve TEXT NOT NULL, decline TEXT NOT NULL, data TEXT NOT NULL)");
   }
@@ -115,9 +118,11 @@ export class T3ActionRequests {
     request.status = "done"; request.outcome = "running"; this.save(request);
     let text: string;
     try {
-      const result = await this.t3.act(request.machineId, request.action, `umpi-${request.id}`);
-      request.outcome = JSON.stringify(result ?? {}).slice(0, 1_000);
-      text = `Done on ${request.machineLabel}.`;
+      const ran = this.watcher
+        ? await this.watcher.run(request.machineId, request.action, `umpi-${request.id}`, "approval", request.threadTitle)
+        : { result: await this.t3.act(request.machineId, request.action, `umpi-${request.id}`) };
+      request.outcome = JSON.stringify(ran.held ? { held: true } : ran.result ?? {}).slice(0, 1_000);
+      text = ran.held ? `${request.machineLabel} did not answer. Umpi holds it and sends it when the machine is back.` : `Done on ${request.machineLabel}.`;
     } catch (error) {
       request.status = "failed";
       request.outcome = error instanceof Error ? error.message.slice(0, 500) : "failed";
@@ -164,20 +169,23 @@ const ActionFields = {
 };
 
 /** Umpi's tools that change T3 Code threads, and the request tool for actions Umpi decided on itself. */
-export function t3ActionTools(t3: T3CodeStore, requests: T3ActionRequests): ToolRegistration[] {
+export function t3ActionTools(t3: T3CodeStore, requests: T3ActionRequests, watcher?: T3Watcher): ToolRegistration[] {
   const result = async (run: () => Promise<unknown>): Promise<ToolExecutionResult> => {
     try { return { content: [{ type: "text", text: JSON.stringify(await run()) }] }; }
     catch (error) { return { isError: true, content: [{ type: "text", text: error instanceof T3Error || error instanceof InputError || error instanceof StateError ? error.message : "T3 Code did not complete the action." }] }; }
   };
-  const owned = "Use only for what the owner asked for in this conversation. When you decide on an action yourself, use request_t3_action, which asks the owner first.";
+  const owned = "Use only for what the owner asked for in this conversation. When you decide on an action yourself, use request_t3_action, which asks the owner first. Umpi then follows the thread and tells the owner when it finishes or waits on them; a machine that does not answer gets it when it is back.";
   const act = (kind: T3Action["kind"]) => async (input: unknown, api: { callId: string }) => result(async () => {
     const body = record(input);
-    const target = t3.pick(body.machine);
-    return { machine: target.label, ...record(await t3.act(target.id, parseAction({ ...body, kind }), `umpi-${api.callId}`)) };
+    const target = t3.pick(body.machine), action = parseAction({ ...body, kind }), title = typeof body.threadTitle === "string" && body.threadTitle.trim() ? body.threadTitle.trim().slice(0, 200) : undefined;
+    if (!watcher) return { machine: target.label, ...record(await t3.act(target.id, action, `umpi-${api.callId}`)) };
+    const ran = await watcher.run(target.id, action, `umpi-${api.callId}`, "chat", title);
+    if (ran.held) return { machine: target.label, held: true, note: `${target.label} did not answer (asleep or offline). Umpi holds this and sends it when the machine is back, then tells the owner. Say so in a few words; do not retry.` };
+    return { machine: target.label, ...record(ran.result), ...(kind === "stop" ? {} : { following: true }) };
   });
   return [
     defineTool({ name: "t3_code_send", description: `Send a message to a T3 Code thread on the owner's machine: a follow-up, a correction, or "commit and push". mode auto (default) starts an idle thread, steers a running turn, or queues; queue, steer, and restart force one. ${owned}`,
-      parameters: Type.Object({ machine, threadId: Type.String({ maxLength: 100 }), message: Type.String({ minLength: 1, maxLength: 60_000 }), mode: ActionFields.mode }, { additionalProperties: false }),
+      parameters: Type.Object({ machine, threadId: Type.String({ maxLength: 100 }), threadTitle: ActionFields.threadTitle, message: Type.String({ minLength: 1, maxLength: 60_000 }), mode: ActionFields.mode }, { additionalProperties: false }),
       replay: "safe", async execute(input, api) { return act("send")(input, api); } }),
     defineTool({ name: "t3_code_start", description: `Start a new T3 Code thread on the owner's machine with a task. project names the repository (from t3_code_threads); branch puts the work on a new branch in its own worktree, so it does not disturb the main checkout. The machine's defaults choose the agent and model. ${owned}`,
       parameters: Type.Object({ machine, title: Type.String({ minLength: 1, maxLength: 120 }), message: Type.String({ minLength: 1, maxLength: 60_000 }), project: ActionFields.project,
@@ -190,7 +198,7 @@ export function t3ActionTools(t3: T3CodeStore, requests: T3ActionRequests): Tool
       parameters: Type.Object({ machine, threadId: Type.String({ maxLength: 100 }) }, { additionalProperties: false }),
       replay: "safe", async execute(input) { return result(async () => { const body = record(input); const target = t3.pick(body.machine); return { machine: target.label, ...record(await t3.questions(target.id, boundedText(body.threadId, 100, "thread ID"))) }; }); } }),
     defineTool({ name: "t3_code_answer", description: `Answer a question an agent in a T3 Code thread is waiting on: requestId and answers keyed by question ID, from t3_code_questions. ${owned}`,
-      parameters: Type.Object({ machine, threadId: Type.String({ maxLength: 100 }), requestId: Type.String({ maxLength: 200 }), answers: Type.Record(Type.String(), Type.Unknown()) }, { additionalProperties: false }),
+      parameters: Type.Object({ machine, threadId: Type.String({ maxLength: 100 }), threadTitle: ActionFields.threadTitle, requestId: Type.String({ maxLength: 200 }), answers: Type.Record(Type.String(), Type.Unknown()) }, { additionalProperties: false }),
       replay: "safe", async execute(input, api) { return act("answer")(input, api); } }),
     defineTool({ name: "request_t3_action", description: "Ask the owner to approve a T3 Code action you decided on yourself (not one they asked for): send a message to a thread, start a thread, stop one, or answer an agent's question. Posts the action with Approve and Decline buttons; Approve runs it. Fields as in t3_code_send, t3_code_start, t3_code_stop, and t3_code_answer, plus kind and why (one sentence the owner reads).",
       parameters: Type.Object({ kind: Type.Union([Type.Literal("send"), Type.Literal("start"), Type.Literal("stop"), Type.Literal("answer")]), machine, why: Type.String({ minLength: 1, maxLength: 300 }), ...ActionFields }, { additionalProperties: false }),

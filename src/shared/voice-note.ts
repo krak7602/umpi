@@ -20,6 +20,8 @@ export interface TelegramTextMessage {
   sentAt?: string;
   /** An attachment that was skipped, such as "a video"; the text is its caption. */
   skipped?: string;
+  /** The Telegram message this one replies to. */
+  replyTo?: number;
 }
 
 export interface TelegramVoiceNote {
@@ -33,6 +35,8 @@ export interface TelegramVoiceNote {
   mimeType?: string;
   caption?: string;
   sentAt: string;
+  /** The Telegram message this one replies to. */
+  replyTo?: number;
 }
 
 export interface TelegramFile {
@@ -97,6 +101,8 @@ export interface TelegramInboxDelivery {
   /** Album images left out because the combined size limit was reached. */
   omittedImages?: number;
   document?: TelegramDocument;
+  /** The Telegram message this one replies to. */
+  replyTo?: number;
 }
 
 export type VoiceNoteFailureCode =

@@ -74,7 +74,7 @@ function intent(input: TelegramInboxInput): TelegramInboxInput {
   if (input.kind === "message") {
     return { kind: "message", id: input.id, text: boundedText(input.text, 16_384, "Telegram message"),
       ...(input.sentAt !== undefined ? { sentAt: timestamp(input.sentAt, "Telegram sent time") } : {}),
-      ...(input.skipped !== undefined ? { skipped: boundedText(input.skipped, 64, "skipped attachment") } : {}) };
+      ...(input.skipped !== undefined ? { skipped: boundedText(input.skipped, 64, "skipped attachment") } : {}), ...replyTo(input.replyTo) };
   }
   if (input.kind === "unreadable") {
     return { kind: "unreadable", id: input.id, attachment: boundedText(input.attachment, 64, "Telegram attachment"),
@@ -117,7 +117,13 @@ function intent(input: TelegramInboxInput): TelegramInboxInput {
     ...(input.fileSize !== undefined ? { fileSize: input.fileSize } : {}),
     ...(input.mimeType !== undefined ? { mimeType: boundedText(input.mimeType, 128, "voice MIME type") } : {}),
     ...(input.caption !== undefined && input.caption !== "" ? { caption: boundedText(input.caption, 1_024, "voice caption") } : {}),
+    ...replyTo(input.replyTo),
   };
+}
+function replyTo(value: unknown): { replyTo?: number } {
+  if (value === undefined) return {};
+  if (!Number.isSafeInteger(value) || Number(value) < 1) throw new InputError("Invalid Telegram reply");
+  return { replyTo: Number(value) };
 }
 
 /** Durable admission order, with no automatic replay of a possibly performed transcription. */
@@ -363,6 +369,7 @@ export class TelegramInbox {
       source: input.kind === "message" ? "text" : input.kind === "voice" ? "voice" : input.kind === "file" ? "file" : "image", ...(input.sentAt !== undefined ? { sentAt: input.sentAt } : {}),
       ...(input.kind === "voice" && input.caption !== undefined ? { caption: input.caption } : {}),
       ...(input.kind === "message" && input.skipped !== undefined ? { skipped: input.skipped } : {}),
+      ...((input.kind === "message" || input.kind === "voice") && input.replyTo !== undefined ? { replyTo: input.replyTo } : {}),
       ...(input.kind === "file" && delivering.document ? { document: delivering.document } : {}),
       ...(media ? { images: media.images, ...(media.omitted ? { omittedImages: media.omitted } : {}) } : {}),
     };

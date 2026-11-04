@@ -90,6 +90,7 @@ import { ChatLog, type ChatEntry } from "./chat.js";
 import { ChatSocket } from "./chat-socket.js";
 import { T3CodeStore, T3_CALLBACK_PATH, t3CallbackPage, t3CodeTools } from "./t3-code.js";
 import { T3ActionRequests, t3ActionTools } from "./t3-actions.js";
+import { T3Watcher, t3WatchTools } from "./t3-watch.js";
 import { openTasks, WidgetStore, widgetTools, type WidgetContent, type WidgetItem } from "./widget.js";
 import { KnockPushStore } from "./knock-push.js";
 import type { AppMessage } from "./companion-http.js";
@@ -160,7 +161,7 @@ class Coordinator extends LifecycleCapability {
     this.assistant.telegramInbox.recover();
     // Recover both new proposals and decisions committed before their SQL delivery projection.
     await reconcileMemoryTelegram(await this.assistant.harness.pi(), BACKGROUND_CONTEXT, this.assistant.store);
-    if (this.assistant.telegramInbox.hasPending() || this.assistant.store.pendingOperations().length || this.assistant.store.nextReminder() !== undefined || this.assistant.knocks.nextDue() !== undefined || this.assistant.knockPushes.nextDue() !== undefined || this.assistant.store.readyDeliveries().length || this.assistant.companion.nextPush() || this.assistant.chat.nextPush() || this.assistant.proactive.settings().enabled || this.assistant.planning.settings().enabled || this.assistant.brief.settings().enabled || this.assistant.dream.settings().enabled || this.assistant.mailRuntime.nextDue() !== undefined || this.assistant.coding.active().length || this.assistant.browserRuntime.nextDue() !== undefined || this.assistant.browser.active().length || await this.assistant.subagents.nextDue() !== undefined || this.assistant.cloud.nextDue() !== undefined) await this.wake();
+    if (this.assistant.telegramInbox.hasPending() || this.assistant.store.pendingOperations().length || this.assistant.store.nextReminder() !== undefined || this.assistant.knocks.nextDue() !== undefined || this.assistant.knockPushes.nextDue() !== undefined || this.assistant.store.readyDeliveries().length || this.assistant.companion.nextPush() || this.assistant.chat.nextPush() || this.assistant.proactive.settings().enabled || this.assistant.planning.settings().enabled || this.assistant.brief.settings().enabled || this.assistant.dream.settings().enabled || this.assistant.mailRuntime.nextDue() !== undefined || this.assistant.coding.active().length || this.assistant.browserRuntime.nextDue() !== undefined || this.assistant.browser.active().length || await this.assistant.subagents.nextDue() !== undefined || this.assistant.cloud.nextDue() !== undefined || this.assistant.t3Watch.nextDue() !== undefined) await this.wake();
   }
 
   async onJob({ job }: LifecycleJobContext): Promise<LifecycleJobOutcome> {
@@ -182,6 +183,7 @@ class Coordinator extends LifecycleCapability {
       this.assistant.planning.reconcile();
       await this.assistant.subagents.drive();
       await this.assistant.codingRuntime.drive();
+      this.assistant.t3Watch.kick(work => this.lifecycle.trackAlarmWork(work), () => this.wake());
       await this.assistant.cloud.drive();
       await this.assistant.browserRuntime.drive();
       for (const op of store.pendingOperations()) {
@@ -265,7 +267,7 @@ class Coordinator extends LifecycleCapability {
       // Missing credentials do not justify a two-second polling loop; auth updates wake the queue.
       const pending = store.pendingOperations().some(op => op.status === "submitted");
       const outbox = store.readyDeliveries().length > 0;
-      const wakeAt = Math.min(due ?? Infinity, proactive.nextDue(Date.now(), store.hasForegroundInput()) ?? Infinity, this.assistant.planning.nextDue() ?? Infinity, this.assistant.brief.nextDue() ?? Infinity, this.assistant.dream.nextDue() ?? Infinity, this.assistant.dreamRuntime.nextDue() ?? Infinity, this.assistant.alerts.nextDue() ?? Infinity, this.assistant.journal.nextDue() ?? Infinity, this.assistant.mailRuntime.nextDue() ?? Infinity, this.assistant.codingRuntime.nextDue() ?? Infinity, this.assistant.browserRuntime.nextDue() ?? Infinity, await this.assistant.subagents.nextDue() ?? Infinity, this.assistant.telegramInbox.nextDue() ?? Infinity, this.assistant.knocks.nextDue() ?? Infinity, this.assistant.knockPushes.nextDue() ?? Infinity, this.assistant.cloud.nextDue() ?? Infinity, pending ? Date.now() + 2_000 : Infinity, outbox || this.assistant.companion.nextPush() || this.assistant.chat.nextPush() ? Date.now() + 100 : Infinity);
+      const wakeAt = Math.min(due ?? Infinity, proactive.nextDue(Date.now(), store.hasForegroundInput()) ?? Infinity, this.assistant.planning.nextDue() ?? Infinity, this.assistant.brief.nextDue() ?? Infinity, this.assistant.dream.nextDue() ?? Infinity, this.assistant.dreamRuntime.nextDue() ?? Infinity, this.assistant.alerts.nextDue() ?? Infinity, this.assistant.journal.nextDue() ?? Infinity, this.assistant.mailRuntime.nextDue() ?? Infinity, this.assistant.codingRuntime.nextDue() ?? Infinity, this.assistant.browserRuntime.nextDue() ?? Infinity, await this.assistant.subagents.nextDue() ?? Infinity, this.assistant.telegramInbox.nextDue() ?? Infinity, this.assistant.knocks.nextDue() ?? Infinity, this.assistant.knockPushes.nextDue() ?? Infinity, this.assistant.cloud.nextDue() ?? Infinity, this.assistant.t3Watch.nextDue() ?? Infinity, pending ? Date.now() + 2_000 : Infinity, outbox || this.assistant.companion.nextPush() || this.assistant.chat.nextPush() ? Date.now() + 100 : Infinity);
       if (Number.isFinite(wakeAt)) return { rescheduleAt: wakeAt };
     } catch {
       this.assistant.modelIssue = "Coordinator reconciliation failed; work is retained and retry is scheduled. Check configuration and protected status.";
@@ -323,6 +325,7 @@ export class Assistant extends Agent<Env> {
   readonly knockPushes: KnockPushStore;
   readonly t3: T3CodeStore;
   readonly t3Requests: T3ActionRequests;
+  readonly t3Watch: T3Watcher;
   readonly cloud: CloudMachines;
   private models?: ReturnType<typeof createAssistantModels>;
   private chatSocket?: ChatSocket;
@@ -355,6 +358,10 @@ export class Assistant extends Agent<Env> {
       catch { this.obsyIssue = "Invalid UMPI_OBSY_PREFIX; use an empty prefix or one that ends in /"; }
     }
     this.proactive = new ProactiveStore(this.store, this.timezone);
+    this.t3Watch = new T3Watcher(this.store.db, this.store, this.t3, { quiet: now => this.proactive.quiet(now), timezone: this.timezone });
+    this.t3Requests.watcher = this.t3Watch;
+    // A cloud machine's threads are checked once more before it sleeps, so a finished thread is announced.
+    this.cloud.beforeSleep = id => this.t3Watch.check(id, true);
     this.planning = new PlanningStore(this.proactive, this.timezone);
     this.situation = new SituationStore(this.store.db, this.timezone);
     this.activity = new ActivityStore(this.store.db);
@@ -472,7 +479,7 @@ export class Assistant extends Agent<Env> {
       track: work => this.lifecycle.trackAlarmWork(work),
     });
     const browserProfile = browserExtension(this.browserRuntime);
-    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...activityTools(this.store, this.activity, this.timezone, () => this.notifyExecutor()), ...journalTools(this.journal, id => this.store.isBackgroundSession(id)), ...widgetTools(this.widgets, () => this.coordinator.wake()), ...t3CodeTools(this.t3), ...t3ActionTools(this.t3, this.t3Requests), ...cloudMachineTools(this.cloud), ...web, ...decision, ...historyTools(this.dream, this.history, id => this.store.isBackgroundSession(id)), ...contextTools(this.contextHealth, id => !this.store.isBackgroundSession(id)), ...delegation.tools ?? []];
+    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...activityTools(this.store, this.activity, this.timezone, () => this.notifyExecutor()), ...journalTools(this.journal, id => this.store.isBackgroundSession(id)), ...widgetTools(this.widgets, () => this.coordinator.wake()), ...t3CodeTools(this.t3, () => this.t3Watch.recent()), ...t3ActionTools(this.t3, this.t3Requests, this.t3Watch), ...t3WatchTools(this.t3, this.t3Watch), ...cloudMachineTools(this.cloud, this.t3Watch), ...web, ...decision, ...historyTools(this.dream, this.history, id => this.store.isBackgroundSession(id)), ...contextTools(this.contextHealth, id => !this.store.isBackgroundSession(id)), ...delegation.tools ?? []];
     const guardedProactiveTools = guardDreamReviewTools(guardBriefReviewTools(guardMailReviewTools(guardPlanningReviewTools(proactiveTools(this.proactive, () => this.coordinator.wake()), this.planningRuntime), this.mailRuntime), this.brief), this.dream);
     const briefSources = { brief: this.brief, situation: this.situation, mail: this.mail, planning: this.planningRuntime, calendarCredentials: () => this.config.UMPI_CALENDAR_CREDENTIALS, activity: this.activity, dream: this.dream };
     const ownerSessions = () => (["telegram", "control"] as const).flatMap(channel => { const session = this.store.session(channel); return session ? [{ channel, session }] : []; });
@@ -810,11 +817,14 @@ export class Assistant extends Agent<Env> {
     const existing = this.store.operation(`message:telegram:${input.id}`);
     const sessionId = this.store.session("telegram");
     const pendingChoice = !existing && sessionId && !input.text.trimStart().startsWith("/") ? this.store.pendingChoice(sessionId) : undefined;
+    // A reply to a T3 Code notice names its thread, so "push it" reaches the right one.
+    const thread = input.replyTo !== undefined ? this.t3Watch.forMessage(input.replyTo) : undefined;
     const op = await this.admit(input.id, input.text, "telegram", undefined, {
       kind: input.source === "voice" ? "telegram-voice" : input.source === "image" ? "telegram-image" : input.source === "file" ? "telegram-file" : "telegram-text",
       ...(input.sentAt === undefined ? {} : { sentAt: input.sentAt }),
       ...(input.caption === undefined ? {} : { caption: input.caption }),
       ...(input.skipped === undefined ? {} : { skipped: input.skipped }),
+      ...(thread ? { replyTo: { t3Thread: { machine: thread.machineLabel, threadId: thread.threadId, title: thread.title } } } : {}),
       ...(input.omittedImages === undefined ? {} : { omittedImages: input.omittedImages }),
       ...(input.document === undefined ? {} : { file: { name: input.document.name, characters: input.document.text.length, ...(input.document.truncated ? { truncated: true } : {}) } }),
     }, input.images, input.document);
@@ -892,7 +902,7 @@ export class Assistant extends Agent<Env> {
       decisions: { ...this.decisions.status(), ownerEffort: this.efforts },
       knocks: { ...this.knocks.status(), pushed: this.knockPushes.status() },
       chat: { ...this.chat.status(), sockets: this.chatSocket?.count() ?? 0 },
-      t3Code: { ...this.t3.status(), awaitingApproval: this.t3Requests.pending().length },
+      t3Code: { ...this.t3.status(), awaitingApproval: this.t3Requests.pending().length, following: this.t3Watch.watching().length, held: this.t3Watch.held().length },
       cloudMachines: { ...this.cloud.status(), configured: this.cloudStart() !== undefined },
       conversations: this.contextHealth.status([
         { label: "telegram", id: this.store.session("telegram") }, { label: "control", id: this.store.session("control") },
@@ -941,6 +951,7 @@ export class Assistant extends Agent<Env> {
         widget: () => this.widgetContent(),
         t3: this.t3,
         t3Requests: () => this.t3Requests.recent(),
+        t3Act: (machine, action, requestId) => this.t3Watch.run(machine, action, requestId, "app"),
         cloud: async (id, action) => {
           if (action === "wake") { await this.cloud.ensureAwake(id); return { awake: true }; }
           if (action === "sleep") return this.cloud.sleep(id);

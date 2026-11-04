@@ -118,6 +118,8 @@ export function telegramUpdate(value: unknown, config: TelegramConfig): Telegram
       note.mimeType = voice.mime_type;
     }
     if (message.caption !== undefined && message.caption !== "") note.caption = boundedText(message.caption, 1024, "Telegram caption");
+    const replyTo = repliedTo(message);
+    if (replyTo !== undefined) note.replyTo = replyTo;
     return note;
   }
   const caption = message.caption === undefined || message.caption === "" ? undefined : boundedText(message.caption, 1024, "Telegram caption");
@@ -152,7 +154,16 @@ export function telegramUpdate(value: unknown, config: TelegramConfig): Telegram
   if (message.caption !== undefined) throw new InputError("Ambiguous Telegram text message");
   const text: TelegramTextMessage = { kind: "message", id, text: boundedText(message.text, 16_384, "Telegram text") };
   if (message.date !== undefined) text.sentAt = telegramSentAt(message.date);
+  const replyTo = repliedTo(message);
+  if (replyTo !== undefined) text.replyTo = replyTo;
   return text;
+}
+
+/** The message ID a reply points to, when the owner replied to one of Umpi's messages. */
+function repliedTo(message: Record<string, unknown>): number | undefined {
+  if (message.reply_to_message === undefined || message.reply_to_message === null || typeof message.reply_to_message !== "object") return undefined;
+  const id = (message.reply_to_message as Record<string, unknown>).message_id;
+  return Number.isSafeInteger(id) && Number(id) > 0 ? Number(id) : undefined;
 }
 
 /** Attachments Umpi cannot read, in the words used to tell the owner. */

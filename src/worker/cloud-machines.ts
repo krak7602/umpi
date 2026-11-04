@@ -3,6 +3,7 @@ import { defineTool, type ToolExecutionResult, type ToolRegistration } from "@ea
 import { InputError, boundedText, record } from "../shared/protocol.js";
 import { StateError, type Database } from "./store.js";
 import { T3Error, type T3CodeStore, type T3Thread } from "./t3-code.js";
+import type { T3Watcher } from "./t3-watch.js";
 
 /** What a cloud machine needs at each start; secrets travel in the request body, never into saved state. */
 export interface CloudMachineStart {
@@ -70,6 +71,8 @@ function randomToken(): string {
 
 export class CloudMachines {
   private waking = new Map<string, Promise<void>>();
+  /** A last look at a machine's followed threads before it sleeps. */
+  beforeSleep?: (id: string) => Promise<void>;
   constructor(private readonly db: Database, private readonly t3: T3CodeStore, private readonly options: CloudMachineOptions, private readonly now = () => Date.now()) {
     db.all("CREATE TABLE IF NOT EXISTS umpi_cloud_machines (id TEXT PRIMARY KEY, token TEXT NOT NULL UNIQUE, data TEXT NOT NULL)");
     t3.cloud = {
@@ -157,6 +160,7 @@ export class CloudMachines {
   async sleep(id: string): Promise<CloudMachineRecord> {
     const machine = this.get(id);
     if (machine.status !== "awake") return machine;
+    try { await this.beforeSleep?.(id); } catch { /* sleeping matters more than one notice */ }
     // Its threads, as they were, so lists show them while it sleeps.
     try { machine.threads = (await this.t3.threads(id, { limit: 20 })).threads; } catch { /* keep the last list */ }
     // A save that never finishes must not hold up Umpi's other work.
@@ -233,7 +237,7 @@ export class CloudMachines {
 }
 
 /** Umpi's tools for cloud machines. Threads on them are read and acted on with the T3 Code tools. */
-export function cloudMachineTools(machines: CloudMachines): ToolRegistration[] {
+export function cloudMachineTools(machines: CloudMachines, watcher?: T3Watcher): ToolRegistration[] {
   const result = async (run: () => Promise<unknown>): Promise<ToolExecutionResult> => {
     try { return { content: [{ type: "text", text: JSON.stringify(await run()) }] }; }
     catch (error) { return { isError: true, content: [{ type: "text", text: error instanceof T3Error || error instanceof InputError || error instanceof StateError ? error.message : "The cloud machine did not respond." }] }; }
@@ -250,7 +254,8 @@ export function cloudMachineTools(machines: CloudMachines): ToolRegistration[] {
           const body = record(input);
           const created = await machines.create({ title: boundedText(body.title, 60, "title"), task: boundedText(body.task, 60_000, "task"),
             ...(typeof body.repo === "string" && body.repo ? { repo: body.repo } : {}), ...(typeof body.branch === "string" && body.branch ? { branch: body.branch } : {}), ...(body.plan === true ? { plan: true } : {}) });
-          return { machine: view(created.machine), threadId: created.threadId };
+          if (created.threadId) watcher?.arm(created.machine.id, created.threadId, "cloud", created.machine.label);
+          return { machine: view(created.machine), threadId: created.threadId, ...(created.threadId && watcher ? { following: true } : {}) };
         });
       } }),
     defineTool({ name: "cloud_machines", description: "List the owner's cloud machines: awake or asleep, repository, and their threads as last seen. Read-only; does not wake anything.",
