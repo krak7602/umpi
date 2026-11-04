@@ -89,6 +89,57 @@ export class CloudMachine extends Container<CloudMachineEnvironment> {
     }
   }
 
+  /** Lets the owner's T3 Code apps reach this machine at its public address (and no other). */
+  async publish(hostname: string): Promise<void> { await this.ctx.storage.put("publicHost", hostname); }
+
+  /** A one-time pairing link for the owner's T3 Code app, valid 15 minutes. */
+  async pairing(baseUrl: string): Promise<{ pairUrl: string; expiresAt?: string }> {
+    if (!this.ctx.container?.running) throw new Error("The machine is asleep");
+    const response = await this.containerFetch(new Request("http://machine/pairing", { method: "POST", body: JSON.stringify({ baseUrl }), headers: { "content-type": "application/json" } }), 8080);
+    const body = await response.json() as { pairUrl?: string; expiresAt?: string; error?: string };
+    if (!response.ok || !body.pairUrl) throw new Error(body.error ?? `No pairing link was issued (${response.status})`);
+    return { pairUrl: body.pairUrl, ...(body.expiresAt ? { expiresAt: body.expiresAt } : {}) };
+  }
+
+  /** Whether the owner's app is connected now: open sockets, and when the app last sent anything. */
+  inUse(): { sockets: number; appAt: number } { return { sockets: this.sockets, appAt: this.appAt }; }
+  private sockets = 0;
+  private appAt = 0;
+
+  /**
+   * The owner's T3 Code app, at the machine's public address: straight to T3 Code (port 3773), never to the control
+   * port. T3 Code asks every client for its own pairing. A sleeping machine is not woken from outside: its address is
+   * public, so only the owner wakes it, from Umpi.
+   */
+  private async publicFetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (await this.ctx.storage.get<string>("publicHost") !== url.hostname) return new Response("Not found", { status: 404 });
+    if (!this.ctx.container?.running) return new Response("This cloud machine is asleep. Wake it from Umpi (Work, or ask in the chat), then try again.", { status: 503, headers: { "content-type": "text/plain; charset=utf-8", "retry-after": "30" } });
+    this.appAt = Date.now();
+    const headers = new Headers(request.headers);
+    headers.set("x-forwarded-proto", "https"); headers.set("x-forwarded-host", url.host);
+    const response = await this.containerFetch(new Request(request, { headers }), 3773);
+    const upstream = response.webSocket;
+    if (!upstream) return response;
+    // Its own relay, so the app's connection is counted apart from Umpi's own reads.
+    const [client, server] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
+    upstream.accept(); server.accept();
+    this.sockets++;
+    let open = true;
+    const end = (code: number, reason: string) => {
+      if (open) { open = false; this.sockets--; }
+      const safe = code === 1005 || code === 1006 ? 1000 : code;
+      for (const socket of [upstream, server]) { try { socket.close(safe, reason); } catch { /* already closed */ } }
+    };
+    server.addEventListener("message", event => { this.appAt = Date.now(); try { upstream.send(event.data as string | ArrayBuffer); } catch { end(1011, "upstream"); } });
+    upstream.addEventListener("message", event => { try { server.send(event.data as string | ArrayBuffer); } catch { end(1011, "client"); } });
+    server.addEventListener("close", event => end(event.code, event.reason));
+    upstream.addEventListener("close", event => end(event.code, event.reason));
+    server.addEventListener("error", () => end(1011, "client error"));
+    upstream.addEventListener("error", () => end(1011, "upstream error"));
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
   /** Stops the machine without saving, before it is deleted. */
   async discard(): Promise<void> {
     if (this.ctx.container?.running) await this.destroy();
@@ -97,9 +148,11 @@ export class CloudMachine extends Container<CloudMachineEnvironment> {
 
   isRunning(): boolean { return this.ctx.container?.running === true; }
 
-  /** MCP relay to T3 Code. A stopped machine answers 503; Umpi wakes it first. */
+  /** MCP relay to T3 Code for Umpi (host `machine`), or the owner's app at the public address. */
   override async fetch(request: Request): Promise<Response> {
-    const path = new URL(request.url).pathname;
+    const url = new URL(request.url);
+    if (url.hostname !== "machine") return this.publicFetch(request);
+    const path = url.pathname;
     if (!path.startsWith("/t3/")) return new Response("Not found", { status: 404 });
     if (!this.ctx.container?.running) return Response.json({ error: "machine_asleep" }, { status: 503 });
     this.renewActivityTimeout();

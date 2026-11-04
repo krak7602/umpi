@@ -70,6 +70,7 @@ import { TailnetBridge } from "./tailnet-bridge.js";
 import { cloudFetch, tailnetFetch } from "./tailnet-fetch.js";
 import { CloudMachine } from "./cloud-machine.js";
 import { CloudMachines, cloudMachineTools, type CloudMachineStart } from "./cloud-machines.js";
+import { cloudflareDns } from "./cloudflare-dns.js";
 import { CLOUD_MODEL_PATH, cloudModelRequest } from "./cloud-model.js";
 import { BrowserWorker } from "./browser-cloud.js";
 import type { BrowserCloudClient, BrowserWorkerEnvironment } from "./browser-cloud.js";
@@ -118,7 +119,10 @@ export interface Env extends TelegramConfig, CompanionPushConfig {
   TAILNET_BRIDGE?: { getByName(name: string): { fetch(request: Request): Promise<Response> } };
   UMPI_TAILSCALE_AUTHKEY?: string;
   /** Cloud machines: their containers, the SSH key and commit identity they use, and (local only) the gateway address. */
-  CLOUD_MACHINE?: { getByName(name: string): { fetch(request: Request): Promise<Response>; wake(start: CloudMachineStart, key: string): Promise<{ token: string; restored: boolean }>; save(): Promise<{ size: number }>; discard(): Promise<void>; isRunning(): Promise<boolean> } };
+  CLOUD_MACHINE?: { getByName(name: string): { fetch(request: Request): Promise<Response>; wake(start: CloudMachineStart, key: string): Promise<{ token: string; restored: boolean }>; save(): Promise<{ size: number }>; discard(): Promise<void>; isRunning(): Promise<boolean>;
+    publish(hostname: string): Promise<void>; pairing(baseUrl: string): Promise<{ pairUrl: string; expiresAt?: string }>; inUse(): Promise<{ sockets: number; appAt: number }> } };
+  /** A Cloudflare API token for the owner's zone (Zone Read, DNS Edit): cloud machines' public names. */
+  UMPI_CLOUDFLARE_DNS_TOKEN?: string;
   UMPI_GIT_SSH_KEY?: string;
   UMPI_GIT_IDENTITY?: string;
   UMPI_CLOUD_MODEL_URL?: string;
@@ -348,6 +352,8 @@ export class Assistant extends Agent<Env> {
       stub: id => env.CLOUD_MACHINE!.getByName(id),
       start: () => this.cloudStart(),
       deleteSaved: async key => { await env.CODING_ARCHIVE?.delete(key); },
+      publicDomain: () => this.machineDomain(),
+      dns: () => { const domain = this.machineDomain(); return domain && env.UMPI_CLOUDFLARE_DNS_TOKEN ? cloudflareDns(env.UMPI_CLOUDFLARE_DNS_TOKEN, domain) : undefined; },
     });
     this.t3Requests = new T3ActionRequests(this.store.db, this.store, this.t3);
     this.providerId = env.UMPI_MODEL_PROVIDER || DEFAULT_PROVIDER;
@@ -878,6 +884,16 @@ export class Assistant extends Agent<Env> {
     this.store.enqueue(notice.id, "telegram", `Your Mac's Umpi executor has not connected since ${since}. Mac jobs, coding and browser tasks, and Aside context wait until it is back. On the Mac, run npm run mac -- service-status.`);
   }
 
+  /**
+   * The domain under which cloud machines get `<machine>-umpi.<domain>` names: Umpi's own public host without its
+   * first label (umpi.<domain>), so they share the certificate that covers the domain's first-level names.
+   */
+  private machineDomain(): string | undefined {
+    const origin = this.store.db.all<{ origin: string }>("SELECT origin FROM umpi_public_origin WHERE id=1")[0]?.origin;
+    const labels = origin ? new URL(origin).hostname.split(".") : [];
+    return labels.length >= 3 && !origin!.includes(".workers.dev") ? labels.slice(1).join(".") : undefined;
+  }
+
   /** What every cloud machine start needs, or undefined when cloud machines are not set up. */
   private cloudStart(): Omit<CloudMachineStart, "modelToken"> | undefined {
     const env = this.env as Env;
@@ -1219,6 +1235,9 @@ function failure(error: unknown): Response {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     try {
+      // A cloud machine's public address, for the owner's T3 Code apps: straight to that machine, nothing else.
+      const machine = /^([0-9a-f]{10})-umpi\.[a-z0-9.-]+$/.exec(new URL(request.url).hostname)?.[1];
+      if (machine) return env.CLOUD_MACHINE ? await env.CLOUD_MACHINE.getByName(`cloud-${machine}`).fetch(request) : new Response("Not found", { status: 404 });
       const information = publicPage(request);
       if (information) return information;
       if (new URL(request.url).pathname === "/health" && request.method === "GET") return Response.json({ ok: true });

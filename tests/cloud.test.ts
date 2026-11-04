@@ -6,6 +6,7 @@ import { T3CodeStore } from "../src/worker/t3-code.js";
 import { CloudMachines, githubRemote, CLOUD_MAX_AWAKE, type CloudMachineStart } from "../src/worker/cloud-machines.js";
 import { asProviderContext, cloudModelRequest, piMessagesEvent } from "../src/worker/cloud-model.js";
 import { cloudFetch } from "../src/worker/tailnet-fetch.js";
+import { cloudflareDns } from "../src/worker/cloudflare-dns.js";
 
 function database(t: TestContext): Database {
   const sqlite = new DatabaseSync(":memory:"); t.after(() => sqlite.close());
@@ -42,6 +43,8 @@ function fixture(t: TestContext) {
   const events: string[] = [];
   const running = new Set<string>();
   let now = Date.parse("2026-11-04T10:00:00Z");
+  const app = { sockets: 0, appAt: 0 };
+  const published = new Map<string, string>();
   const t3 = new T3CodeStore(database(t), cloudFetch(() => machine, async () => { throw new Error("no other machines"); }), () => now);
   const start: Omit<CloudMachineStart, "modelToken"> = { modelUrl: "https://umpi.example/api/cloud/model", models: [{ id: "claude-x", name: "X", reasoning: true, input: ["text"], contextWindow: 1000, maxTokens: 100 }], defaultModel: "claude-x" };
   const cloud = new CloudMachines(database(t), t3, {
@@ -50,11 +53,16 @@ function fixture(t: TestContext) {
       async save() { events.push(`save ${id}`); running.delete(id); return { size: 1234 }; },
       async discard() { events.push(`discard ${id}`); running.delete(id); },
       isRunning: () => running.has(id),
+      async publish(hostname) { published.set(id, hostname); },
+      async pairing(baseUrl) { events.push(`pair ${id} ${baseUrl}`); return { pairUrl: `${baseUrl}/pair#token=one-time`, expiresAt: "2026-11-04T10:15:00Z" }; },
+      inUse: () => app,
     }),
     start: () => start,
     deleteSaved: async key => { events.push(`delete ${key}`); },
+    publicDomain: () => "example.com",
+    dns: () => ({ async add(hostname) { events.push(`dns add ${hostname}`); }, async remove(hostname) { events.push(`dns remove ${hostname}`); } }),
   }, () => now);
-  return { cloud, t3, machine, events, running, advance: (ms: number) => { now += ms; } };
+  return { cloud, t3, machine, events, running, app, published, now: () => now, advance: (ms: number) => { now += ms; } };
 }
 
 test("GitHub repositories are cloned over SSH", () => {
@@ -170,4 +178,67 @@ test("a machine whose container stopped unexpectedly wakes again from its last s
   await t3.read(machine.id, "th-1", { limit: 3 });
   assert.equal(events.filter(event => event.startsWith("wake")).length, 2);
   assert.equal(cloud.list()[0]!.status, "awake");
+});
+
+test("a machine opens in the owner's T3 Code app at its own address; a connected app keeps it awake for a while", async t => {
+  const { cloud, events, running, app, published, now, advance, machine: t3 } = fixture(t);
+  const { machine } = await cloud.create({ title: "Fix login", task: "Fix the login bug" });
+  const host = `${machine.id.slice("cloud-".length)}-umpi.example.com`;
+  await cloud.sleep(machine.id);
+  events.length = 0;
+  const opened = await cloud.open(machine.id);
+  assert.deepEqual(opened, { address: `https://${host}`, pairUrl: `https://${host}/pair#token=one-time`, expiresAt: "2026-11-04T10:15:00Z", firstTime: true });
+  assert.deepEqual(events.map(event => event.replace(/ cloud-machines.*/, "")), [`dns add ${host}`, `wake ${machine.id}`, `pair ${machine.id} https://${host}`], "a sleeping machine is woken to pair");
+  assert.equal(published.get(machine.id), host);
+  events.length = 0;
+  assert.equal((await cloud.open(machine.id)).firstTime, false);
+  assert.ok(!events.some(event => event.startsWith("dns")), "the name is made once");
+
+  // Idle threads, but the app is connected and in use: it stays awake, up to two hours after its threads last worked.
+  t3.finish();
+  const idle = async () => { advance(125_000); await cloud.drive(); };
+  for (let i = 0; i < 3; i++) await idle();
+  assert.equal(running.has(machine.id), false, "nothing working and no app: it sleeps");
+  await cloud.ensureAwake(machine.id);
+  app.sockets = 1;
+  for (let i = 0; i < 6; i++) { app.appAt = now(); await idle(); }
+  assert.equal(running.has(machine.id), true, "the app in use keeps it awake");
+  advance(11 * 60_000); await idle(); await idle(); await idle();
+  assert.equal(running.has(machine.id), false, "an app left open but unused does not");
+  await cloud.ensureAwake(machine.id);
+  for (let i = 0; i < 70; i++) { app.appAt = now(); await idle(); }
+  assert.equal(running.has(machine.id), false, "nor does one used for over two hours with no thread working");
+  // Woken again later (threads last worked hours ago), the app keeps it awake from the wake on.
+  await cloud.ensureAwake(machine.id);
+  for (let i = 0; i < 6; i++) { app.appAt = now(); await idle(); }
+  assert.equal(running.has(machine.id), true, "the two hours count from the wake, not from old work");
+
+  events.length = 0;
+  await cloud.remove(machine.id);
+  assert.ok(events.includes(`dns remove ${host}`), "deleting the machine removes its name");
+});
+
+test("a machine's DNS name is one proxied record, made once and removed with the machine", async () => {
+  const records = new Map<string, { id: string; body: Record<string, unknown> }>();
+  const calls: string[] = [];
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = new URL(String(input)), method = init?.method ?? "GET";
+    calls.push(`${method} ${url.pathname}`);
+    assert.equal(new Headers(init?.headers).get("authorization"), "Bearer dns-token");
+    const ok = (result: unknown) => Response.json({ success: true, result });
+    if (url.pathname === "/client/v4/zones") return ok(url.searchParams.get("name") === "example.com" ? [{ id: "zone-1" }] : []);
+    if (url.pathname === "/client/v4/zones/zone-1/dns_records" && method === "GET") return ok([...records.values()].filter(record => record.body.name === url.searchParams.get("name")));
+    if (url.pathname === "/client/v4/zones/zone-1/dns_records" && method === "POST") { const body = JSON.parse(String(init!.body)); records.set("r1", { id: "r1", body }); return ok({ id: "r1" }); }
+    if (method === "DELETE") { records.delete(url.pathname.split("/").pop()!); return ok({}); }
+    return Response.json({ success: false, errors: [{ message: "unexpected" }] }, { status: 400 });
+  };
+  const dns = cloudflareDns("dns-token", "example.com", fetcher);
+  await dns.add("0123456789-umpi.example.com");
+  await dns.add("0123456789-umpi.example.com");
+  assert.deepEqual(records.get("r1")?.body, { type: "AAAA", name: "0123456789-umpi.example.com", content: "100::", proxied: true, ttl: 1, comment: "Umpi cloud machine" });
+  assert.equal(calls.filter(call => call.startsWith("POST")).length, 1, "made once");
+  assert.equal(calls.filter(call => call === "GET /client/v4/zones").length, 1, "the zone is looked up once");
+  await dns.remove("0123456789-umpi.example.com");
+  assert.equal(records.size, 0);
+  await assert.rejects(cloudflareDns("dns-token", "other.example", fetcher).add("x-umpi.other.example"), /cannot see the zone/);
 });
