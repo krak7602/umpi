@@ -21,6 +21,11 @@ const MAIL_FACTS_PER_REVIEW = 150;
 /** Every thread that needs the owner is recorded; the digest lists the newest of them and points to /mail for the rest. */
 const MAIL_DIGEST_LISTED = 15;
 const MAIL_FACTS_PER_THREAD = 10;
+/** Characters of the request and of the owner's reply the reply check reads. */
+const MAIL_REPLY_EXCERPT = 1_500;
+/** Threads the owner answered, listed so the owner conversation can tell what was already handled. */
+const MAIL_RECENT_REPLY_DAYS = 7;
+const MAIL_RECENT_REPLIES = 10;
 /** A saved scan usually stops on a short provider rate limit, so resume soon. */
 const MAIL_CONTINUATION_RETRY_MS = 60_000;
 // About 1,000 Gmail quota units per page. Spacing pages keeps the per-user moving average far below 250 units/second.
@@ -58,6 +63,11 @@ export interface MailThread {
   factScan?: number;
   /** Already triaged, but its retained messages still need a facts-only read. */
   factsPending?: boolean;
+  /**
+   * The owner's reply answered this thread and may settle these situation facts; the decision service reads the
+   * reply once and the check is removed. Bounded excerpts only.
+   */
+  replyCheck?: { at: string; factIds: string[]; request: string; reply: string };
   /** The decision-model screen of this content; removed when new mail arrives. Absent while screening is waiting. */
   screen?: { at: string; passed: boolean; attention?: number; facts?: number; unavailable?: true; extracted?: true };
   updatedAt: string;
@@ -355,8 +365,15 @@ export class MailStore {
           starred: snapshot.starred, category: snapshot.category, awaitingReply: snapshot.awaitingReply, webUrl: snapshot.webUrl,
           messages: low ? [] : snapshot.messages, updatedAt: result.checkedAt,
         };
-        delete next.summary; delete next.reason; delete next.suggestedAction; delete next.snoozeUntil; delete next.notificationPending; delete next.factScan; delete next.factsPending; delete next.screen;
+        delete next.summary; delete next.reason; delete next.suggestedAction; delete next.snoozeUntil; delete next.notificationPending; delete next.factScan; delete next.factsPending; delete next.screen; delete next.replyCheck;
         if (!resolved) delete next.handledAt;
+        // The owner's own reply is evidence for what this thread was about: facts from it learn the reply, and any
+        // request it may settle is checked once.
+        if (resolved && this.situation && snapshot.lastOutgoingAt !== previous?.lastOutgoingAt) {
+          const factIds = this.situation.noteOwnerReply(id, snapshot.lastOutgoingAt!, now);
+          const excerpt = (direction: "incoming" | "outgoing") => snapshot.messages.filter(message => message.direction === direction).at(-1)?.excerpt.slice(0, MAIL_REPLY_EXCERPT) ?? "";
+          if (factIds.length) next.replyCheck = { at: snapshot.lastOutgoingAt!, factIds, request: excerpt("incoming"), reply: excerpt("outgoing") };
+        }
         if (low) { next.summary = `Skipped without review: Gmail ${snapshot.category} tab.`; next.factScan = MAIL_FACT_SCAN_VERSION; }
         else if (resolved) next.factsPending = true;
         this.writeThread(next); changed++;
@@ -393,6 +410,32 @@ export class MailStore {
     return this.db.all<{ count: number }>(`SELECT count(*) AS count FROM umpi_mail_threads WHERE (status='pending' OR json_extract(data,'$.factsPending')=1)${this.ready()}`)[0]?.count ?? 0;
   }
   private hasWork(): boolean { return this.workCount() > 0; }
+  /** Threads whose owner reply still needs its check, oldest reply first. */
+  replyChecks(limit = 20): MailThread[] {
+    return this.rows("SELECT data FROM umpi_mail_threads WHERE json_extract(data,'$.replyCheck') IS NOT NULL ORDER BY json_extract(data,'$.replyCheck.at') LIMIT ?", limit);
+  }
+  /**
+   * Settles the facts the check found answered, and removes the check. The thread version is unchanged, so an open
+   * review of the thread stays valid.
+   */
+  applyReplyCheck(id: string, providerVersion: string, settled: readonly string[], now = Date.now()): number {
+    finiteNow(now);
+    return this.db.transaction(() => {
+      const thread = this.thread(id), check = thread?.replyCheck;
+      if (!thread || !check || thread.providerVersion !== providerVersion) return 0;
+      let count = 0;
+      for (const factId of settled) if (check.factIds.includes(factId) && this.situation?.settleByReply(factId, check.at, now)) count++;
+      const next = { ...thread }; delete next.replyCheck;
+      this.writeThread(next);
+      return count;
+    });
+  }
+  /** Threads the owner answered recently: the reply is the latest message in each. */
+  recentReplies(now = Date.now()): { subject: string; sender: string; repliedAt: string; account?: string }[] {
+    return this.rows<MailThread>(`SELECT data FROM umpi_mail_threads WHERE json_extract(data,'$.lastOutgoingAt') >= ? AND json_extract(data,'$.lastOutgoingAt') >= json_extract(data,'$.lastIncomingAt')
+      ORDER BY json_extract(data,'$.lastOutgoingAt') DESC LIMIT ?`, iso(now - MAIL_RECENT_REPLY_DAYS * 86_400_000), MAIL_RECENT_REPLIES)
+      .map(thread => ({ subject: thread.subject, sender: senderName(thread.sender), repliedAt: thread.lastOutgoingAt!, ...(thread.account !== MAIL_PRIMARY_ACCOUNT ? { account: thread.account } : {}) }));
+  }
   /** Threads waiting for the decision-model screen, newest first. */
   unscreened(limit = 8): MailThread[] {
     return this.rows("SELECT data FROM umpi_mail_threads WHERE (status='pending' OR json_extract(data,'$.factsPending')=1) AND json_extract(data,'$.screen') IS NULL ORDER BY received DESC LIMIT ?", limit);

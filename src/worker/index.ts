@@ -35,6 +35,7 @@ import { MailStore } from "./mail-store.js";
 import { MailRuntime } from "./mail-runtime.js";
 import { mailScreen } from "./mail-screen.js";
 import { DECISION_INSTRUCTIONS, DEFAULT_DECISION_MONTHLY_BUDGET, Decisions, chooseEffort, decisionTools, type Effort, type WorkersAi } from "./decisions.js";
+import { mailReplies } from "./mail-replies.js";
 import { mailFact } from "./mail-facts.js";
 import { DreamStore } from "./dream-store.js";
 import { HistoryIndex } from "./history-index.js";
@@ -430,7 +431,8 @@ export class Assistant extends Agent<Env> {
     this.planningRuntime = new PlanningRuntime(this.planning, () => this.vaultClient(),
       async () => (await readCoreContext(await this.harness.pi(), BACKGROUND_CONTEXT)).revision,
       () => this.config.UMPI_CALENDAR_CREDENTIALS, () => this.coordinator.wake());
-    this.mailRuntime = new MailRuntime(this.mail, this.config.UMPI_GMAIL_CREDENTIALS, () => this.coordinator.wake(), this.decisions.available() ? mailScreen(this.decisions) : undefined, this.decisions.available() ? mailFact(this.decisions, this.timezone) : undefined);
+    this.mailRuntime = new MailRuntime(this.mail, this.config.UMPI_GMAIL_CREDENTIALS, () => this.coordinator.wake(), this.decisions.available() ? mailScreen(this.decisions) : undefined, this.decisions.available() ? mailFact(this.decisions, this.timezone) : undefined,
+      this.decisions.available() ? mailReplies(this.decisions) : undefined);
     this.codingRuntime = new CodingRuntime(this.coding, {
       harness: () => this.harness, extension: () => codingProfile, archive: () => this.config.CODING_ARCHIVE,
       cloudAvailable: () => Boolean(this.config.CODING_WORKER),

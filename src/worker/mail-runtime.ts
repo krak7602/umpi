@@ -2,6 +2,7 @@ import { parseGmailCredentials, readGmailChanges } from "./gmail.js";
 import { MAIL_PRIMARY_ACCOUNT, MailStore } from "./mail-store.js";
 import type { MailScreen } from "./mail-screen.js";
 import type { MailFact } from "./mail-facts.js";
+import { REPLY_SETTLED, type ReplyCheck } from "./mail-replies.js";
 
 export interface MailAccountCredentials { id: string; credentials: string }
 export const MAIL_ACCOUNT_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
@@ -10,6 +11,8 @@ const MAX_MAIL_ACCOUNTS = 4;
 const MAIL_SCREEN_PER_DRIVE = 120;
 const MAIL_SCREEN_PARALLEL = 6;
 const MAIL_SCREEN_RESUME_MS = 60_000;
+/** Reply checks per drive; each is one decision call per open request in the thread. */
+const MAIL_REPLY_CHECKS_PER_DRIVE = 40;
 
 /**
  * `UMPI_GMAIL_CREDENTIALS` holds either one Gmail grant (the primary mailbox) or
@@ -36,7 +39,8 @@ export function parseMailAccounts(secret: string | undefined): MailAccountCreden
 export class MailRuntime {
   private syncing?: Promise<void>;
   readonly accounts: MailAccountCredentials[];
-  constructor(readonly store: MailStore, credentials: string | undefined, readonly wake: () => Promise<void>, private readonly screen?: MailScreen, private readonly fact?: MailFact) {
+  constructor(readonly store: MailStore, credentials: string | undefined, readonly wake: () => Promise<void>, private readonly screen?: MailScreen, private readonly fact?: MailFact,
+    private readonly replyCheck?: ReplyCheck) {
     this.accounts = parseMailAccounts(credentials);
     store.screening = screen !== undefined;
   }
@@ -46,14 +50,16 @@ export class MailRuntime {
     return this.accounts.length ? this.accounts.map(account => account.id) : [MAIL_PRIMARY_ACCOUNT];
   }
   private waitingScreen(): boolean { return this.screen !== undefined && this.store.settings().enabled && this.store.unscreened(1).length > 0; }
+  /** Work that does not wait for the next sync: screening, and owner replies still to check. */
+  private waitingWork(): boolean { return this.waitingScreen() || (this.store.settings().enabled && this.store.replyChecks(1).length > 0); }
   nextDue(now = Date.now()): number | undefined {
     const due = this.store.nextDue(this.ids(), now);
-    return this.waitingScreen() ? Math.min(due ?? Infinity, now + MAIL_SCREEN_RESUME_MS) : due;
+    return this.waitingWork() ? Math.min(due ?? Infinity, now + MAIL_SCREEN_RESUME_MS) : due;
   }
   async drive(now = Date.now()): Promise<void> {
     this.store.releaseSnoozes(now);
     this.store.ensureAccounts(this.ids(), now);
-    if (!this.store.dueAccounts(this.ids(), now).length && !this.waitingScreen()) return;
+    if (!this.store.dueAccounts(this.ids(), now).length && !this.waitingWork()) return;
     if (!this.syncing) this.syncing = this.sync(now).finally(() => { this.syncing = undefined; });
     await this.syncing;
   }
@@ -68,8 +74,25 @@ export class MailRuntime {
       const result = await readGmailChanges(account.credentials, request, now);
       this.store.applySync(accountId, request.settingsVersion, result, Date.now());
     }
+    await this.checkReplies();
     await this.screenPending();
     await this.wake();
+  }
+  /**
+   * The owner answered these threads: a request the reply confidently answers is marked replied. Without the decision
+   * service, or when it is unsure or fails, the state stays and the fact still shows when the owner replied.
+   */
+  private async checkReplies(): Promise<void> {
+    for (const thread of this.store.replyChecks(MAIL_REPLY_CHECKS_PER_DRIVE)) {
+      const check = thread.replyCheck!, settled: string[] = [];
+      for (const id of this.replyCheck ? check.factIds : []) {
+        const fact = this.store.situation?.fact(id);
+        if (!fact) continue;
+        const probability = await this.replyCheck!({ fact, request: check.request, reply: check.reply }).catch(() => null);
+        if (probability !== null && probability >= REPLY_SETTLED) settled.push(id);
+      }
+      this.store.applyReplyCheck(thread.id, thread.providerVersion, settled, Date.now());
+    }
   }
   /** Screens new threads before any review sees them. A failed call passes the thread to the review. */
   private async screenPending(): Promise<void> {

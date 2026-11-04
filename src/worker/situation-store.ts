@@ -30,6 +30,8 @@ export interface SituationFact {
   history: { state: string; at: string }[];
   sources: SituationSource[];
   owner: { state?: string; note?: string; dismissed?: boolean; at: string } | null;
+  /** When the owner last replied in a source thread after that thread's latest incoming message. */
+  ownerReplyAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -85,6 +87,12 @@ function amountOf(value: unknown): SituationFact["amount"] {
   return { value: Math.round(body.value * 100) / 100, currency: body.currency, direction };
 }
 const TERMINAL = new Set(["delivered", "cancelled", "canceled", "returned", "refunded", "paid", "rejected", "withdrawn", "closed", "completed", "resolved", "expired", "ended"]);
+/**
+ * Kinds whose open state is a request waiting on the owner, so the owner's reply can settle it. Other kinds keep their
+ * state: a reply does not pay a bill, end a subscription, or replace an interview or booking time.
+ */
+const REPLY_SETTLES = new Set<SituationKind>(["update", "account"]);
+export const REPLIED_STATE = "replied";
 
 /** Expiry is code-owned so a model hint cannot keep a stale fact around indefinitely. */
 function defaultRelevance(fact: Pick<SituationFact, "kind" | "state" | "dueAt" | "observedAt">): number {
@@ -126,6 +134,40 @@ export class SituationStore {
       .find(fact => fact.key.split(/\s+/).includes(needle) || fact.key.endsWith(` ${needle}`))?.key.slice(kind.length + 1);
   }
   fact(id: string): SituationFact | undefined { return this.rows("SELECT data FROM umpi_situation_facts WHERE id=?", id)[0]; }
+
+  /** A fact the owner's reply at `at` may settle: an open request whose current state is older than the reply. */
+  private settleable(fact: SituationFact, at: number): boolean {
+    return REPLY_SETTLES.has(fact.kind) && !TERMINAL.has(fact.state) && fact.state !== REPLIED_STATE && !fact.owner?.dismissed
+      && Date.parse(fact.observedAt) < at && !(fact.owner?.state !== undefined && Date.parse(fact.owner.at) >= at);
+  }
+  /**
+   * Records the owner's reply in one source thread on every active fact from it, and returns the facts the reply may
+   * settle. Code only: no state changes here. Call inside a transaction.
+   */
+  noteOwnerReply(threadId: string, at: string, now = Date.now()): string[] {
+    const replied = Date.parse(timestamp(at, "owner reply time")), settle: string[] = [];
+    for (const fact of this.rows("SELECT data FROM umpi_situation_facts WHERE relevant_until >= ? AND instr(data, ?) > 0", now, `"threadId":${JSON.stringify(threadId)}`)) {
+      if (!fact.sources.some(source => source.threadId === threadId) || fact.owner?.dismissed) continue;
+      if (fact.ownerReplyAt && Date.parse(fact.ownerReplyAt) >= replied) continue;
+      this.write({ ...fact, version: fact.version + 1, ownerReplyAt: at, updatedAt: iso(now) });
+      if (this.settleable(fact, replied)) settle.push(fact.id);
+    }
+    return settle;
+  }
+  /**
+   * Marks a request as replied, as of the reply. Later evidence from the other side still replaces it (it is newer),
+   * and older mail cannot bring the request back. Returns undefined when the fact no longer qualifies.
+   */
+  settleByReply(id: string, at: string, now = Date.now()): SituationFact | undefined {
+    return this.db.transaction(() => {
+      const previous = this.fact(id), replied = Date.parse(timestamp(at, "owner reply time"));
+      if (!previous || !this.settleable(previous, replied)) return undefined;
+      const next: SituationFact = { ...previous, version: previous.version + 1, state: REPLIED_STATE, observedAt: at,
+        history: [...previous.history, { state: REPLIED_STATE, at }].slice(-8), updatedAt: iso(now) };
+      next.relevantUntil = iso(Math.min(Math.max(Date.parse(previous.relevantUntil), defaultRelevance(next)), now + MAX_HORIZON_DAYS * DAY));
+      return this.write(next);
+    });
+  }
 
   /** Validate and merge one observation. Older evidence fills gaps but never regresses a newer state. Call inside a transaction. */
   observe(value: unknown, source: Omit<SituationSource, "at"> & { receivedAt: string }, now = Date.now()): SituationFact {
@@ -198,9 +240,10 @@ export class SituationStore {
   }
 
   private view(fact: SituationFact): object {
-    const { id, version, kind, title, state, counterparty, amount, happenedAt, dueAt, detail, observedAt, relevantUntil, history, sources, owner } = fact;
+    const { id, version, kind, title, state, counterparty, amount, happenedAt, dueAt, detail, observedAt, relevantUntil, history, sources, owner, ownerReplyAt } = fact;
     return { id, version, kind, title, state, counterparty, amount, happenedAt, dueAt, detail, observedAt, relevantUntil,
-      ...(history.length > 1 ? { history } : {}), source: sources[0] ? { account: sources[0].account, webUrl: sources[0].webUrl } : null, ...(owner ? { owner } : {}) };
+      ...(history.length > 1 ? { history } : {}), source: sources[0] ? { account: sources[0].account, webUrl: sources[0].webUrl } : null, ...(owner ? { owner } : {}),
+      ...(ownerReplyAt ? { ownerRepliedAt: ownerReplyAt } : {}) };
   }
 
   /** Money totals are computed here, never by the model. */
