@@ -38,8 +38,8 @@ struct WidgetAction: Identifiable, Hashable, Sendable {
     var url: URL { URL(string: "umpi://\(id)")! }
 
     static let all: [WidgetAction] = [
-        .init(id: "voice", label: "Voice", symbol: "mic.fill"),
-        .init(id: "talk", label: "Talk", symbol: "waveform"),
+        // Opens voice mode; the id stays "voice" so chosen buttons keep working.
+        .init(id: "voice", label: "Talk", symbol: "waveform"),
         .init(id: "today", label: "Today", symbol: "sun.max.fill"),
         .init(id: "chat", label: "Chat", symbol: "bubble.left.and.bubble.right.fill"),
         .init(id: "work", label: "Work", symbol: "tray.full.fill"),
@@ -47,6 +47,6 @@ struct WidgetAction: Identifiable, Hashable, Sendable {
     ]
     static let defaults = ["voice", "today", "chat", "work"]
     static func list(_ ids: [String]?) -> [WidgetAction] {
-        (ids ?? defaults).map { $0 == "idea" ? "voice" : $0 }.compactMap { id in all.first { $0.id == id } }
+        (ids ?? defaults).map { $0 == "idea" || $0 == "talk" ? "voice" : $0 }.compactMap { id in all.first { $0.id == id } }
     }
 }

@@ -136,40 +136,6 @@ enum MediaPrep {
     }
 }
 
-/// Records a voice note to a temporary file; the file is removed after it is transcribed.
-@MainActor @Observable
-final class VoiceRecorder {
-    private(set) var isRecording = false
-    private(set) var startedAt: Date?
-    @ObservationIgnored private var recorder: AVAudioRecorder?
-
-    func start() async throws {
-        guard await AVAudioApplication.requestRecordPermission() else { throw MediaError.speech("Allow the microphone in Settings to record a voice note.") }
-        let session = AVAudioSession.sharedInstance()
-        // Plain recording mode: "spoken audio" is a playback mode, and iOS rejects it for recording (OSStatus -50).
-        try session.setCategory(.record, mode: .default)
-        try session.setActive(true)
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("voice-\(UUID().uuidString).m4a")
-        let recorder = try AVAudioRecorder(url: url, settings: [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 44_100, AVNumberOfChannelsKey: 1,
-                                                               AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue])
-        guard recorder.record(forDuration: 300) else {
-            try? session.setActive(false)
-            throw MediaError.speech("Recording could not start. Another app may be using the microphone.")
-        }
-        self.recorder = recorder
-        isRecording = true; startedAt = Date()
-    }
-    /// Stops and returns the recording, or nil when cancelled.
-    func stop(keep: Bool) -> URL? {
-        let url = recorder?.url
-        recorder?.stop(); recorder = nil
-        isRecording = false; startedAt = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        if !keep, let url { try? FileManager.default.removeItem(at: url); return nil }
-        return url
-    }
-}
-
 /// Previews of what the owner sent from this phone (thumbnails, length, size), kept on the phone only so the history
 /// can show photos, videos, files, and voice notes the way messaging apps do. The coordinator never stores media.
 struct LocalMedia: Codable, Equatable, Sendable {

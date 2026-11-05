@@ -51,7 +51,7 @@ struct HomeWidgetView: View {
             }
             .widgetURL(WidgetContent.url("today"))
         case .systemSmall:
-            // One big button: the first action, such as recording an idea.
+            // One big button: the first action, such as talking to Umpi.
             let first = actions.first ?? WidgetAction.all[0]
             VStack(spacing: 10) {
                 Image(systemName: first.symbol).font(.system(size: 34, weight: .semibold)).foregroundStyle(.tint)
@@ -142,16 +142,16 @@ struct ButtonsWidgetView: View {
     }
 }
 
-/// A Control Center and Action Button control: opens Umpi straight into recording an idea.
+/// A Control Center and Action Button control: opens Umpi straight into voice mode.
 @available(iOS 18.0, *)
 struct CaptureControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: "UmpiCapture") {
             ControlWidgetButton(action: OpenUmpiAction(action: "voice")) {
-                Label("Talk to Umpi", systemImage: "mic")
+                Label("Talk to Umpi", systemImage: "waveform")
             }
         }
         .displayName("Talk to Umpi")
-        .description("Say anything: an idea, a task, a reminder, or a question. Umpi handles it.")
+        .description("Talk with Umpi: a question, a plan, an idea, a task, or a reminder.")
     }
 }

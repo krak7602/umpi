@@ -11,7 +11,7 @@ export type SpeechFrame =
   | { type: "speech"; operationId: string; done: true };
 
 /** Added to a spoken app message's model input. */
-export const SPOKEN_TURN_NOTE = "This is a spoken conversation: the owner is talking to Umpi in the app's voice mode, and the phone reads your reply aloud as you write it. Answer in short, natural spoken sentences. Do not use Markdown, lists, tables, headings, links, emoji, or code; say numbers, times, and symbols the way a person says them. Keep it brief unless the owner asks for detail. When you need tools or longer work, first write one short sentence that says what you are doing (never a filler such as \"one moment\"), then the answer.";
+export const SPOKEN_TURN_NOTE = "This is a spoken conversation: the owner is talking to Umpi in the app's voice mode, and the phone reads your reply aloud as you write it. Answer in short, natural spoken sentences. Do not use Markdown, lists, tables, headings, links, emoji, or code; say numbers, times, and symbols the way a person says them. Keep it brief unless the owner asks for detail. When you need tools or longer work, first write one short sentence that says what you are doing (never a filler such as \"one moment\"), then the answer. The owner may also say things in passing: file an idea or note in today's note under notes, a task under tasks, and anything with a time as a reminder, then confirm in a few words.";
 
 /** Told to Umpi with the message that cut off its spoken reply: the reply may be written in full, but was not heard in full. */
 export function cutOffNote(heard: string): string {

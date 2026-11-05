@@ -76,6 +76,9 @@ final class VoiceConversation {
         guard !started else { return }
         started = true
         self.store = store
+        // Opened from the widget or a control, the app may still be coming to the front; iOS refuses the microphone
+        // until it is.
+        for _ in 0..<30 where UIApplication.shared.applicationState != .active { try? await Task.sleep(for: .milliseconds(100)) }
         if let problem = await VoiceAudio.permissions() { phase = .failed(problem); return }
         applySettings()
         do { try audio.start() } catch { phase = .failed("The microphone could not start: \(error.localizedDescription)"); return }

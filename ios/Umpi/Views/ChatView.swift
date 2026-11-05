@@ -14,11 +14,8 @@ struct ChatView: View {
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var showPhotos = false
     @State private var showFiles = false
-    @State private var recorder = VoiceRecorder()
     @State private var pinned = true
     @State private var userScrolling = false
-    /// The recording was started from the capture control: it is an idea to file in the notes.
-    @State private var capturing = false
     @State private var requests = ChatRequests.shared
     @Environment(\.scenePhase) private var scenePhase
     @State private var onScreen = false
@@ -99,11 +96,6 @@ struct ChatView: View {
         .navigationTitle("Chat")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button { showVoice = true } label: { Image(systemName: "waveform") }
-                    .accessibilityIdentifier("chat.voiceMode")
-                    .accessibilityLabel("Talk to Umpi")
-            }
             ToolbarItem(placement: .topBarTrailing) {
                 Image(systemName: chat.isLive ? "dot.radiowaves.left.and.right" : "wifi.slash")
                     .foregroundStyle(chat.isLive ? Color.green : Color.secondary)
@@ -127,17 +119,6 @@ struct ChatView: View {
         .onAppear { onScreen = true; requests.chatVisible = scenePhase == .active }
         .onDisappear { onScreen = false; requests.chatVisible = false }
         .onChange(of: scenePhase) { _, phase in requests.chatVisible = onScreen && phase == .active }
-        .onChange(of: requests.capture, initial: true) { _, wanted in
-            guard wanted else { return }
-            requests.capture = false
-            guard !recorder.isRecording else { return }
-            capturing = true
-            // iOS refuses the microphone while the app is still coming to the front from a widget; wait until it is.
-            Task {
-                for _ in 0..<30 where UIApplication.shared.applicationState != .active { try? await Task.sleep(for: .milliseconds(100)) }
-                await startRecording()
-            }
-        }
         .onChange(of: requests.talk, initial: true) { _, wanted in
             guard wanted else { return }
             requests.talk = false
@@ -206,11 +187,11 @@ struct ChatView: View {
                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
             if let preparing { Label(preparing, systemImage: "hourglass").font(.footnote).foregroundStyle(.secondary) }
-            if recorder.isRecording { recordingBar } else { inputRow }
+            inputRow
         }
     }
 
-    /// Messages-style: attach on the left; send or record inside the field, so the text takes the whole width.
+    /// Messages-style: attach on the left; send or talk inside the field, so the text takes the whole width.
     private var inputRow: some View {
         HStack(alignment: .bottom, spacing: 8) {
             // One button, like Messages: attach when empty; while typing it also formats (Aa), with no floating bar.
@@ -244,11 +225,11 @@ struct ChatView: View {
                             .accessibilityIdentifier("chat.send")
                             .accessibilityLabel("Send")
                     } else {
-                        Button { Task { await startRecording() } } label: { Image(systemName: "mic.fill").font(.system(size: 17, weight: .medium)).frame(width: 34, height: ChatView.fieldHeight) }
-                            .tint(.secondary)
-                            .disabled(preparing != nil)
-                            .accessibilityIdentifier("chat.record")
-                            .accessibilityLabel("Record a voice note")
+                        // With nothing typed, the button opens voice mode: a spoken conversation with Umpi.
+                        Button { composing = false; showVoice = true } label: { Image(systemName: "waveform").font(.system(size: 17, weight: .semibold)).frame(width: 34, height: ChatView.fieldHeight) }
+                            .tint(.primary)
+                            .accessibilityIdentifier("chat.voiceMode")
+                            .accessibilityLabel("Talk to Umpi")
                     }
                 }
                 // The button is as tall as one line of the field, so it is centred on a single line and stays on the
@@ -257,22 +238,6 @@ struct ChatView: View {
             }
             .glassOrFill(in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
-    }
-
-    private var recordingBar: some View {
-        HStack(spacing: 12) {
-            Button { _ = recorder.stop(keep: false); capturing = false } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 28)) }
-                .foregroundStyle(.secondary).accessibilityLabel("Cancel recording")
-            Image(systemName: "waveform").symbolEffect(.variableColor.iterative, isActive: true).foregroundStyle(.red)
-            if let started = recorder.startedAt {
-                Text(started, style: .timer).monospacedDigit().foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button { finishRecording() } label: { Image(systemName: "arrow.up.circle.fill").font(.system(size: 32)) }
-                .accessibilityIdentifier("chat.record.send").accessibilityLabel("Send voice note")
-        }
-        .padding(.horizontal, 12).padding(.vertical, 6)
-        .background(Color(.secondarySystemBackground), in: Capsule())
     }
 
     private func send() {
@@ -291,31 +256,6 @@ struct ChatView: View {
         Task {
             defer { preparing = nil }
             do { attachment = try await work() } catch { chat.show((error as? LocalizedError)?.errorDescription ?? "The attachment could not be read.") }
-        }
-    }
-    private func startRecording() async {
-        do { try await recorder.start() } catch {
-            capturing = false
-            chat.show((error as? LocalizedError)?.errorDescription ?? "Recording could not start: \(error.localizedDescription)")
-        }
-    }
-    /// A voice note is transcribed on the phone and sent as its transcript, like a Telegram voice note.
-    private func finishRecording() {
-        let seconds = recorder.startedAt.map { Int(Date().timeIntervalSince($0).rounded()) }
-        guard let url = recorder.stop(keep: true) else { return }
-        preparing = "Transcribing…"
-        Task {
-            defer { preparing = nil; try? FileManager.default.removeItem(at: url) }
-            do {
-                let transcript = try await MediaPrep.transcribe(url)
-                // From the Voice button: Umpi works out what was said and handles it.
-                let context = capturing ? "Sent with the Voice button, often in passing. Work out what it is and handle it: an idea or note goes in today's note under notes, a task under tasks (add_to_daily_note), something with a time becomes a reminder, a question gets an answer. Then confirm in one short line." : nil
-                capturing = false
-                if await store.sendChat(text: transcript, voice: true, context: context, media: MediaInfo(kind: "voice", seconds: seconds), previews: LocalMedia(seconds: seconds)) {
-                    await chat.refresh(store)
-                }
-
-            } catch { chat.show((error as? LocalizedError)?.errorDescription ?? "The voice note could not be transcribed.") }
         }
     }
 }
