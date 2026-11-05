@@ -10,8 +10,23 @@ export type SpeechFrame =
   | { type: "speech"; operationId: string; part: number; working: string }
   | { type: "speech"; operationId: string; done: true };
 
+/** Text inside these tags is shown in the chat and never read aloud. */
+export const SHOWN_OPEN = "<chat>", SHOWN_CLOSE = "</chat>";
+
 /** Added to a spoken app message's model input. */
-export const SPOKEN_TURN_NOTE = "This is a spoken conversation: the owner is talking to Umpi in the app's voice mode, and the phone reads your reply aloud as you write it. Answer in short, natural spoken sentences. Do not use Markdown, lists, tables, headings, links, emoji, or code; say numbers, times, and symbols the way a person says them. Keep it brief unless the owner asks for detail. When you need tools or longer work, first write one short sentence that says what you are doing (never a filler such as \"one moment\"), then the answer. The owner may also say things in passing: file an idea or note in today's note under notes, a task under tasks, and anything with a time as a reminder, then confirm in a few words.";
+export const SPOKEN_TURN_NOTE = [
+  "This is a spoken conversation: the owner is talking to Umpi in the app's voice mode. The phone reads your reply aloud as you write it, and the reply is also kept in the chat, where the owner can read it later.",
+  "Speak the way a person talks: lead with the answer, usually in one to three short sentences, with contractions. No openers, sign-offs, Markdown, lists, emoji, or symbols in what is spoken. Say numbers, times, and dates the way people say them (\"about two hundred\", \"tomorrow at five\"), and round when the exact figure does not matter.",
+  "Name at most three things aloud; for more, give the count and the main ones. Offer detail instead of reciting it, and ask at most one question, at the end.",
+  `Anything meant to be seen rather than heard (a table, diagram, code, a link, an address, a long list, exact figures to copy) goes after the spoken part, between ${SHOWN_OPEN} and ${SHOWN_CLOSE}, as ordinary Markdown: it is shown in the chat and never read aloud. Say in one sentence what it is and that it is in the chat.`,
+  "The owner's words come from speech recognition and may contain mistakes, such as similar-sounding words. Use the likely meaning; confirm briefly only when a wrong guess would matter.",
+  "When you need tools or longer work, first write one short sentence that says what you are doing (never a filler such as \"one moment\"), then the answer. The owner may also say things in passing: file an idea or note in today's note under notes, a task under tasks, and anything with a time as a reminder, then confirm in a few words.",
+].join("\n");
+
+/** A spoken reply as the chat keeps it: the shown parts stay, as ordinary text, without their tags. */
+export function writtenReply(text: string): string {
+  return text.split(SHOWN_OPEN).join("\n\n").split(SHOWN_CLOSE).join("\n\n").replace(/\n{3,}/g, "\n\n").trim();
+}
 
 /** Told to Umpi with the message that cut off its spoken reply: the reply may be written in full, but was not heard in full. */
 export function cutOffNote(heard: string): string {
