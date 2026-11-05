@@ -15,6 +15,10 @@ struct TalkToUmpiIntent: AppIntent {
     }
 }
 
+/// Handed to the app's scene before the app comes to the front, as `OpenUmpiAction` is.
+@available(iOS 26.0, *)
+extension TalkToUmpiIntent: TargetContentProvidingIntent {}
+
 /// Umpi's actions that need no setup in the Shortcuts app.
 struct UmpiShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {

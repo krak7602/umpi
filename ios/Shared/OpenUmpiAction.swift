@@ -20,6 +20,13 @@ struct OpenUmpiAction: AppIntent {
     }
 }
 
+#if os(iOS)
+/// On iOS 26 and later the system hands the intent to the app's scene before the app comes to the front, so the first
+/// frame already shows the destination; `perform()` still runs, for earlier systems.
+@available(iOS 26.0, *)
+extension OpenUmpiAction: TargetContentProvidingIntent {}
+#endif
+
 /// A requested destination in the app, from a widget, control, or link.
 enum UmpiRoute {
     static let key = "umpi.route"
