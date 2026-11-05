@@ -20,11 +20,16 @@ struct VoiceSettingsView: View {
                         minimumValueLabel: { Image(systemName: "tortoise") } maximumValueLabel: { Image(systemName: "hare") }
                         onEditingChanged: { editing in if !editing { play() } }
                 }
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack { Text("Pitch"); Spacer(); Text(settings.pitch < 0.97 ? "Lower" : settings.pitch > 1.03 ? "Higher" : "Normal").foregroundStyle(.secondary) }
-                    // Steps, so Normal is exactly 1: any other pitch makes iOS reprocess the voice, which can warble.
-                    Slider(value: $settings.pitch, in: 0.8...1.3, step: 0.05) { Text("Pitch") }
-                        onEditingChanged: { editing in if !editing { play() } }
+                // The natural voice has no pitch control; its speed follows the slider above.
+                if settings.kokoroVoice == nil {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack { Text("Pitch"); Spacer(); Text(settings.pitch < 0.97 ? "Lower" : settings.pitch > 1.03 ? "Higher" : "Normal").foregroundStyle(.secondary) }
+                        // Steps, so Normal is exactly 1: any other pitch makes iOS reprocess the voice, which can warble.
+                        Slider(value: $settings.pitch, in: 0.8...1.3, step: 0.05) { Text("Pitch") }
+                            onEditingChanged: { editing in if !editing { play() } }
+                    }
+                } else {
+                    LabeledContent("Pitch") { Text("Set by the voice").foregroundStyle(.secondary) }
                 }
                 Button { play() } label: { Label("Play a sample", systemImage: "play.circle") }
             }
