@@ -64,7 +64,10 @@ struct VoiceSettingsView: View {
         .navigationTitle("Voice")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-        .onDisappear { sample.stopSpeaking(at: .immediate) }
+        .onDisappear {
+            sample.stopSpeaking(at: .immediate)
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
     }
 
     private func row(name: String, detail: String, selected: Bool) -> some View {
@@ -81,6 +84,10 @@ struct VoiceSettingsView: View {
 
     private func play() {
         sample.stopSpeaking(at: .immediate)
+        // Plain spoken audio, as Siri plays it: no microphone, no echo cancellation.
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+        try? session.setActive(true)
         let utterance = AVSpeechUtterance(string: "Hi, I'm Umpi. This is how I'll sound when we talk.")
         utterance.voice = settings.voice
         utterance.rate = Float(settings.rate)

@@ -140,7 +140,6 @@ final class VoiceConversation {
         case .started(let cutIn):
             if cutIn {
                 // The owner talked over Umpi: stop it and remember what was heard.
-                audio.duck(false)
                 if reply == nil && sending { cutWhileSending = true }
                 stopReply(note: true)
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -158,10 +157,9 @@ final class VoiceConversation {
         case .ended(let turn):
             self.turn = turn
             finishTurn()
-        case .maybeCutIn:
-            audio.duck(true)
-        case .notCutIn:
-            audio.duck(false)
+        case .maybeCutIn, .notCutIn:
+            // Umpi keeps talking at full volume until words confirm the owner is cutting in.
+            break
         case .failed(let message):
             phase = .failed(message)
         }
@@ -302,6 +300,7 @@ final class VoiceConversation {
         guard let reply, !reply.finished else { return }
         reply.finished = true
         self.reply = nil
+        audio.replyEnded()
         if phase != .paused, phase != .hearing { listen() }
     }
 

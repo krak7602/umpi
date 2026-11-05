@@ -70,7 +70,10 @@ struct VoiceModeView: View {
             if phase == .background { conversation.stop() }
             else if phase == .active { conversation.returnedToApp(); Task { await conversation.start(store) } }
         }
-        .sheet(isPresented: $showSettings, onDismiss: { conversation.applySettings() }) {
+        // Voice settings pause voice mode, so samples play as plain speech without the microphone or echo
+        // cancellation running underneath.
+        .onChange(of: showSettings) { _, open in if open { conversation.stop() } }
+        .sheet(isPresented: $showSettings, onDismiss: { conversation.applySettings(); Task { await conversation.start(store) } }) {
             NavigationStack { VoiceSettingsView() }
         }
         .sensoryFeedback(.impact(weight: .light), trigger: conversation.phase == .speaking)
