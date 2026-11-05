@@ -16,7 +16,9 @@ final class VoiceConversation {
 
     private(set) var phase = Phase.starting
     /// 0…1: the owner's voice while listening, Umpi's while speaking.
-    private(set) var level: Float = 0
+    /// 0…1: the owner's voice while listening, Umpi's while speaking. Not observed: the orb reads it every frame, so a
+    /// level change (dozens a second) does not redraw the whole screen.
+    @ObservationIgnored private(set) var level: Float = 0
     /// The owner's words while they talk; Umpi's sentence while it speaks.
     private(set) var caption = ""
     private(set) var captionIsOwner = true
@@ -175,7 +177,7 @@ final class VoiceConversation {
         guard started else { return }
         switch event {
         case .level(let value):
-            level = level * 0.6 + value * 0.4
+            level = value
         case .started(let cutIn):
             if cutIn {
                 // The owner talked over Umpi: stop it and remember what was heard.

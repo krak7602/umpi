@@ -56,6 +56,9 @@ final class VoiceAudio: @unchecked Sendable {
     private var recent: [Bool] = []
     private var floorDB: Float = -60
     private var heardFrames = 0, silentFrames = 0
+    /// When the recognizer's words for this turn last changed; the turn ends when they stop changing, however noisy.
+    private var lastWordsChange: Date?
+    private var lastWords = ""
     private var probeStarted: Date?
     private var levelTick = 0
     private var inputRate = 48_000.0
@@ -174,7 +177,8 @@ final class VoiceAudio: @unchecked Sendable {
             loudest = max(loudest, db)
             // The noise floor follows quiet quickly and loud slowly.
             floorDB = db < floorDB ? floorDB + 0.3 * (db - floorDB) : floorDB + 0.003 * (db - floorDB)
-            floorDB = min(max(floorDB, -75), -35)
+            // A noisy room (a fan, a Mac's keyboard) may sit well above a quiet phone's floor.
+            floorDB = min(max(floorDB, -75), -25)
             let strict = mode == .replying || mode == .probing
             let voiced = !muted && db > max(floorDB + (strict ? 18 : 10), strict ? -40 : -50)
             recent.append(voiced); if recent.count > 15 { recent.removeFirst() }
@@ -198,8 +202,14 @@ final class VoiceAudio: @unchecked Sendable {
         case .listening:
             request?.append(buffer)
             heardFrames += frames
-            silentFrames = voicedFrames > 0 ? 0 : silentFrames + frames
-            if Double(silentFrames) * 0.02 >= pause || Double(heardFrames) * 0.02 >= 55 {
+            // A buffer is speech only with several voiced moments, so a click or a short noise does not hold the turn open.
+            silentFrames = voicedFrames >= max(2, frames / 4) ? 0 : silentFrames + frames
+            let (wordsSettled, noWords) = lock.withLock { () -> (Bool, Bool) in
+                guard let changed = lastWordsChange else { return (false, true) }
+                return (Date().timeIntervalSince(changed) >= _pause + 0.6, false)
+            }
+            // Ends on quiet, on words that stopped changing, after 55 s, or after 8 s of sound with no words at all.
+            if Double(silentFrames) * 0.02 >= pause || wordsSettled || Double(heardFrames) * 0.02 >= 55 || (noWords && Double(heardFrames) * 0.02 >= 8) {
                 self.mode = .replying
                 request?.endAudio()
                 onEvent?(.ended(turn: turn))
@@ -241,6 +251,7 @@ final class VoiceAudio: @unchecked Sendable {
         if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
         turn += 1
         let turn = self.turn
+        lock.withLock { lastWords = ""; lastWordsChange = nil }
         for buffer in preroll { request.append(buffer) }
         self.request = request
         task = recognizer.recognitionTask(with: request) { [weak self] result, error in
@@ -253,6 +264,7 @@ final class VoiceAudio: @unchecked Sendable {
                     self.heardFrames = 0; self.silentFrames = 0
                     self.onEvent?(.started(cutIn: true))
                 }
+                self.lock.withLock { if text != self.lastWords { self.lastWords = text; self.lastWordsChange = text.isEmpty ? nil : Date() } }
                 self.onEvent?(.words(text, final: result.isFinal, turn: turn))
             } else if error != nil {
                 self.onEvent?(.words("", final: true, turn: turn))
