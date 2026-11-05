@@ -44,6 +44,8 @@ final class VoiceConversation {
     /// A message is on its way; talking over the wait for it cuts off its reply once its operation is known.
     private var sending = false
     private var cutWhileSending = false
+    /// The last owner turn the recognizer gave final words for.
+    private var finalTurn = 0
 
     private final class Reply {
         let id: String
@@ -100,6 +102,32 @@ final class VoiceConversation {
         // A reply still being written ends in the chat as usual.
         reply = nil
         phase = .paused
+    }
+
+    /// Told to Umpi with words the owner said just before leaving the app.
+    static let leftNote = "The owner said this in the app's voice mode and left the app before hearing a reply. Handle it, and reply in writing for the chat; an idea, task, or anything with a time is filed as usual."
+
+    /// The owner left the app. Words not yet sent (mid-sentence, or in the pause before sending) go through the chat's
+    /// outbox, which keeps them on the phone until they are delivered, and Umpi answers in the chat. A message already
+    /// sent is answered on the coordinator as usual.
+    func leaving() async {
+        guard started else { return }
+        if phase == .hearing || finalWaiter != nil {
+            finalWaiter?.cancel(); finalWaiter = nil
+            // Still taking the recognizer's words for this turn.
+            phase = .hearing
+            let turn = self.turn
+            audio.endTurn()
+            // The recognizer's final words, briefly; otherwise what it had heard so far.
+            for _ in 0..<8 where finalTurn < turn { try? await Task.sleep(for: .milliseconds(100)) }
+            let text = words.trimmingCharacters(in: .whitespacesAndNewlines)
+            words = ""
+            if text.count >= 2, let store {
+                print("VOICELOG left the app mid-turn; sending what was heard through the outbox")
+                await store.sendChat(text: text, voice: true, context: Self.leftNote, media: MediaInfo(kind: "voice"))
+            }
+        }
+        stop()
     }
 
     /// Pause and resume, from the button: nothing is heard while paused.
@@ -160,6 +188,7 @@ final class VoiceConversation {
         case .words(let text, let final, let turn):
             guard phase == .hearing || phase == .thinking && finalWaiter != nil else { break }
             if !text.isEmpty { words = text; if phase == .hearing { caption = text; captionIsOwner = true } }
+            if final { finalTurn = turn }
             if final, self.turn == turn, finalWaiter != nil { finalWaiter?.cancel(); finalWaiter = nil; send() }
             self.turn = turn
         case .ended(let turn):
@@ -225,8 +254,10 @@ final class VoiceConversation {
         phase = .thinking
         sending = true
         cutWhileSending = false
+        // A few seconds from iOS to finish sending if the owner leaves the app right now.
+        let background = UIApplication.shared.beginBackgroundTask(withName: "voice message")
         Task {
-            defer { sending = false }
+            defer { sending = false; UIApplication.shared.endBackgroundTask(background) }
             struct Body: Encodable { var id: String; var text: String; var sentAt: String; var voice = true; var spoken = true; var interrupts: String?; var heard: String? }
             let body = Body(id: UUID().uuidString, text: text, sentAt: ISO8601DateFormatter().string(from: Date()), interrupts: cut?.id, heard: cut.map { String($0.heard.prefix(16_000)) })
             do {

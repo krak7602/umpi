@@ -73,7 +73,11 @@ struct VoiceModeView: View {
         .onDisappear { conversation.stop(); UIApplication.shared.isIdleTimerDisabled = false }
         // Voice mode only listens while it is on screen.
         .onChange(of: scenePhase) { _, phase in
-            if phase == .background { conversation.stop() }
+            if phase == .background {
+                // Words said just before leaving are still sent; iOS gives a few seconds to do it.
+                let task = UIApplication.shared.beginBackgroundTask(withName: "voice leaving")
+                Task { await conversation.leaving(); UIApplication.shared.endBackgroundTask(task) }
+            }
             else if phase == .active { conversation.returnedToApp(); Task { await conversation.start(store) } }
         }
         // Voice settings pause voice mode, so samples play as plain speech without the microphone or echo
