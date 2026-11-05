@@ -9,7 +9,7 @@ import test, { type TestContext } from "node:test";
 import { InMemoryCredentialStore, type OAuthCredential } from "@earendil-works/pi-ai";
 import { AuthInputError, parseAssistantCredential } from "../src/model/credentials.js";
 import { AuthStorageError, FileCredentialStore } from "../src/model/file-store.js";
-import { createAssistantModels, DEFAULT_MODEL, DEFAULT_PROVIDER, selectAssistantModel } from "../src/model/provider.js";
+import { createAssistantModels, DEFAULT_MODEL, DEFAULT_PROVIDER, isTransientRefreshFailure, refreshWithRetry, selectAssistantModel } from "../src/model/provider.js";
 import { syncCredential } from "../src/model/sync.js";
 
 function codex(overrides: Partial<OAuthCredential> = {}): OAuthCredential {
@@ -355,4 +355,23 @@ test("the API-key fallback is used only while the subscription is limited, and a
   assert.equal(message.stopReason, "error");
   await delay(10);
   assert.equal(limited, 1);
+});
+
+test("a passing refusal of the sign-in refresh is tried once more; a spent refresh token is not", async () => {
+  const refused = (status: number, body = "") => new Error(`Anthropic token refresh request failed. url=https://example.test/v1/oauth/token; details=Error: HTTP request failed. status=${status}; body=${body}`);
+  assert.equal(isTransientRefreshFailure(refused(403)), true);
+  assert.equal(isTransientRefreshFailure(refused(503)), true);
+  assert.equal(isTransientRefreshFailure(new Error("fetch failed")), true);
+  assert.equal(isTransientRefreshFailure(refused(400, '{"error": "invalid_grant"}')), false, "a spent refresh token is final");
+  assert.equal(isTransientRefreshFailure(refused(401)), false);
+
+  let calls = 0;
+  assert.equal(await refreshWithRetry(async () => { calls++; if (calls === 1) throw refused(403); return "fresh"; }, undefined, 5), "fresh");
+  assert.equal(calls, 2, "tried once more after the 403");
+  calls = 0;
+  await assert.rejects(refreshWithRetry(async () => { calls++; throw refused(400, "invalid_grant"); }, undefined, 5), /status=400/);
+  assert.equal(calls, 1, "invalid_grant is not retried");
+  calls = 0;
+  await assert.rejects(refreshWithRetry(async () => { calls++; throw refused(403); }, undefined, 5), /status=403/);
+  assert.equal(calls, 2, "only one more try");
 });
