@@ -17,6 +17,8 @@ final class VoiceSpeaker: @unchecked Sendable {
     private var finishedWriting: Set<Int> = []
     private var texts: [Int: String] = [:]
     private var announced: Set<Int> = []
+    /// Stretches written for the current reply.
+    private var written = 0
     private var next = 0
     var voice = Voice(identifier: nil, rate: AVSpeechUtteranceDefaultSpeechRate, pitch: 1)
     var onEvent: (@Sendable (Event) -> Void)?
@@ -36,6 +38,7 @@ final class VoiceSpeaker: @unchecked Sendable {
             self.generation += 1
             self.pending.removeAll()
             self.unplayed.removeAll(); self.finishedWriting.removeAll(); self.texts.removeAll(); self.announced.removeAll()
+            self.written = 0
             self.writing = false
             self.synthesizer.stopSpeaking(at: .immediate)
         }
@@ -47,7 +50,11 @@ final class VoiceSpeaker: @unchecked Sendable {
 
     private func writeNext() {
         guard !writing, !pending.isEmpty else { return }
-        let text = pending.removeFirst()
+        // The first sentence goes alone so speech starts soon; after that, everything waiting is spoken as one stretch,
+        // so there are fewer seams between sentences.
+        let text = written == 0 ? pending.removeFirst() : pending.joined(separator: " ")
+        if written > 0 { pending.removeAll() }
+        written += 1
         writing = true
         let number = next; next += 1
         let generation = self.generation
@@ -91,7 +98,7 @@ final class VoiceSpeaker: @unchecked Sendable {
         guard finishedWriting.contains(number), unplayed[number] == 0 else { return }
         unplayed[number] = nil; finishedWriting.remove(number); announced.remove(number)
         if let text = texts.removeValue(forKey: number) { onEvent?(.heard(text)) }
-        if unplayed.isEmpty, pending.isEmpty, !writing { onEvent?(.idle) }
+        if unplayed.isEmpty, pending.isEmpty, !writing { written = 0; onEvent?(.idle) }
     }
 }
 

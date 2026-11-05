@@ -38,7 +38,15 @@ final class VoiceAudio: @unchecked Sendable {
     private var _pause = 0.7
     var pause: Double { get { lock.withLock { _pause } } set { lock.withLock { _pause = newValue } } }
     private var _cutIn = true
-    var cutIn: Bool { get { lock.withLock { _cutIn } } set { lock.withLock { _cutIn = newValue } } }
+    /// With cutting in off, the microphone is not used while Umpi speaks, so its voice is played without echo
+    /// cancellation, which can briefly turn speech down when it thinks someone is talking over it.
+    var cutIn: Bool {
+        get { lock.withLock { _cutIn } }
+        set {
+            let changed = lock.withLock { () -> Bool in defer { _cutIn = newValue }; return _cutIn != newValue }
+            if changed { restart() }
+        }
+    }
     private var _muted = false
     var muted: Bool { get { lock.withLock { _muted } } set { lock.withLock { _muted = newValue } } }
 
@@ -61,6 +69,8 @@ final class VoiceAudio: @unchecked Sendable {
     // Playback.
     private var playerFormat: AVAudioFormat?
     private var queuedFrames = 0
+    private var emptySince: Date?
+    private var loggedFormat = false
     private var outputLevel: Float = 0
 
     static func permissions() async -> String? {
@@ -114,10 +124,14 @@ final class VoiceAudio: @unchecked Sendable {
 
     private func configure() throws {
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetoothHFP])
+        let processing = cutIn
+        try session.setCategory(.playAndRecord, mode: processing ? .voiceChat : .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
         try session.setActive(true)
         let input = engine.inputNode
-        if !input.isVoiceProcessingEnabled { try input.setVoiceProcessingEnabled(true) }
+        if input.isVoiceProcessingEnabled != processing { try input.setVoiceProcessingEnabled(processing) }
+        // Echo cancellation turns other sound down by default; it should not touch anything else on the phone.
+        if processing { input.voiceProcessingOtherAudioDuckingConfiguration = .init(enableAdvancedDucking: false, duckingLevel: .min) }
+        print("VOICELOG audio: echo cancellation \(processing ? "on" : "off"), \(Int(session.sampleRate)) Hz, route \(session.currentRoute.outputs.map(\.portType.rawValue).joined(separator: ","))")
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else { throw VoiceError("The phone gave no microphone format.") }
         inputRate = format.sampleRate
@@ -253,10 +267,16 @@ final class VoiceAudio: @unchecked Sendable {
             engine.connect(player, to: engine.mainMixerNode, format: float.format)
             player.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] buffer, _ in self?.measureOutput(buffer) }
         }
-        lock.withLock { queuedFrames += Int(float.frameLength) }
+        // A gap: the player ran dry while more speech was coming.
+        let gap = lock.withLock { () -> TimeInterval? in
+            defer { queuedFrames += Int(float.frameLength); emptySince = nil }
+            return emptySince.map { Date().timeIntervalSince($0) }
+        }
+        if let gap, gap > 0.03, gap < 5 { print(String(format: "VOICELOG gap of %.0f ms before the next speech", gap * 1000)) }
+        if !loggedFormat { loggedFormat = true; print("VOICELOG speech buffers: \(buffer.format)") }
         player.scheduleBuffer(float) { [weak self] in
             guard let self else { return }
-            self.lock.withLock { self.queuedFrames -= Int(float.frameLength) }
+            self.lock.withLock { self.queuedFrames -= Int(float.frameLength); if self.queuedFrames == 0 { self.emptySince = Date() } }
             played()
         }
         if !player.isPlaying { player.play() }
@@ -266,12 +286,11 @@ final class VoiceAudio: @unchecked Sendable {
 
     func stopPlayback() {
         player.stop()
-        lock.withLock { queuedFrames = 0 }
-        player.volume = 1
+        lock.withLock { queuedFrames = 0; emptySince = nil }
     }
 
-    /// Umpi talks more quietly while the owner might be cutting in.
-    func duck(_ on: Bool) { player.volume = on ? 0.25 : 1 }
+    /// A reply ended: the silence before the next one is not a gap.
+    func replyEnded() { lock.withLock { emptySince = nil } }
 
     private func measureOutput(_ buffer: AVAudioPCMBuffer) {
         guard let data = buffer.floatChannelData, buffer.frameLength > 0 else { return }
