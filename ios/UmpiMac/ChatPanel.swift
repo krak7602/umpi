@@ -143,7 +143,10 @@ struct ChatPanelView: View {
     var body: some View {
         let state = controller.state
         VStack(spacing: 0) {
+            // Solid and above the chat, so messages never scroll through it.
             header(state)
+                .background(Color(nsColor: .windowBackgroundColor))
+                .zIndex(1)
             Divider()
             Group {
                 if !store.isPaired {
@@ -157,10 +160,14 @@ struct ChatPanelView: View {
                 } else if state.mode == .voice {
                     VoiceModeView(onEnd: { state.mode = .chat })
                 } else {
+                    // The header has the panel's controls; the chat's own toolbar items would sit on top of it.
                     ChatView(chat: app.chat).id(ObjectIdentifier(app.chat))
+                        .environment(\.chatInPanel, true)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // The chat stays inside its own area, below the header.
+            .clipped()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         // The header takes the hidden title bar's place.
