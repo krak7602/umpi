@@ -74,6 +74,7 @@
 		8D0C199CBCDB9FBBF319D75C /* MacSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F57192F2CCC0DC49A031CDD /* MacSettingsView.swift */; };
 		8F1462081384045FEDF905CC /* ComposerTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1797F107F6BCB434192F1FB /* ComposerTextView.swift */; };
 		9091E3664B14E51595D4B104 /* ChatAttachments.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15C396001AD0754C3A161E58 /* ChatAttachments.swift */; };
+		9115234EA31C0C493622ABF4 /* TalkToUmpiIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7BC0C8D4261BF82D4BA521C /* TalkToUmpiIntent.swift */; };
 		926C59F422823F2392E8D60B /* MacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A7BEA3F9EA949F1DECC0900 /* MacApp.swift */; };
 		9281883974B3C83B1051F978 /* VoiceSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D77B7C4FF46AACEE528B86E3 /* VoiceSettingsView.swift */; };
 		967D69BB34D61F0C2FFA66B8 /* VoiceAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = C672D512910D09D5145DD72D /* VoiceAudio.swift */; };
@@ -86,6 +87,7 @@
 		A138BFEE0275119265871D59 /* ChatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 309A00142CD81859386AD711 /* ChatTests.swift */; };
 		A2E3A12BB2CF74D756AF8B34 /* knock.caf in Resources */ = {isa = PBXBuildFile; fileRef = C1917C675F6D8B3F143CBDD7 /* knock.caf */; };
 		A5A4E918E6A23F295C1A8B5C /* knock-gentle.caf in Resources */ = {isa = PBXBuildFile; fileRef = 8E0ACFCC605F137407E0B52E /* knock-gentle.caf */; };
+		AADBFD087ABA7D7FB3208299 /* TalkToUmpiIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7BC0C8D4261BF82D4BA521C /* TalkToUmpiIntent.swift */; };
 		B05FAA6AC872A533BBFC6B60 /* CompanionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A14AEACCCD7F5BCD8694CBB0 /* CompanionClient.swift */; };
 		B15E6E983C3A2B7EB65CB29A /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1279E4B7032997728B14B81D /* Models.swift */; };
 		BD41EC9700463E77F7523F07 /* pele.global.js in Resources */ = {isa = PBXBuildFile; fileRef = 3D406A11F29877842AFB10C1 /* pele.global.js */; };
@@ -230,6 +232,7 @@
 		D1797F107F6BCB434192F1FB /* ComposerTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerTextView.swift; sourceTree = "<group>"; };
 		D67BDF4B4A305A1FFFCF7299 /* UmpiUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = UmpiUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		D77B7C4FF46AACEE528B86E3 /* VoiceSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceSettingsView.swift; sourceTree = "<group>"; };
+		D7BC0C8D4261BF82D4BA521C /* TalkToUmpiIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalkToUmpiIntent.swift; sourceTree = "<group>"; };
 		DD9641B7A4D3BADDF36418BD /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
 		E42E23010F57640FCD20CAD4 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		E4C30AA88504D79B39CFAED6 /* TaskActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskActivityAttributes.swift; sourceTree = "<group>"; };
@@ -364,6 +367,7 @@
 			isa = PBXGroup;
 			children = (
 				BC2A99DA94A36C2C4D650AC2 /* KokoroVoice.swift */,
+				D7BC0C8D4261BF82D4BA521C /* TalkToUmpiIntent.swift */,
 				C672D512910D09D5145DD72D /* VoiceAudio.swift */,
 				7BEF7DD0A6FE7C8669EBED8D /* VoiceConversation.swift */,
 				71C01667C09E6491D57E0728 /* VoiceLog.swift */,
@@ -727,6 +731,7 @@
 				12DB84CDF70FA9F8789072F7 /* SyntaxHighlighter.swift in Sources */,
 				267E97B5C43F5C2E3109207B /* T3Code.swift in Sources */,
 				460C080CDAD140CED9D2C28D /* T3CodeViews.swift in Sources */,
+				AADBFD087ABA7D7FB3208299 /* TalkToUmpiIntent.swift in Sources */,
 				01DE9A648B8AC1C1AE3445A8 /* TodayView.swift in Sources */,
 				E25B389469FF910F97F90DB4 /* UmpiMacApp.swift in Sources */,
 				F2EAB6990EF080A0AC071D51 /* VoiceAudio.swift in Sources */,
@@ -781,6 +786,7 @@
 				D1DFB04CA4BA75EB463E2F69 /* SyntaxHighlighter.swift in Sources */,
 				2013FB37B381418F406CDF21 /* T3Code.swift in Sources */,
 				D5FD75B433F47A46B318D445 /* T3CodeViews.swift in Sources */,
+				9115234EA31C0C493622ABF4 /* TalkToUmpiIntent.swift in Sources */,
 				FE57803808D9A0F6E9042BE6 /* TaskActivityAttributes.swift in Sources */,
 				CA2572DDF10CA82A8543FF15 /* TodayView.swift in Sources */,
 				FCE345FBCA4731BC372CBFFE /* UmpiApp.swift in Sources */,
