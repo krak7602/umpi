@@ -41,6 +41,8 @@ export function chatButtons(markup: TelegramMarkup | undefined): ChatButton[][] 
 }
 
 export class ChatLog {
+  /** Telegram is turned off: the app notifies for everything, whatever the setting says. */
+  telegramOff = false;
   /** Called after an entry is added, outside any decision about it; the coordinator wakes sockets and push. */
   appended: ((entry: ChatEntry) => void) | undefined;
 
@@ -52,12 +54,14 @@ export class ChatLog {
 
   settings(): { notify: ChatNotify; version: number } {
     const row = this.db.all<{ data: string }>("SELECT data FROM umpi_chat_settings WHERE id='settings'")[0];
-    return row ? JSON.parse(row.data) as { notify: ChatNotify; version: number } : { notify: "telegram", version: 1 };
+    const stored = row ? JSON.parse(row.data) as { notify: ChatNotify; version: number } : { notify: "telegram" as ChatNotify, version: 1 };
+    return this.telegramOff ? { ...stored, notify: "app" } : stored;
   }
   configure(value: unknown): { notify: ChatNotify; version: number } {
     const input = record(value);
     if (Object.keys(input).some(key => !["expectedVersion", "notify"].includes(key))) throw new InputError("Unknown chat setting");
     if (input.notify !== "telegram" && input.notify !== "app") throw new InputError("notify must be telegram or app");
+    if (this.telegramOff && input.notify === "telegram") throw new InputError("Telegram is turned off, so alerts come through the app");
     return this.db.transaction(() => {
       const current = this.settings();
       if (input.expectedVersion !== current.version) throw new InputError(`Chat settings changed; expected version ${current.version}`);

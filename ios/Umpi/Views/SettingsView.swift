@@ -101,6 +101,7 @@ struct SettingsView: View {
                 }
                 .disabled(store.isRefreshing)
                 .accessibilityIdentifier("settings.synchronize")
+                NavigationLink("Pair another device") { PairAnotherDeviceView() }
                 DisclosureGroup("Details") {
                     LabeledContent("Device ID") { Text(store.deviceID).font(.caption).textSelection(.enabled) }
                     Text(effects.pushStatus).font(.footnote).foregroundStyle(.secondary)
@@ -170,5 +171,57 @@ struct SettingsView: View {
            let settings = try? JSONDecoder().decode(ChatSettings.self, from: data) {
             notify = settings.notify; notifyVersion = settings.version
         } else { await loadNotify() }
+    }
+}
+
+/// A one-use code for pairing another device, such as the Mac app, with this phone's server: no Telegram needed.
+struct PairAnotherDeviceView: View {
+    @Environment(CompanionStore.self) private var store
+    @State private var code: String?
+    @State private var expires: Date?
+    @State private var error: String?
+    @State private var copied: String?
+
+    var body: some View {
+        Form {
+            Section {
+                LabeledContent("Server") { Text(store.serverURL).textSelection(.enabled) }
+                Button { copy(store.serverURL, "Server") } label: { Label(copied == "Server" ? "Copied" : "Copy server", systemImage: "doc.on.doc") }
+                if let code {
+                    LabeledContent("Code") { Text(code).font(.footnote.monospaced()).textSelection(.enabled).lineLimit(2) }
+                    Button { copy(code, "Code") } label: { Label(copied == "Code" ? "Copied" : "Copy code", systemImage: "doc.on.doc") }
+                    if let expires { Text("Works once, until \(expires.formatted(date: .omitted, time: .shortened)).").font(.footnote).foregroundStyle(.secondary) }
+                } else if let error {
+                    Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.secondary)
+                } else {
+                    ProgressView()
+                }
+            } footer: {
+                Text("On the other device, open Umpi and enter this server and code. Copied text can be pasted on a Mac signed in to the same Apple Account.")
+            }
+            Section { Button("New code") { Task { await create() } } }
+        }
+        .navigationTitle("Pair another device")
+        .navigationBarTitleDisplayMode(.inline)
+        .task { await create() }
+    }
+
+    private func copy(_ text: String, _ what: String) {
+        UIPasteboard.general.string = text
+        copied = what
+    }
+
+    private func create() async {
+        code = nil; error = nil
+        struct Pairing: Decodable { var code: String; var expiresAt: String }
+        do {
+            guard let transport = store.chatTransport else { error = "This phone is not paired."; return }
+            let data = try await transport.send(path: "/api/device/pairings", method: "POST", body: Data("{}".utf8))
+            let pairing = try JSONDecoder().decode(Pairing.self, from: data)
+            code = pairing.code
+            expires = try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(pairing.expiresAt)
+        } catch {
+            self.error = (error as? LocalizedError)?.errorDescription ?? "A code could not be made."
+        }
     }
 }

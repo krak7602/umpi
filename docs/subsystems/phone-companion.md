@@ -162,7 +162,7 @@ Schedule alarms ahead while the device can perform and acknowledge registration.
 
 ### Pairing, tools, and HTTP contract
 
-The owner creates a ten-minute, one-use code through Telegram `/pair` or the control pairing endpoint. The phone generates a random credential and stores the exact pending claim in Keychain before sending it. The coordinator stores credential/code hashes, not plaintext credentials. Exact claim recovery is allowed within the code's lifetime; changed claims cannot reuse it. A rejected pending claim can be explicitly abandoned; unconfirmed remote revocation remains visible. Pairing grants owner-data access and version-bound command approval, not executor or OAuth administration.
+The owner creates a ten-minute, one-use code through Telegram `/pair`, the control pairing endpoint, or a paired device (Settings › Server › Pair another device, `POST /api/device/pairings`), which is how the Mac app is paired when Telegram is off. The phone generates a random credential and stores the exact pending claim in Keychain before sending it. The coordinator stores credential/code hashes, not plaintext credentials. Exact claim recovery is allowed within the code's lifetime; changed claims cannot reuse it. A rejected pending claim can be explicitly abandoned; unconfirmed remote revocation remains visible. Pairing grants owner-data access and version-bound command approval, not executor or OAuth administration.
 
 The agent tools are `read_companion_state`, `update_companion`, and `request_device_action`. Reads exclude pairing secrets and push tokens. Device effects target a specific paired device and return pending until its acknowledgement.
 
@@ -174,6 +174,7 @@ The agent tools are `read_companion_state`, `update_companion`, and `request_dev
 | `POST /api/companion/actions` | Control credential; targeted typed device request |
 | `DELETE /api/companion/devices/:id` | Control credential; revoke device |
 | `POST /api/device/pair` | One-use code in exact claim; no bearer credential required |
+| `POST /api/device/pairings` | Device credential; a one-use code for pairing another device |
 | `GET /api/device/state` | Device credential; owner state and this device's actions |
 | `POST /api/device/register` | Device credential; capabilities, optional APNs/activity tokens and tracked job IDs |
 | `POST /api/device/changes` | Device credential; revision-bound workflow mutation |

@@ -262,6 +262,8 @@ Foreground tools are `read_daily_plan`, `set_daily_brief`, and `prepare_daily_pl
 
 ### Telegram
 
+Telegram is on unless the Wrangler variable `UMPI_TELEGRAM` is `off`. Off turns it off without removing it, for an installation whose owner uses the app: the webhook answers 404, nothing is sent to Telegram (queued messages are cancelled with a note that the app's chat holds them), and the chat's `notify` setting reads `app`, so every message Umpi starts is announced in the app. The app pairs further devices itself (`POST /api/device/pairings`). Everything below applies while it is on.
+
 `POST /telegram/webhook` requires the configured secret header, exact owner ID, exact chat ID, and a private non-bot sender. It handles ordinary text, voice notes, images, text and document files, native callback queries, `/status`, `/pair`, `/memory`, `/schedule`, `/plan`, `/brief`, `/mail`, `/code`, `/browse`, `/approve ID VERSION`, and `/cancel ID [VERSION]`. `/status` is a bounded readable summary, not JSON or a guarantee that the Mac is online. `/pair` sends a short-lived companion pairing code outside Pi and the durable plaintext outbox; webhook replay does not mint another code. `/memory` opens owner review and revision history; `/plan` controls daily preparation; `/mail` controls [read-only mail follow-through](#read-only-mail-follow-through); `/code` opens [coding-task controls](#coding-tasks); `/browse` opens [browser-task controls](#browser-tasks). Group chats remain unsupported. [Images and other attachments](#images-and-other-attachments) have their own rules.
 
 Voice notes become ordinary owner input after real [subscription-backed transcription](model-auth.md#voice-note-transcription). Replies remain text; this does not add live calls. Telegram's native voice recorder needs no new bot command or BotFather configuration.
@@ -504,3 +506,4 @@ The [development and operation runbook](../runbooks/local-development.md) owns l
 - 2026-10-30: Set compaction to start at 550k tokens, stored long tool results behind handles, reset background reviews between runs, and added conversation sizes to status.
 - 2026-10-29: Added web search and page reading through Parallel, within a monthly budget.
 - 2026-10-24: Added the executor wake socket, owned by a lifecycle capability, and protected `executor` status (online, last seen). After a day without the executor, one Telegram notice says Mac work is waiting.
+- 2026-11-05: Added `UMPI_TELEGRAM=off` to turn Telegram off without removing it, now that the app is the primary surface, and pairing from a paired device.
