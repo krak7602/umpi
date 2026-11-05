@@ -39,8 +39,9 @@ struct MacSettingsView: View {
             Section {
                 Toggle("Open Umpi at login", isOn: Binding(get: { app.launchAtLogin }, set: { app.setLaunchAtLogin($0) }))
                 if let problem = app.launchAtLoginProblem { Text(problem).font(.footnote).foregroundStyle(.secondary) }
+                Toggle("Keep running when quit", isOn: Binding(get: { app.keepRunningWhenQuit }, set: { app.keepRunningWhenQuit = $0 }))
             } header: { Text("General") } footer: {
-                Text("Closing the window keeps Umpi in the menu bar, connected and listening for its shortcuts. Quit it from the menu bar item.")
+                Text("Closing the window keeps Umpi in the menu bar, connected and listening for its shortcuts. With Keep running when quit on, Command-Q does the same. To stop Umpi, choose Quit Umpi in the menu bar item.")
             }
             Section {
                 LabeledContent("Notifications") {

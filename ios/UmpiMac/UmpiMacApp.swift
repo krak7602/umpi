@@ -45,7 +45,8 @@ private struct MenuBarMenu: View {
         Button("Open Umpi") { app.showMain() }
         Button("Settings…") { app.showMain(.settings) }
         Divider()
-        Button("Quit Umpi") { NSApp.terminate(nil) }.keyboardShortcut("q")
+        // Always quits, also when quitting from the window only closes it.
+        Button("Quit Umpi") { app.quitCompletely() }.keyboardShortcut("q")
     }
 
     /// A menu item that shows its global shortcut, when the menu can show that key.
