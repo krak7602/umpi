@@ -7,8 +7,6 @@ struct ChatView: View {
     @Environment(CompanionStore.self) private var store
     @Environment(T3CodeModel.self) private var t3
     @Environment(\.openVoiceMode) private var openVoiceMode
-    /// Shown in the Mac's floating panel, whose own header has the controls the toolbar would add.
-    @Environment(\.chatInPanel) private var inPanel
     @State private var chat: ChatModel
     /// The chat keeps its own live connection; false when the app keeps one for every chat it shows (the Mac).
     private let ownsConnection: Bool
@@ -114,13 +112,15 @@ struct ChatView: View {
         .navigationTitle("Chat")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if !inPanel {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Image(systemName: chat.isLive ? "dot.radiowaves.left.and.right" : "wifi.slash")
-                        .foregroundStyle(chat.isLive ? Color.green : Color.secondary)
-                        .accessibilityLabel(chat.isLive ? "Live" : "Not connected")
-                }
+            #if os(iOS)
+            // The phone's title bar shows the connection; the Mac shows it in its sidebar and panel header instead of
+            // as a toolbar item that looks like a button.
+            ToolbarItem(placement: .topBarTrailing) {
+                Image(systemName: chat.isLive ? "dot.radiowaves.left.and.right" : "wifi.slash")
+                    .foregroundStyle(chat.isLive ? Color.green : Color.secondary)
+                    .accessibilityLabel(chat.isLive ? "Live" : "Not connected")
             }
+            #endif
         }
         .overlay(alignment: .top) {
             if let message = chat.notice ?? chat.errorMessage {
@@ -679,5 +679,4 @@ extension EnvironmentValues {
     /// Opens voice mode somewhere other than over the chat, such as the Mac's floating panel. Nil on the phone, where
     /// the chat opens voice mode itself.
     @Entry var openVoiceMode: (@MainActor () -> Void)? = nil
-    @Entry var chatInPanel = false
 }

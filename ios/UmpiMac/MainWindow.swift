@@ -83,14 +83,19 @@ struct MacRootView: View {
                             .tag(section)
                     }
                     .navigationSplitViewColumnWidth(min: 160, ideal: 190, max: 260)
+                    // The connection, quietly, where it is always visible.
+                    .safeAreaInset(edge: .bottom) {
+                        HStack(spacing: 6) {
+                            Circle().fill(app.chat.isLive ? Color.green : Color.secondary.opacity(0.5)).frame(width: 7, height: 7)
+                            Text(app.chat.isLive ? "Connected" : "Not connected")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16).padding(.vertical, 10)
+                    }
                 } detail: {
                     detail
-                }
-                .toolbar {
-                    ToolbarItem(placement: .primaryAction) {
-                        Button { app.showPanel(.voice) } label: { Label("Talk to Umpi", systemImage: "waveform") }
-                            .help("Talk to Umpi (\(ShortcutSettings.shortcut(for: .voice)?.display ?? "no shortcut"))")
-                    }
                 }
                 .frame(minWidth: 640, minHeight: 480)
             } else {
