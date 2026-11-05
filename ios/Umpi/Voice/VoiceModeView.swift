@@ -109,7 +109,7 @@ struct VoiceModeView: View {
         // cancellation running underneath.
         .onChange(of: showSettings) { _, open in if open { conversation.stop() } }
         .sheet(isPresented: $showSettings, onDismiss: { conversation.applySettings(); Task { await conversation.start(store) } }) {
-            NavigationStack { VoiceSettingsView() }
+            NavigationStack { VoiceSettingsView(inSheet: true) }
             #if os(macOS)
                 .frame(minWidth: 460, minHeight: 560)
             #endif
@@ -184,11 +184,19 @@ struct VoiceOrb: View {
                 let base = min(size.width, size.height) * 0.25
                 // Breathing, slower and deeper while Umpi thinks.
                 let breathing = 0.025 * sin(t * 1.4) * (1 - v.flow * 0.3) + 0.03 * sin(t * 0.8) * min(1, v.flow)
-                // The glow: a radial gradient fading to nothing, far cheaper than a blur every frame.
-                let glow = base * (1.45 + energy * 0.4 + breathing)
-                canvas.fill(Path(ellipseIn: CGRect(x: center.x - glow, y: center.y - glow, width: glow * 2, height: glow * 2)),
-                            with: .radialGradient(Gradient(colors: [color.opacity((0.32 + energy * 0.3) * (1 - v.dim)), color.opacity(0)]),
-                                                  center: center, startRadius: base * 0.6, endRadius: glow))
+                // The glow: three soft pools of light, off centre and of different sizes, drifting slowly apart and
+                // back, so it is uneven like light behind moving water. Gradients only: far cheaper than a blur.
+                let pools: [(dx: Double, dy: Double, size: Double, strength: Double, speed: Double)] = [
+                    (0.22, -0.18, 1.35, 0.30, 0.31), (-0.26, 0.14, 1.15, 0.24, 0.23), (0.05, 0.28, 0.95, 0.20, 0.41),
+                ]
+                for (i, pool) in pools.enumerated() {
+                    let phase = t * pool.speed + Double(i) * 2.1 + v.flowPhase * 0.4
+                    let c = CGPoint(x: center.x + base * (pool.dx + 0.12 * cos(phase)), y: center.y + base * (pool.dy + 0.12 * sin(phase * 1.3)))
+                    let r = base * pool.size * (1 + energy * 0.35 + breathing + 0.06 * sin(phase * 0.7))
+                    canvas.fill(Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2)),
+                                with: .radialGradient(Gradient(colors: [color.opacity((pool.strength + energy * 0.2) * (1 - v.dim)), color.opacity(0)]),
+                                                      center: c, startRadius: 0, endRadius: r))
+                }
                 for k in 0..<3 {
                     let radius = base * (1 - Double(k) * 0.1) * (1 + energy * 0.2 + breathing)
                     // Layers drift against each other, more while Umpi thinks, so the orb flows rather than spins.

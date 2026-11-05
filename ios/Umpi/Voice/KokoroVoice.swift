@@ -37,7 +37,7 @@ actor KokoroVoice {
             try await manager.initialize(preloadVoices: Set(Self.voices.map(\.id)))
             self.manager = manager
             UserDefaults.standard.set(true, forKey: "kokoro.downloaded")
-            print(String(format: "VOICELOG kokoro ready in %.1f s", Date().timeIntervalSince(started)))
+            voiceLog(String(format: "kokoro ready in %.1f s", Date().timeIntervalSince(started)))
         }
         preparing = task
         do { try await task.value; state = .ready; preparing = nil }
@@ -52,7 +52,7 @@ actor KokoroVoice {
         let result = try await manager.synthesizeDetailed(text: text, voice: voice, speed: max(0.7, min(1.6, speed)))
         let seconds = Double(result.samples.count) / Double(result.sampleRate)
         let took = Date().timeIntervalSince(started)
-        print(String(format: "VOICELOG kokoro made %.1f s of speech in %.2f s (%.1fx real time)", seconds, took, seconds / max(took, 0.001)))
+        voiceLog(String(format: "kokoro made %.1f s of speech in %.2f s (%.1fx real time)", seconds, took, seconds / max(took, 0.001)))
         return result.samples
     }
 

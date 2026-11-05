@@ -76,7 +76,7 @@ final class VoiceSpeaker: @unchecked Sendable {
                 guard generation == self.generation else { return }
                 guard let samples, !samples.isEmpty, let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 24_000, channels: 1, interleaved: false),
                       let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)) else {
-                    print("VOICELOG kokoro failed for a stretch; using the iOS voice")
+                    voiceLog("kokoro failed for a stretch; using the iOS voice")
                     self.writeWithApple(text, number: number, generation: generation)
                     return
                 }
