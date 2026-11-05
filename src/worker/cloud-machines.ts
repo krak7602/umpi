@@ -40,6 +40,8 @@ export interface CloudMachineRecord {
   address?: string;
   /** When one of its threads was last seen working. */
   activeAt?: string;
+  /** The T3 Code project Umpi made for it: new threads go there unless another project is named. */
+  projectId?: string;
 }
 export interface CloudMachineStub {
   wake(start: CloudMachineStart, snapshotKey: string): Promise<{ token: string; restored: boolean }>;
@@ -64,6 +66,8 @@ export interface CloudMachineOptions {
 
 export const CLOUD_MAX_AWAKE = 6;
 export const CLOUD_MAX_MACHINES = 24;
+/** Cloud machines run one agent, pi, which uses the models Umpi gives it; T3 Code needs the choice named. */
+const CLOUD_MODEL = { provider: "pi", model: "default" };
 const IDLE_CHECK_MS = 120_000;
 const SAVE_LIMIT_MS = 600_000;
 const RECENT_USE_MS = 180_000;
@@ -94,6 +98,7 @@ export class CloudMachines {
     t3.cloud = {
       prepare: id => this.ensureAwake(id),
       asleep: id => { const machine = this.find(id); return machine && machine.status !== "awake" ? { ...(machine.threads ? { threads: machine.threads } : {}) } : undefined; },
+      defaults: id => { const projectId = this.find(id)?.projectId; return { ...(projectId ? { projectId } : {}), modelSelection: CLOUD_MODEL }; },
     };
   }
 
@@ -224,10 +229,11 @@ export class CloudMachines {
     const folder = `/home/agent/work/${repo?.name ?? "scratch"}`;
     if (repo) await this.t3.call(id, "t3_project_clone", { destinationPath: folder, remoteUrl: repo.remote, protocol: "ssh" });
     const project = record(await this.t3.call(id, "t3_project_create", { title: repo?.name ?? input.title.slice(0, 60), workspaceRoot: folder, createWorkspaceRootIfMissing: true,
-      defaultModelSelection: { provider: "pi", model: "default" } }));
+      defaultModelSelection: CLOUD_MODEL }));
     const projectId = typeof project.id === "string" ? project.id : typeof project.projectId === "string" ? project.projectId : undefined;
+    if (projectId) this.save({ ...this.get(id), projectId });
     const launched = record(await this.t3.call(id, "t3_thread_launch", { title: input.title.slice(0, 120), message: input.task, clientRequestId: `umpi-${id}-first`,
-      ...(projectId ? { projectId } : { scratch: true }), modelSelection: { provider: "pi", model: "default" }, runtimeMode: "full-access",
+      ...(projectId ? { projectId } : { scratch: true }), modelSelection: CLOUD_MODEL, runtimeMode: "full-access",
       ...(input.branch ? { workspaceStrategy: { type: "worktree", branch: input.branch } } : {}), ...(input.plan ? { interactionMode: "plan" } : {}) }));
     const created = Array.isArray(launched.threads) && launched.threads.length ? record(launched.threads[0]) : launched;
     return { machine: this.get(id), ...(typeof created.threadId === "string" ? { threadId: created.threadId } : {}) };

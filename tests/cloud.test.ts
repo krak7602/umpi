@@ -120,6 +120,14 @@ test("a cloud machine is created, used, put to sleep when idle, listed without w
   assert.equal(events.filter(event => event.startsWith("wake")).length, 2);
   assert.equal(cloud.list()[0]!.status, "awake");
 
+  // A new thread with no project named goes to the machine's own project, with the model named for T3 Code.
+  await t3.act(created.machine.id, { kind: "start", title: "Second", message: "More work" }, "req-second");
+  const second = machine.calls.at(-1)!;
+  assert.equal(second.name, "t3_thread_launch");
+  assert.equal(second.args.projectId, "proj-1");
+  assert.equal(second.args.scratch, undefined);
+  assert.deepEqual(second.args.modelSelection, { provider: "pi", model: "default" });
+
   await cloud.remove(created.machine.id);
   assert.deepEqual(events.slice(-2), [`discard ${created.machine.id}`, `delete cloud-machines/${created.machine.id}/state.tar.zst`]);
   assert.equal(t3.list().length, 0);
