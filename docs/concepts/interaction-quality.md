@@ -50,6 +50,8 @@ Any replacement voice path must demonstrate:
 
 Measure queuing, model response, tool duration, and speech delivery separately when evaluating a replacement. Fast canned acknowledgments do not show genuine conversational availability. This is an acceptance criterion for a replacement, not a claim that such a replacement has been tested.
 
+[Voice mode](../subsystems/phone-companion.md#voice-mode) is the voice path now under evaluation: the phone transcribes and speaks, and the same Claude conversation answers at low effort for ordinary turns. Measured so far (2026-11-05), on the local coordinator with a real Claude login: an ordinary exchange's first words reach the phone 1.5 to 2 seconds after the message arrives, a tool question about 2 seconds, and cutting in stops a running reply without a model failure. Not yet shown: the time from the end of the owner's speech to Umpi's first spoken word on a real phone, small corrections, continued conversation while longer work runs (a new spoken message waits behind a running turn unless it cuts in), and asynchronous results delivered by voice.
+
 Calls are optional. Keep them only when actual latency and responsiveness serve a useful purpose. If the real subscription voice transport cannot meet these requirements, omit calls from the new product. Do not make the migration depend on preserving calls.
 
 Do not remove or reconfigure an external caller during research. The native [phone companion](../subsystems/phone-companion.md) implements alarms and structured actions without reproducing a full chat interface. This does not establish a replacement voice path or arbitrary control of other apps.

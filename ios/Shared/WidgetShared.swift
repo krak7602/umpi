@@ -39,6 +39,7 @@ struct WidgetAction: Identifiable, Hashable, Sendable {
 
     static let all: [WidgetAction] = [
         .init(id: "voice", label: "Voice", symbol: "mic.fill"),
+        .init(id: "talk", label: "Talk", symbol: "waveform"),
         .init(id: "today", label: "Today", symbol: "sun.max.fill"),
         .init(id: "chat", label: "Chat", symbol: "bubble.left.and.bubble.right.fill"),
         .init(id: "work", label: "Work", symbol: "tray.full.fill"),

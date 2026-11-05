@@ -45,9 +45,9 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connect to a coordinator you choose on your local network during development.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Umpi records voice notes you choose to send. The recording is transcribed on this iPhone and then deleted.</string>
+	<string>Umpi records voice notes you choose to send, and listens while voice mode is open. Speech is transcribed on this iPhone; only the text is sent.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Umpi turns your voice notes, audio files, and video speech into text to send to your assistant.</string>
+	<string>Umpi turns your voice notes, voice mode, audio files, and video speech into text to send to your assistant.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

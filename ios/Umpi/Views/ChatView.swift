@@ -22,6 +22,7 @@ struct ChatView: View {
     @State private var requests = ChatRequests.shared
     @Environment(\.scenePhase) private var scenePhase
     @State private var onScreen = false
+    @State private var showVoice = false
 
     var body: some View {
         let pending = store.pendingMessages
@@ -98,6 +99,11 @@ struct ChatView: View {
         .navigationTitle("Chat")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { showVoice = true } label: { Image(systemName: "waveform") }
+                    .accessibilityIdentifier("chat.voiceMode")
+                    .accessibilityLabel("Talk to Umpi")
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Image(systemName: chat.isLive ? "dot.radiowaves.left.and.right" : "wifi.slash")
                     .foregroundStyle(chat.isLive ? Color.green : Color.secondary)
@@ -131,6 +137,14 @@ struct ChatView: View {
                 for _ in 0..<30 where UIApplication.shared.applicationState != .active { try? await Task.sleep(for: .milliseconds(100)) }
                 await startRecording()
             }
+        }
+        .onChange(of: requests.talk, initial: true) { _, wanted in
+            guard wanted else { return }
+            requests.talk = false
+            showVoice = true
+        }
+        .fullScreenCover(isPresented: $showVoice) {
+            VoiceModeView().environment(store)
         }
         .onChange(of: requests.draft, initial: true) { _, text in
             guard let text else { return }
