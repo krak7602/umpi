@@ -9,6 +9,8 @@ enum MacSection: String, CaseIterable, Identifiable {
     case chat, today, work, settings
     var id: String { rawValue }
     var title: String { rawValue.capitalized }
+    /// Its place in the sidebar, which is also its Command-key shortcut.
+    var number: Int { (Self.allCases.firstIndex(of: self) ?? 0) + 1 }
     var symbol: String {
         switch self {
         case .chat: "bubble.left.and.bubble.right"
@@ -31,6 +33,9 @@ final class MacApp {
     /// One chat for every place it shows; replaced when the Mac is disconnected, so nothing of the old pairing remains.
     private(set) var chat = ChatModel()
     var section: MacSection = .chat
+    /// Whether the main window shows the paired layout (sidebar) or the pairing form. It follows `store.isPaired`
+    /// only after the window has been resized for the new layout.
+    var windowPaired = false
     /// Shortcuts the system refused, such as one another app already uses.
     private(set) var refusedShortcuts: Set<ShortcutSettings.Action> = []
     private(set) var launchAtLogin = SMAppService.mainApp.status == .enabled
@@ -44,7 +49,10 @@ final class MacApp {
     @ObservationIgnored private var announcedThrough: Int?
     @ObservationIgnored private var askedForNotifications = false
 
-    init(store: CompanionStore = CompanionStore()) { self.store = store }
+    init(store: CompanionStore = CompanionStore()) {
+        self.store = store
+        windowPaired = store.isPaired
+    }
 
     func start(showWindow: Bool) {
         guard !started else { return }
@@ -80,6 +88,12 @@ final class MacApp {
     }
 
     func showPanel(_ mode: ChatPanelController.Mode) { panel.show(mode) }
+
+    /// Command-N: the chat in the main window, ready to type.
+    func newMessage() {
+        showMain(.chat)
+        mainWindow.focusComposer()
+    }
 
     // MARK: Staying up to date
 
@@ -174,7 +188,9 @@ final class MacApp {
             if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
             launchAtLoginProblem = nil
         } catch {
-            launchAtLoginProblem = "macOS refused: \(error.localizedDescription)"
+            launchAtLoginProblem = enabled
+                ? "macOS did not add Umpi to Login Items. Add it in System Settings › General › Login Items."
+                : "macOS did not remove Umpi from Login Items. Remove it in System Settings › General › Login Items."
         }
         launchAtLogin = SMAppService.mainApp.status == .enabled
         if SMAppService.mainApp.status == .requiresApproval {

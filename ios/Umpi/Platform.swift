@@ -102,3 +102,51 @@ extension View {
         #endif
     }
 }
+
+extension View {
+    /// A Mac button drawn as a symbol or a quiet link, without the push-button bezel. On the phone this changes
+    /// nothing.
+    @ViewBuilder func borderlessOnMac() -> some View {
+        #if os(macOS)
+        self.buttonStyle(.borderless)
+        #else
+        self
+        #endif
+    }
+
+    /// In a wide Mac window, a list, form, or scroll view keeps its rows at a readable width, centred, with the scroll
+    /// bar still at the window's edge. On the phone this changes nothing.
+    @ViewBuilder func readableWidth(_ width: CGFloat = 720) -> some View {
+        #if os(macOS)
+        self.modifier(ReadableWidth(width: width))
+        #else
+        self
+        #endif
+    }
+}
+
+#if os(macOS)
+private struct ReadableWidth: ViewModifier {
+    let width: CGFloat
+    @State private var available: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        content
+            .contentMargins(.horizontal, max(0, ((available - width) / 2).rounded(.down)), for: .scrollContent)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { available = $0 }
+    }
+}
+#endif
+
+/// Sections of rows: the phone's list, and on the Mac a grouped form, as Mac settings and inspectors show them.
+struct PlatformList<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        #if os(macOS)
+        Form { content() }.formStyle(.grouped)
+        #else
+        List { content() }
+        #endif
+    }
+}

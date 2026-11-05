@@ -36,7 +36,14 @@ final class ChatModel {
     private(set) var hasOlder = false
     private(set) var isLoading = false
     private(set) var errorMessage: String?
-    private(set) var isLive = false
+    private(set) var isLive = false {
+        didSet { if isLive != oldValue { settleOffline() } }
+    }
+    /// The socket has been down for a while, not just reconnecting: the only connection state the app shows. It turns
+    /// on 2 seconds after the socket closes and off once a new one has stayed open for 3 seconds, so an ordinary
+    /// reconnect, or a retry that fails at once, does not flash it.
+    private(set) var isOffline = false
+    @ObservationIgnored private var offlineTimer: Task<Void, Never>?
 
     @ObservationIgnored private var latest = 0
     @ObservationIgnored private var fetching = false
@@ -184,8 +191,21 @@ final class ChatModel {
         }
         socket?.cancel(with: .goingAway, reason: nil)
         isLive = false
+        // The chat stopped watching (it left the screen); that is not being offline.
+        offlineTimer?.cancel()
+        isOffline = false
     }
     private struct Change: Decodable { var type: String; var latest: Int }
+
+    private func settleOffline() {
+        offlineTimer?.cancel()
+        let live = isLive
+        offlineTimer = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(live ? 3 : 2))
+            guard !Task.isCancelled, let self, self.isLive == live else { return }
+            self.isOffline = !live
+        }
+    }
 }
 
 /// What the chat should do when it appears or is already showing: open voice mode, or begin a draft. Kept here

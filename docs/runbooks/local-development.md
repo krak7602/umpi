@@ -570,6 +570,15 @@ xcodebuild -project ios/Umpi.xcodeproj -scheme UmpiMac -destination 'platform=ma
 
 The tests cover shortcut reading and display and which chat entries become notifications. Pair the Mac with a code from a paired phone (Settings › Server › Pair another device). Global shortcuts over full-screen apps, notifications, and the microphone in voice mode need a check by the owner on the Mac itself.
 
+The Mac icon is drawn from the phone's artwork in the macOS icon shape. Regenerate it after the phone's icon:
+
+```sh
+swift ios/Tools/GenerateMacAppIcon.swift ios/Umpi/Assets.xcassets/AppIcon.appiconset/AppIcon.png \
+  ios/UmpiMac/Assets.xcassets/AppIcon.appiconset
+```
+
+A Debug build run from the temporary build folder above was refused notifications by macOS (`UNErrorDomain` 1, "Notifications are not allowed for this application") without a prompt, and it was not listed in System Settings › Notifications. Settings › Alerts then advises moving Umpi to Applications; its tooltip has the system's message and code. A copy of the app in `/Applications` is the next thing to check; it has not been tried yet.
+
 #### Pair and operate
 
 The coordinator must run the companion-enabled code; building the app does not deploy the Worker. After deployment, send `/pair` to the owner-bound Telegram bot. Alternatively, the protected control API can issue a code with `POST /api/companion/pairings`. Enter the trusted server origin and the short-lived code in the native pairing screen. Do not put the control token or model credentials in the app.

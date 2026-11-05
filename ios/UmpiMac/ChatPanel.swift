@@ -176,27 +176,62 @@ struct ChatPanelView: View {
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
-    /// Close, the name and connection, and the switches; dragging it moves the panel.
+    /// Close, the name and connection, and the main window; dragging it moves the panel.
     private func header(_ state: ChatPanelController.State) -> some View {
-        HStack(spacing: 12) {
-            Button { controller.hide() } label: {
-                Image(systemName: "xmark.circle.fill").font(.system(size: 14)).foregroundStyle(.secondary)
-            }
-            .help("Hide (Esc)")
-            Text("Umpi").font(.headline)
-            if store.isPaired {
-                Circle().fill(app.chat.isLive ? Color.green : Color.secondary.opacity(0.5)).frame(width: 7, height: 7)
-                    .help(app.chat.isLive ? "Live" : "Not connected")
+        HStack(spacing: 8) {
+            Button { controller.hide() } label: { Image(systemName: "xmark") }
+                .buttonStyle(PanelHeaderButtonStyle())
+                .help("Hide (Esc)")
+                .accessibilityLabel("Hide")
+            HStack(spacing: 6) {
+                Text("Umpi").font(.system(size: 13, weight: .semibold))
+                // The connection shows only when it is down.
+                if store.isPaired, app.chat.isOffline {
+                    Image(systemName: "wifi.slash")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .help("Not connected")
+                        .accessibilityLabel("Not connected")
+                }
             }
             Spacer()
             Button { app.showMain(.chat) } label: { Image(systemName: "macwindow") }
+                .buttonStyle(PanelHeaderButtonStyle())
                 .help("Open the Umpi window")
+                .accessibilityLabel("Open the Umpi window")
         }
-        .buttonStyle(.borderless)
-        .font(.system(size: 13, weight: .medium))
-        .padding(.horizontal, 12)
-        .frame(height: 38)
+        .padding(.horizontal, 8)
+        .frame(height: 40)
         .contentShape(Rectangle())
         .gesture(WindowDragGesture())
+    }
+}
+
+/// A header control as Mac toolbars draw them: a clear symbol in a 28 pt square that is highlighted under the pointer
+/// and darker while pressed.
+struct PanelHeaderButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Highlighted(configuration: configuration)
+    }
+
+    private struct Highlighted: View {
+        let configuration: ButtonStyleConfiguration
+        @State private var hovering = false
+        @Environment(\.isEnabled) private var isEnabled
+
+        var body: some View {
+            configuration.label
+                .font(.system(size: 13, weight: .semibold))
+                .imageScale(.medium)
+                .foregroundStyle(isEnabled ? (hovering ? Color.primary : Color.secondary) : Color.secondary.opacity(0.5))
+                .frame(width: 28, height: 28)
+                .background {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.primary.opacity(configuration.isPressed ? 0.16 : hovering ? 0.08 : 0))
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .onHover { hovering = isEnabled && $0 }
+                .animation(.easeOut(duration: 0.12), value: hovering)
+        }
     }
 }

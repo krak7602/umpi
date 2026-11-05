@@ -5,7 +5,7 @@ struct QueuedChangesView: View {
     @State private var discardID: String?
 
     var body: some View {
-        List {
+        PlatformList {
             ConnectionStatusSection()
             if store.queuedChanges.isEmpty {
                 ContentUnavailableView("No queued changes", systemImage: "checkmark.circle", description: Text("There are no pending local requests in the durable queue."))
@@ -32,6 +32,7 @@ struct QueuedChangesView: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
+        .readableWidth()
         .navigationTitle("Queued changes")
         .refreshable { await store.synchronize() }
         .confirmationDialog("Discard this queued request?", isPresented: Binding(get: { discardID != nil }, set: { if !$0 { discardID = nil } }), titleVisibility: .visible) {

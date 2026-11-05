@@ -6,7 +6,7 @@ struct ActivityListView: View {
     @State private var showAsk = false
 
     var body: some View {
-        List {
+        PlatformList {
             ConnectionStatusSection()
             if !effects.pendingReview.isEmpty {
                 Section("Device actions awaiting your review") {
@@ -87,6 +87,7 @@ struct ActivityListView: View {
             }
         }
         .softScrollEdges()
+        .readableWidth()
         .navigationTitle("Activity")
         .refreshable { await store.synchronize() }
         .toolbar {
@@ -137,6 +138,7 @@ struct JobDetailView: View {
                 ContentUnavailableView("Command unavailable", systemImage: "terminal", description: Text("Refresh Activity to retrieve the current coordinator state."))
             }
         }
+        .readableWidth()
         .navigationTitle("Command details")
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await store.synchronize() }
@@ -206,6 +208,7 @@ private struct CommandApprovalView: View {
                 }
                 if let error = store.errorMessage { Section { Text(error) } }
             }
+            .readableWidth()
             .navigationTitle("Review command")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Not now") { dismiss() }.disabled(submitting) } }
@@ -239,6 +242,7 @@ struct ChoiceDetailView: View {
             Section { Text("Answering a question does not approve a command.").foregroundStyle(.secondary) }
             ConnectionStatusSection()
         }
+        .readableWidth()
         .navigationTitle("Question")
     }
 
@@ -286,6 +290,7 @@ struct DeviceActionReviewView: View {
             }
             if let error = effects.errorMessage { Section { Text(error) } }
         }
+        .readableWidth()
         .navigationTitle("Review device action")
         .navigationBarTitleDisplayMode(.inline)
     }

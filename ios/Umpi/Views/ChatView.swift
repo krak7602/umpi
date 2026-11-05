@@ -23,6 +23,9 @@ struct ChatView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var onScreen = false
     @State private var showVoice = false
+    #if os(macOS)
+    @State private var dropTargeted = false
+    #endif
 
     /// With no model given, the chat has its own and keeps it live while it shows.
     init(chat: ChatModel? = nil) {
@@ -38,6 +41,7 @@ struct ChatView: View {
                     if chat.hasOlder {
                         Button("Load earlier messages") { Task { await chat.loadOlder(store) } }
                             .font(.footnote).frame(maxWidth: .infinity)
+                            .borderlessOnMac()
                     }
                     if chat.entries.isEmpty && pending.isEmpty && !chat.isLoading {
                         ContentUnavailableView("No messages yet", systemImage: "bubble.left.and.bubble.right",
@@ -71,11 +75,14 @@ struct ChatView: View {
                     Color.clear.frame(height: 1).id("bottom")
                 }
                 .padding(.horizontal)
-                .padding(.vertical, 8)
                 #if os(macOS)
-                // A wide Mac window keeps lines at a readable length, centred.
+                // The oldest message starts clear of the toolbar's edge; a wide Mac window keeps lines at a readable
+                // length, centred.
+                .padding(.top, 16).padding(.bottom, 8)
                 .frame(maxWidth: 760)
                 .frame(maxWidth: .infinity)
+                #else
+                .padding(.vertical, 8)
                 #endif
             }
             .defaultScrollAnchor(.bottom)
@@ -107,18 +114,35 @@ struct ChatView: View {
                 else { withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
             }
             .onChange(of: pending.count) { _, _ in withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
+            #if os(macOS)
+            // The Mac's chat is already loaded when it shows, so the first load above has passed: it opens on the newest
+            // message, and settles there again once diagrams and photos have sized themselves.
+            .onAppear {
+                pinned = true
+                Task { @MainActor in
+                    for delay in [0, 80, 400] { try? await Task.sleep(for: .milliseconds(delay)); proxy.scrollTo("bottom", anchor: .bottom) }
+                }
+            }
+            #endif
         }
         .safeAreaInset(edge: .bottom) { composer }
+        #if os(macOS)
+        // Files and images dropped anywhere on the chat attach as if pasted.
+        .onDrop(of: [.fileURL, .image, .movie], isTargeted: $dropTargeted) { providers in drop(providers) }
+        .overlay { if dropTargeted { dropHighlight } }
+        #endif
         .navigationTitle("Chat")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             #if os(iOS)
-            // The phone's title bar shows the connection; the Mac shows it in its sidebar and panel header instead of
-            // as a toolbar item that looks like a button.
-            ToolbarItem(placement: .topBarTrailing) {
-                Image(systemName: chat.isLive ? "dot.radiowaves.left.and.right" : "wifi.slash")
-                    .foregroundStyle(chat.isLive ? Color.green : Color.secondary)
-                    .accessibilityLabel(chat.isLive ? "Live" : "Not connected")
+            // The connection shows only when something is wrong; the Mac shows it in its sidebar and panel header
+            // instead of as a toolbar item that looks like a button.
+            if chat.isOffline {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Image(systemName: "wifi.slash")
+                        .foregroundStyle(Color.secondary)
+                        .accessibilityLabel("Not connected")
+                }
             }
             #endif
         }
@@ -204,6 +228,16 @@ struct ChatView: View {
     /// One line of the message field: body text plus its vertical padding.
     static let fieldHeight: CGFloat = 40
 
+    /// The button left of the field also formats: on the phone while the keyboard is up, on the Mac once something is
+    /// typed, since the Mac's field is usually focused and its attach button should stay a +.
+    private var formatting: Bool {
+        #if os(macOS)
+        !draft.isEmpty
+        #else
+        composing || !draft.isEmpty
+        #endif
+    }
+
     private var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || attachment != nil }
 
     private var composerRow: some View {
@@ -213,6 +247,7 @@ struct ChatView: View {
                     Label(attachment.summary, systemImage: attachment.symbol).font(.footnote).lineLimit(1)
                     Spacer()
                     Button { self.attachment = nil } label: { Image(systemName: "xmark.circle.fill") }.foregroundStyle(.secondary).accessibilityLabel("Remove attachment")
+                        .borderlessOnMac()
                 }
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -227,7 +262,7 @@ struct ChatView: View {
         HStack(alignment: .bottom, spacing: 8) {
             // One button, like Messages: attach when empty; while typing it also formats (Aa), with no floating bar.
             Menu {
-                if composing || !draft.isEmpty {
+                if formatting {
                     Section("Format") { formatButtons }
                 }
                 Section("Attach") {
@@ -235,7 +270,7 @@ struct ChatView: View {
                     Button { showFiles = true } label: { Label("Files and audio", systemImage: "doc") }
                 }
             } label: {
-                Image(systemName: composing || !draft.isEmpty ? "textformat" : "plus").font(.system(size: 17, weight: .semibold)).frame(width: ChatView.fieldHeight, height: ChatView.fieldHeight)
+                Image(systemName: formatting ? "textformat" : "plus").font(.system(size: 17, weight: .semibold)).frame(width: ChatView.fieldHeight, height: ChatView.fieldHeight)
                     .contentTransition(.symbolEffect(.replace))
                     .glassOrFill(in: Circle())
             }
@@ -302,6 +337,32 @@ struct ChatView: View {
             } else { draft = previous; attachment = sending }
         }
     }
+    #if os(macOS)
+    /// What was dropped, read the way a paste is: Finder files as files, images without text as photos.
+    private func drop(_ providers: [NSItemProvider]) -> Bool {
+        guard preparing == nil else { return false }
+        let fromPasteboard = ComposerNSTextView.mediaProviders(NSPasteboard(name: .drag))
+        let items = fromPasteboard.isEmpty ? providers : fromPasteboard
+        guard !items.isEmpty else { return false }
+        prepare("Adding what you dropped…") { try await PreparedAttachment.pasted(items) }
+        return true
+    }
+
+    private var dropHighlight: some View {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+            .background(Color.accentColor.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                Label("Drop to attach", systemImage: "paperclip")
+                    .font(.headline).foregroundStyle(Color.accentColor)
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(.regularMaterial, in: Capsule())
+            }
+            .padding(8)
+            .allowsHitTesting(false)
+    }
+    #endif
+
     private func prepare(_ label: String, _ work: @escaping @MainActor () async throws -> PreparedAttachment) {
         preparing = label
         Task {
@@ -455,7 +516,8 @@ private struct ChatBubble: View {
                 if entry.fromOwner { ownerBubble } else if entry.kind == "message" { messageCard } else { reply }
                 if let rows = entry.buttons { buttons(rows) }
             }
-            if !caption.isEmpty { Text(caption).font(.caption2).foregroundStyle(.tertiary) }
+            // Under a bubble, lined up with the bubble's text rather than its rounded edge.
+            if !caption.isEmpty { Text(caption).font(.caption2).foregroundStyle(.tertiary).padding(.horizontal, entry.fromOwner ? 14 : 0) }
         }
         .frame(maxWidth: .infinity, alignment: entry.fromOwner ? .trailing : .leading)
         .accessibilityElement(children: .contain)
@@ -549,6 +611,7 @@ private struct PendingBubble: View {
                 .foregroundStyle(.white)
                 .background(Color.accentColor.opacity(0.6), in: RoundedRectangle(cornerRadius: 18))
             Text(failed ? "Not sent — see Settings › Queued changes" : "Sending…").font(.caption2).foregroundStyle(failed ? .red : .secondary)
+                .padding(.trailing, 14)
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, 40)
