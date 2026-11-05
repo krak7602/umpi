@@ -162,7 +162,6 @@ struct ChatPanelView: View {
                 } else {
                     // The header has the panel's controls; the chat's own toolbar items would sit on top of it.
                     ChatView(chat: app.chat).id(ObjectIdentifier(app.chat))
-                        .environment(\.chatInPanel, true)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -190,12 +189,6 @@ struct ChatPanelView: View {
                     .help(app.chat.isLive ? "Live" : "Not connected")
             }
             Spacer()
-            if store.isPaired {
-                Button { state.mode = state.mode == .voice ? .chat : .voice } label: {
-                    Image(systemName: state.mode == .voice ? "text.bubble" : "waveform")
-                }
-                .help(state.mode == .voice ? "Chat" : "Talk")
-            }
             Button { app.showMain(.chat) } label: { Image(systemName: "macwindow") }
                 .help("Open the Umpi window")
         }
