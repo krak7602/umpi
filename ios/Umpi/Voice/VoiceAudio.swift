@@ -141,15 +141,21 @@ final class VoiceAudio: @unchecked Sendable {
         // Echo cancellation turns other sound down by default; it should not touch anything else on the phone.
         if processing { input.voiceProcessingOtherAudioDuckingConfiguration = .init(enableAdvancedDucking: false, duckingLevel: .min) }
         #if os(iOS)
-        print("VOICELOG audio: echo cancellation \(processing ? "on" : "off"), \(Int(session.sampleRate)) Hz, route \(session.currentRoute.outputs.map(\.portType.rawValue).joined(separator: ","))")
+        voiceLog("audio: echo cancellation \(processing ? "on" : "off"), \(Int(session.sampleRate)) Hz, route \(session.currentRoute.outputs.map(\.portType.rawValue).joined(separator: ","))")
         #else
         // The Mac has no audio session: the engine uses the default input and output devices.
-        print("VOICELOG audio: echo cancellation \(processing ? "on" : "off"), \(Int(input.outputFormat(forBus: 0).sampleRate)) Hz")
+        voiceLog("audio: echo cancellation \(processing ? "on" : "off"), \(Int(input.outputFormat(forBus: 0).sampleRate)) Hz")
         #endif
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else { throw VoiceError("The phone gave no microphone format.") }
         inputRate = format.sampleRate
-        input.installTap(onBus: 0, bufferSize: AVAudioFrameCount(format.sampleRate / 50), format: format) { [weak self] buffer, _ in self?.heard(buffer) }
+        voiceLog("microphone: \(format.channelCount) channels, \(Int(format.sampleRate)) Hz, \(format.isInterleaved ? "interleaved" : "separate channels")")
+        // The recognizer gets one channel: with echo cancellation, a Mac's microphone can deliver several, and the
+        // recognizer then hears no speech at all.
+        input.installTap(onBus: 0, bufferSize: AVAudioFrameCount(format.sampleRate / 50), format: format) { [weak self] buffer, _ in
+            guard let self, let mono = Self.firstChannel(buffer) else { return }
+            self.heard(mono)
+        }
         if player.engine == nil { engine.attach(player) }
         // The player is connected, and its level measured, once the first speech gives its format.
         if let playerFormat {
@@ -208,8 +214,13 @@ final class VoiceAudio: @unchecked Sendable {
                 guard let changed = lastWordsChange else { return (false, true) }
                 return (Date().timeIntervalSince(changed) >= _pause + 0.6, false)
             }
+            if heardFrames / 50 != (heardFrames - frames) / 50 {
+                voiceLog(String(format: "listening: loudest %.0f dB, floor %.0f dB, voiced %d/%d frames, quiet %.1f s, heard %.1f s, words %@",
+                             loudest, floorDB, voicedFrames, frames, Double(silentFrames) * 0.02, Double(heardFrames) * 0.02, noWords ? "none" : (wordsSettled ? "settled" : "changing")))
+            }
             // Ends on quiet, on words that stopped changing, after 55 s, or after 8 s of sound with no words at all.
             if Double(silentFrames) * 0.02 >= pause || wordsSettled || Double(heardFrames) * 0.02 >= 55 || (noWords && Double(heardFrames) * 0.02 >= 8) {
+                voiceLog("turn ended: \(Double(silentFrames) * 0.02 >= pause ? "quiet" : wordsSettled ? "words settled" : noWords ? "no words" : "too long")")
                 self.mode = .replying
                 request?.endAudio()
                 onEvent?(.ended(turn: turn))
@@ -249,6 +260,7 @@ final class VoiceAudio: @unchecked Sendable {
         request.taskHint = .dictation
         // On the phone's own model when it has one.
         if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
+        voiceLog("recognition started (on device: \(recognizer.supportsOnDeviceRecognition), locale \(recognizer.locale.identifier))")
         turn += 1
         let turn = self.turn
         lock.withLock { lastWords = ""; lastWordsChange = nil }
@@ -266,7 +278,8 @@ final class VoiceAudio: @unchecked Sendable {
                 }
                 self.lock.withLock { if text != self.lastWords { self.lastWords = text; self.lastWordsChange = text.isEmpty ? nil : Date() } }
                 self.onEvent?(.words(text, final: result.isFinal, turn: turn))
-            } else if error != nil {
+            } else if let error {
+                voiceLog("recognition error: \(error.localizedDescription)")
                 self.onEvent?(.words("", final: true, turn: turn))
             }
         }
@@ -302,8 +315,8 @@ final class VoiceAudio: @unchecked Sendable {
             defer { queuedFrames += Int(float.frameLength); emptySince = nil }
             return emptySince.map { Date().timeIntervalSince($0) }
         }
-        if let gap, gap > 0.03, gap < 5 { print(String(format: "VOICELOG gap of %.0f ms before the next speech", gap * 1000)) }
-        if !loggedFormat { loggedFormat = true; print("VOICELOG speech buffers: \(buffer.format)") }
+        if let gap, gap > 0.03, gap < 5 { voiceLog(String(format: "gap of %.0f ms before the next speech", gap * 1000)) }
+        if !loggedFormat { loggedFormat = true; voiceLog("speech buffers: \(buffer.format)") }
         player.scheduleBuffer(float) { [weak self] in
             guard let self else { return }
             self.lock.withLock { self.queuedFrames -= Int(float.frameLength); if self.queuedFrames == 0 { self.emptySince = Date() } }
@@ -334,6 +347,20 @@ final class VoiceAudio: @unchecked Sendable {
     static func floatCopy(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
         guard let float = floatBuffer(buffer) else { return nil }
         return float === buffer ? (buffer.copy() as? AVAudioPCMBuffer) : float
+    }
+
+    /// Channel 0 alone, as float: the echo-cancelled voice. The same buffer when it already is one float channel.
+    static func firstChannel(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        let source = buffer.format
+        if source.channelCount == 1, source.commonFormat == .pcmFormatFloat32, !source.isInterleaved { return buffer }
+        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: source.sampleRate, channels: 1, interleaved: false),
+              let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: buffer.frameLength), let target = out.floatChannelData?[0] else { return nil }
+        out.frameLength = buffer.frameLength
+        let n = Int(buffer.frameLength), stride = source.isInterleaved ? Int(source.channelCount) : 1
+        if let floats = buffer.floatChannelData { for i in 0..<n { target[i] = floats[0][i * stride] } }
+        else if let ints = buffer.int16ChannelData { for i in 0..<n { target[i] = Float(ints[0][i * stride]) / 32_768 } }
+        else { return nil }
+        return out
     }
 
     /// The synthesizer's buffers can be 16-bit; the player takes float.

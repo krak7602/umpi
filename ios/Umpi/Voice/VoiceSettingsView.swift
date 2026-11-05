@@ -10,6 +10,8 @@ struct VoiceSettingsView: View {
     @State private var kokoro = KokoroVoice.State.notReady
     @State private var natural = PCMPlayer()
     @Environment(\.dismiss) private var dismiss
+    /// Shown as a sheet over voice mode, with a Done button; pushed from Settings, without one.
+    var inSheet = false
 
     var body: some View {
         Form {
@@ -40,6 +42,7 @@ struct VoiceSettingsView: View {
                         row(name: voice.name, detail: naturalDetail(voice.detail), selected: settings.kokoroVoice == voice.id)
                     }
                     .tint(.primary)
+                    .shapedButton()
                     .disabled(kokoro == .preparing)
                 }
                 if KokoroVoice.downloaded {
@@ -54,11 +57,13 @@ struct VoiceSettingsView: View {
             Section {
                 Button { settings.voiceIdentifier = nil; play() } label: { row(name: "Automatic", detail: "The best voice for your language", selected: settings.voiceIdentifier == nil) }
                     .tint(.primary)
+                    .shapedButton()
                 ForEach(voices, id: \.identifier) { voice in
                     Button { settings.voiceIdentifier = voice.identifier; play() } label: {
                         row(name: voice.name, detail: "\(VoiceCatalog.accent(voice)) · \(VoiceCatalog.quality(voice))", selected: settings.voiceIdentifier == voice.identifier)
                     }
                     .tint(.primary)
+                    .shapedButton()
                 }
             } header: { Text("Voice") } footer: {
                 Text("Basic voices, including the Siri voices apps are given, are small copies that can sound mechanical. Premium and Enhanced voices sound far more natural: download them free in \(Self.voicesPath), and they appear here.")
@@ -86,10 +91,13 @@ struct VoiceSettingsView: View {
                 Text("How long you can pause before Umpi takes your turn as finished. With cutting in on, talking over Umpi stops it.")
             }
         }
+        #if os(macOS)
+        .formStyle(.grouped)
+        #endif
         .readableWidth()
         .navigationTitle("Voice")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        .toolbar { if inSheet { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } } }
         // A voice downloaded in Settings appears without reopening this screen.
         .onReceive(NotificationCenter.default.publisher(for: AVSpeechSynthesizer.availableVoicesDidChangeNotification)) { _ in voices = VoiceCatalog.voices() }
         .onAppear { voices = VoiceCatalog.voices() }

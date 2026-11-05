@@ -129,7 +129,7 @@ final class VoiceConversation {
             let text = words.trimmingCharacters(in: .whitespacesAndNewlines)
             words = ""
             if text.count >= 2, let store {
-                print("VOICELOG left the app mid-turn; sending what was heard through the outbox")
+                voiceLog("left the app mid-turn; sending what was heard through the outbox")
                 await store.sendChat(text: text, voice: true, context: Self.leftNote, media: MediaInfo(kind: "voice"))
             }
         }
@@ -255,7 +255,11 @@ final class VoiceConversation {
     private func send() {
         let text = words.trimmingCharacters(in: .whitespacesAndNewlines)
         // Too short to be a request, such as a cough: listen again.
-        guard text.count >= 2, let transport = store?.chatTransport else { listen(); return }
+        guard text.count >= 2, let transport = store?.chatTransport else {
+            voiceLog("nothing to send (\(text.count) characters heard); listening again")
+            listen(); return
+        }
+        voiceLog("sending \(text.split(separator: " ").count) words")
         words = ""
         let cut = interrupted
         interrupted = nil
