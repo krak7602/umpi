@@ -3,7 +3,8 @@ import AVFoundation
 /// Turns Umpi's sentences into speech with the owner's chosen voice, one at a time, and plays them through voice
 /// mode's audio engine. Reports each sentence once it has been heard, so a cut-off reply keeps only what was said.
 final class VoiceSpeaker: @unchecked Sendable {
-    struct Voice: Sendable { var identifier: String?; var rate: Float; var pitch: Float }
+    /// An iOS voice, or a Kokoro voice (`kokoro` is its id) with `kokoroSpeed` 1 as normal.
+    struct Voice: Sendable { var identifier: String?; var rate: Float; var pitch: Float; var kokoro: String? = nil; var kokoroSpeed: Float = 1 }
     enum Event: Sendable { case started(String), heard(String), idle }
 
     private let audio: VoiceAudio
@@ -60,6 +61,45 @@ final class VoiceSpeaker: @unchecked Sendable {
         let generation = self.generation
         texts[number] = text
         unplayed[number] = 0
+        if let kokoro = voice.kokoro { speakWithKokoro(text, voice: kokoro, number: number, generation: generation); return }
+        writeWithApple(text, number: number, generation: generation)
+    }
+
+    /// Kokoro makes the whole stretch at once, then it plays; if it fails, this stretch uses the iOS voice instead.
+    private func speakWithKokoro(_ text: String, voice kokoro: String, number: Int, generation: Int) {
+        let speed = voice.kokoroSpeed
+        Task {
+            let samples = try? await KokoroVoice.shared.speak(text, voice: kokoro, speed: speed)
+            queue.async {
+                guard generation == self.generation else { return }
+                guard let samples, !samples.isEmpty, let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 24_000, channels: 1, interleaved: false),
+                      let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)) else {
+                    print("VOICELOG kokoro failed for a stretch; using the iOS voice")
+                    self.writeWithApple(text, number: number, generation: generation)
+                    return
+                }
+                buffer.frameLength = AVAudioFrameCount(samples.count)
+                samples.withUnsafeBufferPointer { buffer.floatChannelData![0].update(from: $0.baseAddress!, count: samples.count) }
+                if self.announced.insert(number).inserted { self.onEvent?(.started(text)) }
+                self.unplayed[number, default: 0] += 1
+                self.audio.play(buffer) { [weak self] in
+                    guard let self else { return }
+                    self.queue.async {
+                        guard generation == self.generation else { return }
+                        self.unplayed[number, default: 1] -= 1
+                        self.settle(number)
+                    }
+                }
+                // Made in full: the next stretch is made while this one plays.
+                self.finishedWriting.insert(number)
+                self.writing = false
+                self.settle(number)
+                self.writeNext()
+            }
+        }
+    }
+
+    private func writeWithApple(_ text: String, number: Int, generation: Int) {
         let utterance = AVSpeechUtterance(string: text)
         if let identifier = voice.identifier, let chosen = AVSpeechSynthesisVoice(identifier: identifier) { utterance.voice = chosen }
         else { utterance.voice = VoiceCatalog.bestDefault() }

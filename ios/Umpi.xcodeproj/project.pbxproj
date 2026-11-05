@@ -22,6 +22,7 @@
 		26B7F1A09DD70340D801F78B /* knock-loud.caf in Resources */ = {isa = PBXBuildFile; fileRef = 57A3140C71B425EE3A527817 /* knock-loud.caf */; };
 		3431D1D839E0D5CBED583675 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5130E3C64EA03895D3F8EA5A /* SettingsView.swift */; };
 		39FA14005F9953715C52D2C2 /* CompanionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A14AEACCCD7F5BCD8694CBB0 /* CompanionClient.swift */; };
+		3B7F93CDF143DF4395D28991 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 1E32402A70CA7696BCB17153 /* FluidAudio */; };
 		3B9BC5DD46428D9D14E85F25 /* CompanionStateRecords.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D31EFDBA636E32983025960 /* CompanionStateRecords.swift */; };
 		3C9049CC28F66DF23648C256 /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BD1FAC447B1DB858AB1D01C /* PairingView.swift */; };
 		4128364E436BEDDEC99F85E6 /* CompanionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2041A9A0FEAF44FB88A99CE /* CompanionStore.swift */; };
@@ -31,6 +32,7 @@
 		4B6AC8CE963474A77BF240D0 /* UmpiWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = B03D8E3B2D22491EDB445A6F /* UmpiWidgets.swift */; };
 		5A6CFE1E7A52DCE3000472DA /* WidgetShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3BD3523F049B9E124DCDA19 /* WidgetShared.swift */; };
 		5C03DF65C478600264C013E0 /* MarkdownView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D010600AC2FC6C41ED03558F /* MarkdownView.swift */; };
+		64E770E9CC8D62AB7E8E0AEA /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = E42E23010F57640FCD20CAD4 /* README.md */; };
 		6E39EDAB10F668DDCD9CE1C1 /* QueuedChangesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FA63C5DF1830458AA277C57 /* QueuedChangesView.swift */; };
 		705651224DFC9C5AA3802B3D /* OpenUmpiAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E9AB65F56609B7A65947DF5 /* OpenUmpiAction.swift */; };
 		739848E9D839C9C0920C965B /* CompanionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9129706318F50FC4F4F18210 /* CompanionUITests.swift */; };
@@ -42,6 +44,7 @@
 		9281883974B3C83B1051F978 /* VoiceSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D77B7C4FF46AACEE528B86E3 /* VoiceSettingsView.swift */; };
 		967D69BB34D61F0C2FFA66B8 /* VoiceAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = C672D512910D09D5145DD72D /* VoiceAudio.swift */; };
 		97C6D73E46001174A5545FEB /* ActivityViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81F84A3AD0BC60BAA18413D7 /* ActivityViews.swift */; };
+		97DE138185055058A2702879 /* KokoroVoice.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC2A99DA94A36C2C4D650AC2 /* KokoroVoice.swift */; };
 		9AD329F34051545AC797E5F9 /* BackgroundSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6398981AA3C9F6DDCC9FC8BA /* BackgroundSync.swift */; };
 		9E71F61195A0A7FDAD6BD92B /* WidgetShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3BD3523F049B9E124DCDA19 /* WidgetShared.swift */; };
 		A138BFEE0275119265871D59 /* ChatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 309A00142CD81859386AD711 /* ChatTests.swift */; };
@@ -144,7 +147,9 @@
 		B03D8E3B2D22491EDB445A6F /* UmpiWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UmpiWidgets.swift; sourceTree = "<group>"; };
 		B2041A9A0FEAF44FB88A99CE /* CompanionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionStore.swift; sourceTree = "<group>"; };
 		B25A76F8A7ED8AD27372684E /* SyntaxHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntaxHighlighter.swift; sourceTree = "<group>"; };
+		B3ACA2BECE685F8A5845839C /* LICENSE */ = {isa = PBXFileReference; path = LICENSE; sourceTree = "<group>"; };
 		B7EF9DA8A6B391BDB5D276CD /* HomeWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeWidget.swift; sourceTree = "<group>"; };
+		BC2A99DA94A36C2C4D650AC2 /* KokoroVoice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KokoroVoice.swift; sourceTree = "<group>"; };
 		C16FBC2D2C5B4A87AF662576 /* VoiceSpeaker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceSpeaker.swift; sourceTree = "<group>"; };
 		C1917C675F6D8B3F143CBDD7 /* knock.caf */ = {isa = PBXFileReference; path = knock.caf; sourceTree = "<group>"; };
 		C672D512910D09D5145DD72D /* VoiceAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceAudio.swift; sourceTree = "<group>"; };
@@ -154,6 +159,7 @@
 		D67BDF4B4A305A1FFFCF7299 /* UmpiUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = UmpiUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		D77B7C4FF46AACEE528B86E3 /* VoiceSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceSettingsView.swift; sourceTree = "<group>"; };
 		DD9641B7A4D3BADDF36418BD /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
+		E42E23010F57640FCD20CAD4 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		E4C30AA88504D79B39CFAED6 /* TaskActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskActivityAttributes.swift; sourceTree = "<group>"; };
 		E8E065F52FC8005FCF057C38 /* VoiceModeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceModeView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -164,15 +170,26 @@
 			buildActionMask = 2147483647;
 			files = (
 				169E7E0A02A980A4730E0F4E /* Markdown in Frameworks */,
+				3B7F93CDF143DF4395D28991 /* FluidAudio in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		0916632D85409E94456FD9DC /* FluidAudio */ = {
+			isa = PBXGroup;
+			children = (
+				B3ACA2BECE685F8A5845839C /* LICENSE */,
+				E42E23010F57640FCD20CAD4 /* README.md */,
+			);
+			path = FluidAudio;
+			sourceTree = "<group>";
+		};
 		1C9288EF11B43EEAE6E036BD /* Resources */ = {
 			isa = PBXGroup;
 			children = (
+				0916632D85409E94456FD9DC /* FluidAudio */,
 				65C1687EDED737EF8824AF49 /* Highlight */,
 				341D7C6A7135DFA27681FCC6 /* Pele */,
 				6BCB762756A7FFAFBE343C93 /* Sounds */,
@@ -236,6 +253,7 @@
 		465DD95E70D0A693D41120A1 /* Voice */ = {
 			isa = PBXGroup;
 			children = (
+				BC2A99DA94A36C2C4D650AC2 /* KokoroVoice.swift */,
 				C672D512910D09D5145DD72D /* VoiceAudio.swift */,
 				7BEF7DD0A6FE7C8669EBED8D /* VoiceConversation.swift */,
 				E8E065F52FC8005FCF057C38 /* VoiceModeView.swift */,
@@ -408,6 +426,7 @@
 			name = Umpi;
 			packageProductDependencies = (
 				8BAA3024E435FD6EAE76E10F /* Markdown */,
+				1E32402A70CA7696BCB17153 /* FluidAudio */,
 			);
 			productName = Umpi;
 			productReference = A1EAB9A47CBFD4B231E2F243 /* Umpi.app */;
@@ -451,6 +470,7 @@
 			mainGroup = 58D2EF90181E6AC1B3111E0F;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				AB3E9199FBCFBB9C46C0E920 /* XCRemoteSwiftPackageReference "FluidAudio" */,
 				6651AF151C6ED152B792308B /* XCRemoteSwiftPackageReference "swift-markdown" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -472,6 +492,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				0C1F5213DE603F56F342F856 /* Assets.xcassets in Resources */,
+				64E770E9CC8D62AB7E8E0AEA /* README.md in Resources */,
 				F05A425723A1940DD55B21AB /* highlight.min.js in Resources */,
 				82599F419212FC5FC8DD6117 /* knock-gentle.caf in Resources */,
 				26B7F1A09DD70340D801F78B /* knock-loud.caf in Resources */,
@@ -511,6 +532,7 @@
 				8F1462081384045FEDF905CC /* ComposerTextView.swift in Sources */,
 				47ADED72318B97BAC5E24841 /* DeviceCapabilities.swift in Sources */,
 				8005F2AEC66FD7F891CB9689 /* Knocks.swift in Sources */,
+				97DE138185055058A2702879 /* KokoroVoice.swift in Sources */,
 				5C03DF65C478600264C013E0 /* MarkdownView.swift in Sources */,
 				EE06FB69DE12A46538C3A015 /* MermaidView.swift in Sources */,
 				DEF9887A7D5D7B3061B7DB8C /* Models.swift in Sources */,
@@ -901,9 +923,22 @@
 				version = 0.9.0;
 			};
 		};
+		AB3E9199FBCFBB9C46C0E920 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/FluidInference/FluidAudio.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.18.2;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		1E32402A70CA7696BCB17153 /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AB3E9199FBCFBB9C46C0E920 /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
+		};
 		8BAA3024E435FD6EAE76E10F /* Markdown */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 6651AF151C6ED152B792308B /* XCRemoteSwiftPackageReference "swift-markdown" */;
