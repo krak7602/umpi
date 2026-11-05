@@ -30,7 +30,7 @@ struct VoiceModeView: View {
             .padding(.horizontal, 8)
 
             Spacer(minLength: 12)
-            VoiceOrb(phase: conversation.phase, level: conversation.level)
+            VoiceOrb(phase: conversation.phase, level: { [conversation] in conversation.level })
                 .frame(width: Self.orbSize, height: Self.orbSize)
                 .contentShape(Circle())
                 .onTapGesture { conversation.tapped() }
@@ -155,7 +155,8 @@ struct VoiceModeView: View {
 /// works, and moves with Umpi's voice while it speaks. Every change of state eases in; there is no spinner.
 struct VoiceOrb: View {
     var phase: VoiceConversation.Phase
-    var level: Float
+    /// Read every frame, not observed.
+    var level: () -> Float
     @State private var motion = OrbMotion()
 
     /// What each state aims for; `OrbMotion` eases toward it frame by frame.
@@ -174,8 +175,8 @@ struct VoiceOrb: View {
     var body: some View {
         TimelineView(.animation) { context in
             let t = context.date.timeIntervalSinceReferenceDate
-            let v = motion.step(toward: target, at: t)
-            let energy = min(1, Double(level) * v.reactive)
+            let v = motion.step(toward: target, at: t, level: Double(level()))
+            let energy = min(1, v.level * v.reactive)
             let color = Color.accentColor.mix(with: .gray, by: v.gray * 0.85).mix(with: .red, by: v.red * 0.8)
             Canvas { canvas, size in
                 let center = CGPoint(x: size.width / 2, y: size.height / 2)
@@ -183,11 +184,11 @@ struct VoiceOrb: View {
                 let base = min(size.width, size.height) * 0.25
                 // Breathing, slower and deeper while Umpi thinks.
                 let breathing = 0.025 * sin(t * 1.4) * (1 - v.flow * 0.3) + 0.03 * sin(t * 0.8) * min(1, v.flow)
-                canvas.drawLayer { layer in
-                    layer.addFilter(.blur(radius: base * 0.4))
-                    let r = base * (1.0 + energy * 0.35 + breathing)
-                    layer.fill(Path(ellipseIn: CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2)), with: .color(color.opacity((0.28 + energy * 0.3) * (1 - v.dim))))
-                }
+                // The glow: a radial gradient fading to nothing, far cheaper than a blur every frame.
+                let glow = base * (1.45 + energy * 0.4 + breathing)
+                canvas.fill(Path(ellipseIn: CGRect(x: center.x - glow, y: center.y - glow, width: glow * 2, height: glow * 2)),
+                            with: .radialGradient(Gradient(colors: [color.opacity((0.32 + energy * 0.3) * (1 - v.dim)), color.opacity(0)]),
+                                                  center: center, startRadius: base * 0.6, endRadius: glow))
                 for k in 0..<3 {
                     let radius = base * (1 - Double(k) * 0.1) * (1 + energy * 0.2 + breathing)
                     // Layers drift against each other, more while Umpi thinks, so the orb flows rather than spins.
@@ -201,12 +202,14 @@ struct VoiceOrb: View {
                 }
             }
         }
+        // Drawn on the GPU in one pass.
+        .drawingGroup()
     }
 
     /// A closed, softly wobbling shape around `center`.
     static func blob(center: CGPoint, radius: Double, time: Double, wobble: Double, lobes: Int, turn: Double = 0) -> Path {
         var path = Path()
-        let steps = 96
+        let steps = 72
         for i in 0...steps {
             let theta = Double(i) / Double(steps) * 2 * .pi
             let r = radius * (1 + wobble * (0.6 * sin(Double(lobes) * theta + time) + 0.4 * sin(Double(lobes + 2) * theta - time * 1.3)))
@@ -220,11 +223,11 @@ struct VoiceOrb: View {
 
 /// The orb's look, eased toward each state's values so a change of state flows instead of jumping.
 final class OrbMotion {
-    struct Values { var wobble: Double; var reactive: Double; var flow: Double; var dim: Double; var gray: Double; var red: Double; var flowPhase: Double = 0 }
+    struct Values { var wobble: Double; var reactive: Double; var flow: Double; var dim: Double; var gray: Double; var red: Double; var flowPhase: Double = 0; var level: Double = 0 }
     private var current = Values(wobble: 0.02, reactive: 0, flow: 0, dim: 0.35, gray: 1, red: 0)
     private var last: Double?
 
-    func step(toward target: Values, at time: Double) -> Values {
+    func step(toward target: Values, at time: Double, level: Double = 0) -> Values {
         let dt = min(0.1, max(0, time - (last ?? time)))
         last = time
         let k = min(1, dt * 3)   // about a third of a second to settle
@@ -235,6 +238,8 @@ final class OrbMotion {
         current.dim = ease(current.dim, target.dim)
         current.gray = ease(current.gray, target.gray)
         current.red = ease(current.red, target.red)
+        // The voice level, smoothed per frame: quick to rise, gentler to fall, so the orb moves without jitter.
+        current.level += (level - current.level) * min(1, dt * (level > current.level ? 18 : 8))
         // Phase accumulates at the current flow, so speeding up never makes the shape jump.
         current.flowPhase += dt * current.flow * 0.9
         return current
