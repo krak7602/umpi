@@ -27,8 +27,21 @@ final class VoiceSettings {
         cutIn = defaults.object(forKey: "voice.cutIn") as? Bool ?? true
     }
 
-    /// The chosen voice if it is still installed.
-    var voice: AVSpeechSynthesisVoice? { voiceIdentifier.flatMap(AVSpeechSynthesisVoice.init(identifier:)) ?? VoiceCatalog.bestDefault() }
+    /// The chosen Kokoro voice's id, when a natural voice is chosen.
+    var kokoroVoice: String? {
+        guard let id = voiceIdentifier, id.hasPrefix(KokoroVoice.prefix) else { return nil }
+        return String(id.dropFirst(KokoroVoice.prefix.count))
+    }
+    /// Kokoro's speed for the same setting: 1 is normal.
+    var kokoroSpeed: Float { Float(rate / Self.normalRate) }
+    var voiceName: String {
+        if let kokoro = kokoroVoice { return KokoroVoice.voices.first { $0.id == kokoro }?.name ?? "Natural voice" }
+        return voice?.name ?? "Automatic"
+    }
+
+    /// The chosen iOS voice if it is still installed; the best installed one otherwise, also as the natural voice's
+    /// fallback.
+    var voice: AVSpeechSynthesisVoice? { (kokoroVoice == nil ? voiceIdentifier : nil).flatMap(AVSpeechSynthesisVoice.init(identifier:)) ?? VoiceCatalog.bestDefault() }
 
     /// Normal pitch exactly when the setting is near it, so the voice is not reprocessed for a change nobody hears.
     nonisolated static func cleanPitch(_ value: Double) -> Float { abs(value - 1) < 0.03 ? 1 : Float(value) }

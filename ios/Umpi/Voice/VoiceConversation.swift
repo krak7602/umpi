@@ -118,7 +118,11 @@ final class VoiceConversation {
     func applySettings() {
         audio.pause = settings.pause
         audio.cutIn = settings.cutIn
-        speaker.voice = .init(identifier: settings.voiceIdentifier, rate: Float(settings.rate), pitch: VoiceSettings.cleanPitch(settings.pitch))
+        // The natural voice once its files are on the phone; until then the iOS voice, while they download.
+        let kokoro = settings.kokoroVoice
+        speaker.voice = .init(identifier: settings.voice?.identifier, rate: Float(settings.rate), pitch: VoiceSettings.cleanPitch(settings.pitch),
+                              kokoro: KokoroVoice.downloaded ? kokoro : nil, kokoroSpeed: settings.kokoroSpeed)
+        if kokoro != nil { Task { try? await KokoroVoice.shared.prepare(); if KokoroVoice.downloaded, settings.kokoroVoice == kokoro { speaker.voice.kokoro = kokoro } } }
     }
 
     func returnedToApp() { if started { audio.ensureRunning() } }

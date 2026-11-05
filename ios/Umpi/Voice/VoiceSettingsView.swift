@@ -7,6 +7,8 @@ struct VoiceSettingsView: View {
     @State private var sample = AVSpeechSynthesizer()
     @State private var voices = VoiceCatalog.voices()
     @State private var personal = AVSpeechSynthesizer.personalVoiceAuthorizationStatus
+    @State private var kokoro = KokoroVoice.State.notReady
+    @State private var natural = PCMPlayer()
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -25,6 +27,23 @@ struct VoiceSettingsView: View {
                         onEditingChanged: { editing in if !editing { play() } }
                 }
                 Button { play() } label: { Label("Play a sample", systemImage: "play.circle") }
+            }
+
+            Section {
+                ForEach(KokoroVoice.voices, id: \.id) { voice in
+                    Button { chooseNatural(voice.id) } label: {
+                        row(name: voice.name, detail: naturalDetail(voice.detail), selected: settings.kokoroVoice == voice.id)
+                    }
+                    .tint(.primary)
+                    .disabled(kokoro == .preparing)
+                }
+                if KokoroVoice.downloaded {
+                    Button("Remove the natural voice from this phone", role: .destructive) {
+                        Task { await KokoroVoice.shared.remove(); kokoro = .notReady; if settings.kokoroVoice != nil { settings.voiceIdentifier = nil } }
+                    }
+                }
+            } header: { Text("Natural voice") } footer: {
+                Text("Made on this phone by Kokoro, an open voice model; nothing is sent anywhere. The first use downloads its files once.")
             }
 
             Section {
@@ -68,11 +87,15 @@ struct VoiceSettingsView: View {
         // A voice downloaded in Settings appears without reopening this screen.
         .onReceive(NotificationCenter.default.publisher(for: AVSpeechSynthesizer.availableVoicesDidChangeNotification)) { _ in voices = VoiceCatalog.voices() }
         .onAppear { voices = VoiceCatalog.voices() }
+        .task { kokoro = await KokoroVoice.shared.state }
         .onDisappear {
             sample.stopSpeaking(at: .immediate)
+            natural.stop()
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         }
     }
+
+    static let sampleText = "Hi, I'm Umpi. This is how I'll sound when we talk."
 
     private func row(name: String, detail: String, selected: Bool) -> some View {
         HStack {
@@ -86,16 +109,68 @@ struct VoiceSettingsView: View {
         .contentShape(Rectangle())
     }
 
+    private func naturalDetail(_ detail: String) -> String {
+        switch kokoro {
+        case .preparing: return KokoroVoice.downloaded ? "Getting ready…" : "Downloading…"
+        case .failed(let message): return "Could not load: \(message)"
+        default: return KokoroVoice.downloaded ? detail : "\(detail) · tap to download"
+        }
+    }
+
+    /// Picks a natural voice: downloads it the first time, then plays the sample with it.
+    private func chooseNatural(_ id: String) {
+        settings.voiceIdentifier = KokoroVoice.prefix + id
+        Task {
+            kokoro = .preparing
+            do { try await KokoroVoice.shared.prepare() } catch {}
+            kokoro = await KokoroVoice.shared.state
+            if kokoro == .ready { play() }
+        }
+    }
+
     private func play() {
         sample.stopSpeaking(at: .immediate)
+        natural.stop()
+        if let id = settings.kokoroVoice {
+            let speed = settings.kokoroSpeed
+            Task {
+                guard let samples = try? await KokoroVoice.shared.speak(Self.sampleText, voice: id, speed: speed) else { return }
+                natural.play(samples)
+            }
+            return
+        }
         // Plain spoken audio, as Siri plays it: no microphone, no echo cancellation.
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
         try? session.setActive(true)
-        let utterance = AVSpeechUtterance(string: "Hi, I'm Umpi. This is how I'll sound when we talk.")
+        let utterance = AVSpeechUtterance(string: Self.sampleText)
         utterance.voice = settings.voice
         utterance.rate = Float(settings.rate)
         utterance.pitchMultiplier = VoiceSettings.cleanPitch(settings.pitch)
         sample.speak(utterance)
     }
+}
+
+/// Plays 24 kHz mono speech as plain spoken audio.
+@MainActor
+final class PCMPlayer {
+    private let engine = AVAudioEngine()
+    private let player = AVAudioPlayerNode()
+    private let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 24_000, channels: 1, interleaved: false)!
+
+    func play(_ samples: [Float]) {
+        stop()
+        guard !samples.isEmpty, let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)) else { return }
+        buffer.frameLength = AVAudioFrameCount(samples.count)
+        samples.withUnsafeBufferPointer { buffer.floatChannelData![0].update(from: $0.baseAddress!, count: samples.count) }
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+        try? session.setActive(true)
+        if player.engine == nil { engine.attach(player); engine.connect(player, to: engine.mainMixerNode, format: format) }
+        do { if !engine.isRunning { try engine.start() } } catch { return }
+        player.scheduleBuffer(buffer)
+        player.play()
+    }
+
+    func stop() { player.stop() }
 }
