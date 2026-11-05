@@ -34,6 +34,9 @@ private struct RootView: View {
     @State private var pairingCode = ""
     @State private var selectedTab = 0
     @State private var linkMessage: String?
+    /// Voice mode over the whole app, opened by a shortcut, widget, control, or link: shown at once, with no slide and
+    /// without the chat appearing first. A request already waiting at launch shows it from the first frame.
+    @State private var talking = ["voice", "talk", "idea", "capture"].contains(UmpiRoute.peek() ?? "")
     @Environment(T3CodeModel.self) private var t3
     @Environment(\.scenePhase) private var scenePhase
 
@@ -59,6 +62,11 @@ private struct RootView: View {
                 NavigationStack {
                     PairingView(server: $pairingServer, code: $pairingCode)
                 }
+            }
+        }
+        .overlay {
+            if talking && store.isPaired {
+                VoiceModeView(onEnd: { talking = false }).transition(.identity)
             }
         }
         .onOpenURL { url in
@@ -113,8 +121,10 @@ extension RootView {
             selectedTab = 0
             ChatRequests.shared.draft = "Remind me "
         case "voice", "talk", "idea", "capture":
-            selectedTab = 0
-            ChatRequests.shared.talk = true
+            // Straight to voice mode, no animation: the chat does not show first.
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { talking = true }
         default: selectedTab = 2
         }
         Task { await store.synchronize() }
