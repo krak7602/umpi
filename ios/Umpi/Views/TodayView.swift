@@ -16,11 +16,36 @@ struct TodayView: View {
     var body: some View {
         ScrollView {
             content
+                #if os(macOS)
+                // The note reads like a document: a readable column, centred, with room around it.
+                .padding(.horizontal, 32).padding(.top, 20).padding(.bottom, 32)
+                .frame(maxWidth: 760, alignment: .leading)
+                .frame(maxWidth: .infinity)
+                #else
                 .padding(.horizontal, 20).padding(.vertical, 12)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                #endif
         }
         .softScrollEdges()
         .refreshable { await load() }
+        #if os(macOS)
+        .navigationTitle(day == TodayView.today() ? "Today" : dateText)
+        .navigationSubtitle(day == TodayView.today() ? dateText : "")
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                ControlGroup {
+                    Button { shift(-1) } label: { Label("Previous day", systemImage: "chevron.left") }.help("Previous day")
+                    Button { shift(1) } label: { Label("Next day", systemImage: "chevron.right") }.help("Next day")
+                }
+                .controlGroupStyle(.navigation)
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button("Today") { day = TodayView.today() }
+                    .disabled(day == TodayView.today())
+                    .help("Go to today's note")
+            }
+        }
+        #else
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -32,6 +57,7 @@ struct TodayView: View {
                 ToolbarItem(placement: .topBarTrailing) { Button("Today") { day = TodayView.today() } }
             }
         }
+        #endif
         .overlay(alignment: .top) {
             if let notice {
                 Text(notice).font(.footnote).padding(.horizontal, 12).padding(.vertical, 8).background(.thinMaterial, in: Capsule()).padding(.top, 4)
@@ -59,6 +85,11 @@ struct TodayView: View {
         } else {
             ProgressView().frame(maxWidth: .infinity).padding(.top, 120)
         }
+    }
+
+    /// The shown day, such as "Thursday, 5 Nov".
+    private var dateText: String {
+        TodayView.date(day)?.formatted(.dateTime.weekday(.wide).day().month(.abbreviated)) ?? day
     }
 
     private var title: String {

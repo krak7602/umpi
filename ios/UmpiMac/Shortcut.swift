@@ -40,10 +40,16 @@ struct Shortcut: Equatable, Hashable, Sendable {
         self = shortcut
     }
 
-    /// As the Mac shows it: modifiers in the order ⌃⌥⇧⌘, then the key.
-    var display: String {
-        Self.symbols.filter { modifiers & $0.bit != 0 }.map { String($0.symbol) }.joined() + keyName
+    /// As the Mac writes it, and as it is stored: modifiers in the order ⌃⌥⇧⌘, then the key.
+    var display: String { keycaps.joined() }
+
+    /// Each key on its own, in the same order, for drawing as keycaps: ["⌥", "⇧", "Space"].
+    var keycaps: [String] {
+        Self.symbols.filter { modifiers & $0.bit != 0 }.map { String($0.symbol) } + [keyName]
     }
+
+    /// For tooltips and sentences: the keys with thin spaces between them, such as "⌥ ⇧ Space".
+    var spaced: String { keycaps.joined(separator: "\u{2009}") }
 
     var keyName: String { Self.keys.first { $0.code == keyCode }?.name ?? "Key \(keyCode)" }
 

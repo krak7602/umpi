@@ -30,8 +30,10 @@ struct WorkView: View {
     private var multipleMachines: Bool { t3.machines.count > 1 }
 
     var body: some View {
-        List {
+        PlatformList {
+            #if os(iOS)
             if multipleMachines { chips }
+            #endif
             if nothingWaiting {
                 Section { Label("Nothing is waiting on you", systemImage: "checkmark.circle").foregroundStyle(.secondary) }
             } else {
@@ -92,10 +94,37 @@ struct WorkView: View {
             }
         }
         .softScrollEdges()
-        .refreshable { async let sync: Void = store.synchronize(); async let threads: Void = t3.loadThreads(store); async let requests: Void = t3.loadRequests(store); _ = await (sync, threads, requests) }
+        .readableWidth()
+        .refreshable { await reload() }
         .onAppear { Task { async let threads: Void = t3.loadThreads(store); async let requests: Void = t3.loadRequests(store); _ = await (threads, requests) } }
         .navigationTitle("Work")
         .navigationBarTitleDisplayMode(.inline)
+        #if os(macOS)
+        // The Mac has no pull to refresh, and the machine chips become a toolbar menu.
+        .toolbar {
+            if multipleMachines {
+                ToolbarItem(placement: .primaryAction) {
+                    Picker("Machine", selection: $machineFilter) {
+                        Text("All machines").tag(String?.none)
+                        Divider()
+                        ForEach(t3.machines) { machine in Text(machine.name).tag(Optional(machine.id)) }
+                    }
+                    .pickerStyle(.menu)
+                    .help("Show the work of one machine")
+                }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button { Task { await reload() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+                    .help("Refresh")
+                    .keyboardShortcut("r")
+            }
+        }
+        #endif
+    }
+
+    private func reload() async {
+        async let sync: Void = store.synchronize(); async let threads: Void = t3.loadThreads(store); async let requests: Void = t3.loadRequests(store)
+        _ = await (sync, threads, requests)
     }
 
     /// All machines, or one: a quiet row of chips above the lists.
@@ -157,6 +186,7 @@ struct T3RequestView: View {
                 ProgressView().padding(.top, 80)
             }
         }
+        .readableWidth()
         .navigationTitle("Approval")
         .navigationBarTitleDisplayMode(.inline)
         .task { await t3.loadRequests(store) }
@@ -201,6 +231,7 @@ struct ReminderDetailView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .softScrollEdges()
+        .readableWidth()
         .navigationTitle("Reminder")
         .navigationBarTitleDisplayMode(.inline)
     }

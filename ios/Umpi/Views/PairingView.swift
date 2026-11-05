@@ -135,6 +135,8 @@ struct AskUmpiView: View {
                 }
                 if let error = store.errorMessage { Section { Text(error) } }
             }
+            // A sheet sizes its own margins; none are taken from the wider window behind it.
+            .readableWidth()
             .navigationTitle("Ask Umpi")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(sending) }

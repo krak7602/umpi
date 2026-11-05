@@ -205,6 +205,7 @@ struct PairAnotherDeviceView: View {
             }
             Section { Button("New code") { Task { await create() } } }
         }
+        .readableWidth()
         .navigationTitle("Pair another device")
         .navigationBarTitleDisplayMode(.inline)
         .task { await create() }

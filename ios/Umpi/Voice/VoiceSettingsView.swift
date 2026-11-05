@@ -86,6 +86,7 @@ struct VoiceSettingsView: View {
                 Text("How long you can pause before Umpi takes your turn as finished. With cutting in on, talking over Umpi stops it.")
             }
         }
+        .readableWidth()
         .navigationTitle("Voice")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }

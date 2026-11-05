@@ -29,6 +29,7 @@ struct ComposerTextView: NSViewRepresentable {
         let textView = ComposerNSTextView(usingTextLayoutManager: false)
         textView.delegate = context.coordinator
         textView.onPaste = { context.coordinator.parent.onPaste($0) }
+        textView.onFocus = { [weak coordinator = context.coordinator] focused in coordinator?.focusChanged(focused) }
         textView.placeholder = placeholder
         textView.isRichText = false
         textView.importsGraphics = false
@@ -105,6 +106,11 @@ struct ComposerTextView: NSViewRepresentable {
             textView.enclosingScrollView?.superview?.invalidateIntrinsicContentSize()
         }
         func textDidBeginEditing(_ notification: Notification) { if !parent.focused { parent.focused = true } }
+        /// Focus given to the field from outside SwiftUI (Command-N, the panel opening) is kept: the binding follows it,
+        /// so the next update does not take the focus away again.
+        func focusChanged(_ focused: Bool) {
+            DispatchQueue.main.async { [self] in if parent.focused != focused { parent.focused = focused } }
+        }
         func textDidEndEditing(_ notification: Notification) { if parent.focused { parent.focused = false } }
 
         /// Return sends; Shift-Return and Option-Return start a new line.
@@ -120,9 +126,22 @@ struct ComposerTextView: NSViewRepresentable {
 /// A text view with a placeholder that hands pasted images and files to the chat instead of their names.
 final class ComposerNSTextView: NSTextView {
     var onPaste: (([NSItemProvider]) -> Void)?
+    var onFocus: ((Bool) -> Void)?
     var placeholder = ""
 
     override var acceptsFirstResponder: Bool { true }
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        if became { onFocus?(true) }
+        return became
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { onFocus?(false) }
+        return resigned
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
@@ -140,6 +159,26 @@ final class ComposerNSTextView: NSTextView {
     override func paste(_ sender: Any?) {
         let providers = Self.mediaProviders(NSPasteboard.general)
         if providers.isEmpty { pasteAsPlainText(sender) } else { onPaste?(providers) }
+    }
+
+    // Files and images dropped on the field attach, as a paste does; dropped text is inserted as usual.
+    override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
+        super.acceptableDragTypes + [.fileURL, .tiff, .png]
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        Self.mediaProviders(sender.draggingPasteboard).isEmpty ? super.draggingEntered(sender) : .copy
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        Self.mediaProviders(sender.draggingPasteboard).isEmpty ? super.draggingUpdated(sender) : .copy
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let providers = Self.mediaProviders(sender.draggingPasteboard)
+        guard !providers.isEmpty, let onPaste else { return super.performDragOperation(sender) }
+        onPaste(providers)
+        return true
     }
 
     /// Copied files (from Finder) and images without text, as item providers; empty when the paste is text.

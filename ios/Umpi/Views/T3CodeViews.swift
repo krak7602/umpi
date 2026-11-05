@@ -24,11 +24,19 @@ struct T3MachinesSection: View {
                     Text(machine.summary).font(.footnote).foregroundStyle(machine.connected ? Color.secondary : Color.orange)
                 }
                 .swipeActions { Button(machine.cloud ? "Delete" : "Remove", role: .destructive) { Task { await t3.remove(store, machine) } } }
+                #if os(macOS)
+                // A Mac form has no swipe: the same action is in the row's context menu.
+                .contextMenu { Button(machine.cloud ? "Delete" : "Remove", role: .destructive) { Task { await t3.remove(store, machine) } } }
+                #endif
             }
             Button { adding = true } label: { Label("Add a machine", systemImage: "plus") }
             if let message { Text(message).font(.footnote).foregroundStyle(.secondary) }
         } header: { Text("T3 Code") } footer: {
+            #if os(macOS)
+            Text("Umpi reaches your coding threads through your tailnet or T3 Connect; nothing runs on the machine. Approval lasts 30 days. Cloud machines (☁︎) are Umpi's own: one per task, asleep and saved when idle; deleting one deletes its saved state. Control-click a machine to remove it.")
+            #else
             Text("Umpi reaches your coding threads through your tailnet or T3 Connect; nothing runs on the machine. Approval lasts 30 days. Cloud machines (☁︎) are Umpi's own: one per task, asleep and saved when idle; deleting one deletes its saved state.")
+            #endif
         }
         .task { await t3.loadMachines(store) }
         // Back from the approval page in Safari: show the new state.
@@ -70,6 +78,8 @@ struct T3AddMachineView: View {
                 .font(.footnote).foregroundStyle(.secondary)
                 if let problem { Section { Label(problem, systemImage: "exclamationmark.triangle").foregroundStyle(.orange) } }
             }
+            // A sheet sizes its own margins; none are taken from the wider window behind it.
+            .readableWidth()
             .navigationTitle("Add a machine")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -166,6 +176,17 @@ struct T3ApprovalCard: View {
         if request.pending && working {
             HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Sending to \(request.machineLabel)…") }.font(.subheadline).padding(.top, 2)
         } else if request.pending, let answer {
+            #if os(macOS)
+            // Mac push buttons at their own width, the default on the right, as in a Mac dialog.
+            HStack(spacing: 8) {
+                Spacer()
+                Button { working = true; answer(false) } label: { Text("Decline").frame(minWidth: 64) }
+                    .buttonStyle(.bordered)
+                Button { working = true; answer(true) } label: { Text("Approve").frame(minWidth: 64) }
+                    .buttonStyle(.borderedProminent)
+            }
+            .controlSize(.regular).padding(.top, 2)
+            #else
             HStack(spacing: 8) {
                 Button { working = true; answer(false) } label: { Text("Decline").foregroundStyle(.primary).frame(maxWidth: .infinity) }
                     .buttonStyle(.bordered).tint(Color(.systemGray))
@@ -173,6 +194,7 @@ struct T3ApprovalCard: View {
                     .buttonStyle(.borderedProminent)
             }
             .controlSize(.large).padding(.top, 2)
+            #endif
             if let expires = request.expires {
                 Text("Runs once · expires \(expires, format: .relative(presentation: .named))").font(.caption2).foregroundStyle(.tertiary).frame(maxWidth: .infinity)
             }
@@ -274,6 +296,10 @@ struct T3ThreadView: View {
                     }
                 }
                 .padding(.horizontal, 20).padding(.vertical, 12)
+                #if os(macOS)
+                .frame(maxWidth: 760)
+                .frame(maxWidth: .infinity)
+                #endif
             }
             .softScrollEdges()
             .scrollDismissesKeyboard(.interactively)
@@ -323,15 +349,30 @@ struct T3ThreadView: View {
         HStack(alignment: .bottom, spacing: 8) {
             TextField("Reply to the agent", text: $draft, axis: .vertical)
                 .lineLimit(1...6).focused($composing)
+                #if os(macOS)
+                // The rounded fill is the field; the Mac's own bezel would draw a second one inside it.
+                .textFieldStyle(.plain)
+                .onSubmit { if !sending, !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { Task { await perform("send") } } }
+                #endif
                 .padding(.horizontal, 14).padding(.vertical, 10)
                 .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             Button { Task { await perform("send") } } label: {
+                #if os(macOS)
+                Image(systemName: sending ? "ellipsis.circle.fill" : "arrow.up.circle.fill").font(.system(size: 26))
+                    .frame(height: 38)
+                #else
                 Image(systemName: sending ? "ellipsis.circle.fill" : "arrow.up.circle.fill").font(.system(size: 32))
+                #endif
             }
+            .borderlessOnMac()
             .disabled(sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .accessibilityLabel("Send to thread")
         }
         .padding(.horizontal, 16).padding(.vertical, 8)
+        #if os(macOS)
+        .frame(maxWidth: 760)
+        .frame(maxWidth: .infinity)
+        #endif
     }
 
     private func perform(_ kind: String) async {

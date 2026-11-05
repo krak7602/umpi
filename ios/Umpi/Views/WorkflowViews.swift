@@ -11,7 +11,7 @@ struct WorkflowListView: View {
     }
 
     var body: some View {
-        List {
+        PlatformList {
             ConnectionStatusSection()
             if !store.conflicts.isEmpty {
                 Section {
@@ -63,6 +63,7 @@ struct WorkflowListView: View {
             }
         }
         .softScrollEdges()
+        .readableWidth()
         .navigationTitle("Workflows")
         .refreshable { await store.synchronize() }
         .toolbar {
@@ -107,6 +108,7 @@ private struct MissingWorkflowDraftView: View {
                 }
             }
         }
+        .readableWidth()
         .navigationTitle("Preserved draft")
         .confirmationDialog("Discard all local input for this missing workflow?", isPresented: $confirmDiscard, titleVisibility: .visible) {
             Button("Discard local draft", role: .destructive) {
@@ -200,6 +202,7 @@ struct WorkflowDetailView: View {
                         Button("Remove workflow", role: .destructive) { confirmRemove = true }
                     }
                 }
+                .readableWidth()
                 .navigationTitle(workflow.definition.title)
                 .navigationBarTitleDisplayMode(.inline)
                 .refreshable { await store.synchronize() }
@@ -320,7 +323,7 @@ struct ConflictListView: View {
     var workflowID: String?
 
     var body: some View {
-        List {
+        PlatformList {
             ForEach(store.conflicts.filter { workflowID == nil || $0.workflowID == workflowID }) { conflict in
                 Section(store.workflow(id: conflict.workflowID)?.definition.title ?? conflict.workflowID) {
                     Text(conflict.message)
@@ -345,6 +348,7 @@ struct ConflictListView: View {
             }
             if store.conflicts.isEmpty { ContentUnavailableView("No pending conflicts", systemImage: "checkmark.circle") }
         }
+        .readableWidth()
         .navigationTitle("Resolve changes")
         .refreshable { await store.refresh() }
     }
@@ -391,6 +395,7 @@ struct CreateWorkflowView: View {
                 if let error = store.errorMessage { Section { Text(error) } }
             }
             .disabled(creating)
+            .readableWidth()
             .navigationTitle("Create workflow")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(creating) }

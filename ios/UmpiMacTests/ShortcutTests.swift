@@ -8,6 +8,12 @@ final class ShortcutTests: XCTestCase {
         XCTAssertEqual(Shortcut.voiceDefault.display, "⌥⇧Space")
     }
 
+    func testKeysAreShownApartForReading() {
+        XCTAssertEqual(Shortcut.voiceDefault.keycaps, ["⌥", "⇧", "Space"])
+        XCTAssertEqual(Shortcut.chatDefault.spaced, "⌥\u{2009}Space")
+        XCTAssertEqual(Shortcut("⌃⌥⇧⌘K")?.spaced, "⌃\u{2009}⌥\u{2009}⇧\u{2009}⌘\u{2009}K")
+    }
+
     func testModifiersAreShownInTheMacOrder() {
         let shortcut = Shortcut(keyCode: UInt32(kVK_ANSI_K), modifiers: UInt32(cmdKey | shiftKey | optionKey | controlKey))
         XCTAssertEqual(shortcut.display, "⌃⌥⇧⌘K")

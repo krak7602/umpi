@@ -22,7 +22,10 @@ struct MacSettingsView: View {
             }
             Section {
                 ForEach(ShortcutSettings.Action.allCases, id: \.self) { action in
-                    LabeledContent(action.title) {
+                    // Centred with the taller keycap field rather than on its text baseline.
+                    HStack {
+                        Text(action.title)
+                        Spacer()
                         ShortcutRecorder(action: action)
                     }
                     if app.refusedShortcuts.contains(action) {
@@ -57,7 +60,10 @@ struct MacSettingsView: View {
                     }
                 }
                 .disabled(effects.notificationsAllowed != true)
-                if let error = effects.errorMessage { Label(error, systemImage: "exclamationmark.triangle") }
+                if let error = effects.errorMessage {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .help(effects.errorDetail ?? "")
+                }
             } header: { Text("Alerts") } footer: {
                 Text("While Umpi runs, a new message from it shows as a notification unless the chat is on screen. The Mac has no push; reminders knock on the phone.")
             }
@@ -87,6 +93,7 @@ struct MacSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .readableWidth()
         .navigationTitle("Settings")
         .task { _ = await effects.refreshCapabilities() }
         .confirmationDialog("Disconnect this Mac?", isPresented: $confirmDisconnect, titleVisibility: .visible) {
@@ -110,11 +117,27 @@ struct ShortcutRecorder: View {
 
     var body: some View {
         HStack(spacing: 6) {
+            // Drawn as a field holding the keys, outlined in the accent colour while it records.
             Button { recording ? stop() : start() } label: {
-                Text(recording ? (hint ?? "Type the shortcut…") : (current?.display ?? "Off"))
-                    .monospaced()
-                    .frame(minWidth: 120)
+                Group {
+                    if recording { Text(hint ?? "Type the shortcut…").foregroundStyle(.secondary) }
+                    else if let current { Keycaps(shortcut: current) }
+                    else { Text("Off").foregroundStyle(.secondary) }
+                }
+                .font(.callout)
+                .frame(minWidth: 132, minHeight: 28)
+                .padding(.horizontal, 4)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color.primary.opacity(0.04)))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .strokeBorder(recording ? Color.accentColor : Color.primary.opacity(0.12), lineWidth: recording ? 2 : 1)
+                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .help(recording ? "Press the new shortcut. Esc cancels; Delete turns it off." : "Click to change this shortcut")
+            .accessibilityLabel(action.title)
+            .accessibilityValue(recording ? "Recording" : (current?.spaced ?? "Off"))
             if !recording, current != action.fallback {
                 Button("Default") { save(action.fallback) }.buttonStyle(.link)
             }
@@ -159,5 +182,26 @@ struct ShortcutRecorder: View {
         monitor = nil
         if recording { app.recordingShortcut(false) }
         recording = false
+    }
+}
+
+/// A shortcut as separate keycaps, the way Mac menus and System Settings set keys apart: "⌥" "⇧" "Space".
+struct Keycaps: View {
+    let shortcut: Shortcut
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(Array(shortcut.keycaps.enumerated()), id: \.offset) { _, key in
+                Text(key)
+                    .font(.system(size: 12, weight: .medium))
+                    .padding(.horizontal, key.count > 1 ? 6 : 0)
+                    .frame(minWidth: 22, minHeight: 20)
+                    .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Color(nsColor: .controlBackgroundColor)))
+                    .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(Color.primary.opacity(0.16)))
+                    .shadow(color: .black.opacity(0.10), radius: 0, y: 1)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(shortcut.spaced)
     }
 }

@@ -15,7 +15,17 @@ struct UmpiMacApp: App {
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") { MacApp.shared.showMain(.settings) }.keyboardShortcut(",")
             }
-            CommandGroup(replacing: .newItem) {}
+            CommandGroup(replacing: .newItem) {
+                Button("New Message") { MacApp.shared.newMessage() }.keyboardShortcut("n")
+            }
+            // The View menu: the sidebar's sections, as Mac apps number them.
+            CommandGroup(before: .sidebar) {
+                ForEach(MacSection.allCases) { section in
+                    Button(section.title) { MacApp.shared.showMain(section) }
+                        .keyboardShortcut(KeyEquivalent(Character(String(section.number))))
+                }
+                Divider()
+            }
             CommandGroup(after: .windowArrangement) {
                 Button("Umpi Window") { MacApp.shared.showMain() }.keyboardShortcut("0")
             }
