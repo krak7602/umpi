@@ -48,6 +48,12 @@ struct VoiceModeView: View {
                 .padding(.horizontal, 28)
                 .padding(.top, 14)
                 .animation(.easeOut(duration: 0.2), value: conversation.caption)
+            if conversation.showsInChat {
+                Label("Details in the chat", systemImage: "text.bubble")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .transition(.opacity)
+            }
             Spacer(minLength: 12)
 
             HStack(spacing: 28) {

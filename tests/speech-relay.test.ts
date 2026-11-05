@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { AgentEvent } from "@earendil-works/pi-durable";
-import { SpeechRelay, cutOffNote, interruptedReply, type SpeechFrame } from "../src/worker/speech-relay.js";
+import { SPOKEN_TURN_NOTE, SpeechRelay, cutOffNote, interruptedReply, writtenReply, type SpeechFrame } from "../src/worker/speech-relay.js";
 
 const submission = (id: string, requestId: string, status = "placed") => ({ type: "submission", record: { id, conversationId: "c", requestId, type: "input", status } }) as unknown as AgentEvent;
 const start = (...inputs: string[]) => ({ type: "run_start", inputs }) as unknown as AgentEvent;
@@ -65,4 +65,12 @@ test("a spoken message settled without a run ends its relay, and a cut-off reply
   assert.equal(interruptedReply("  It's sunny and "), "It's sunny and … (cut off when you started talking)");
   assert.equal(interruptedReply(""), "(Stopped when you started talking.)");
   assert.match(cutOffNote("x".repeat(3_000)), /«…x{2000}»/, "a long heard part keeps its end");
+});
+
+test("what a spoken reply shows stays in the chat without its tags, and Umpi is told how to use them", () => {
+  const reply = "Your week has three gym days, laid out in the chat.\n<chat>\n| Day | Plan |\n|---|---|\n| Mon | Legs |\n</chat>";
+  assert.equal(writtenReply(reply), "Your week has three gym days, laid out in the chat.\n\n| Day | Plan |\n|---|---|\n| Mon | Legs |");
+  assert.equal(writtenReply("Just spoken."), "Just spoken.");
+  assert.match(SPOKEN_TURN_NOTE, /between <chat> and <\/chat>/);
+  assert.match(SPOKEN_TURN_NOTE, /speech recognition/);
 });

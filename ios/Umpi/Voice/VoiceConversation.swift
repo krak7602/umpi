@@ -18,6 +18,8 @@ final class VoiceConversation {
     /// The owner's words while they talk; Umpi's sentence while it speaks.
     private(set) var caption = ""
     private(set) var captionIsOwner = true
+    /// The current reply put something in the chat to be seen, such as a table or a link.
+    private(set) var showsInChat = false
     var muted = false { didSet { audio.muted = muted } }
 
     private let audio = VoiceAudio()
@@ -50,6 +52,7 @@ final class VoiceConversation {
         var heard = ""
         var done = false
         var spokeAnything = false
+        var filter = SpokenFilter()
         var finished = false
         init(id: String) { self.id = id }
     }
@@ -152,6 +155,7 @@ final class VoiceConversation {
             words = ""
             caption = ""
             captionIsOwner = true
+            showsInChat = false
             phase = .hearing
         case .words(let text, let final, let turn):
             guard phase == .hearing || phase == .thinking && finalWaiter != nil else { break }
@@ -258,12 +262,15 @@ final class VoiceConversation {
             reply.part = part
         }
         if let text = frame.text {
-            reply.pendingText += text
+            // What Umpi shows in the chat is not read aloud.
+            reply.pendingText += reply.filter.feed(text)
+            if reply.filter.sawShown { showsInChat = true }
             flush(reply, all: false)
         }
         if let tool = frame.working, phase != .speaking { phase = .working(Self.describe(tool)) }
         if frame.done == true {
             reply.done = true
+            reply.pendingText += reply.filter.feed("", end: true)
             flush(reply, all: true)
             if !reply.spokeAnything { Task { await speakFromChat(reply) } }
             else if !speaker.isBusy { finishReply() }
@@ -290,7 +297,8 @@ final class VoiceConversation {
                let page = try? JSONDecoder().decode(ChatPage.self, from: data),
                let entry = page.entries.first(where: { $0.id == "umpi:answer:\(reply.id)" }) {
                 guard self.reply === reply, !reply.spokeAnything else { return }
-                reply.pendingText = entry.text
+                reply.pendingText = Self.spokenLead(entry.text)
+                if reply.pendingText != entry.text.trimmingCharacters(in: .whitespacesAndNewlines) { showsInChat = true }
                 flush(reply, all: true)
                 if !reply.spokeAnything { finishReply() }
                 return
@@ -370,6 +378,18 @@ final class VoiceConversation {
         return (sentences, current)
     }
 
+    /// The chat's copy of a reply has no tags; its spoken part is what comes before the first table, code, list, or link.
+    nonisolated static func spokenLead(_ text: String) -> String {
+        var kept: [Substring] = []
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("|") || trimmed.hasPrefix("```") || trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("#")
+                || trimmed.range(of: #"^\d+\. "#, options: .regularExpression) != nil || trimmed.contains("://") { break }
+            kept.append(line)
+        }
+        return kept.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// What to say aloud: Markdown marks and links are not read out.
     nonisolated static func speakable(_ sentence: String) -> String {
         var text = sentence
@@ -388,5 +408,41 @@ final class VoiceConversation {
             ("today", "Reading today's note"), ("t3", "Checking your coding sessions"), ("coding", "Working on code"), ("browser", "Using the browser"),
             ("decide", "Sorting through it"), ("extract", "Sorting through it"), ("memory", "Remembering"), ("job", "Working on your Mac")]
         return labels.first { name.contains($0.0) }?.1 ?? "Working on it"
+    }
+}
+
+/// Leaves out what Umpi puts between <chat> and </chat>: it is shown in the chat, never read aloud. Tags can arrive
+/// split across frames, so a possible start of one is held until the next text.
+struct SpokenFilter {
+    static let open = "<chat>", close = "</chat>"
+    private(set) var inShown = false
+    private(set) var sawShown = false
+    private var carry = ""
+
+    mutating func feed(_ text: String, end: Bool = false) -> String {
+        var input = carry + text
+        carry = ""
+        var spoken = ""
+        while !input.isEmpty {
+            let tag = inShown ? Self.close : Self.open
+            if let found = input.range(of: tag) {
+                if !inShown { spoken += input[..<found.lowerBound] }
+                input = String(input[found.upperBound...])
+                inShown.toggle()
+                if inShown { sawShown = true }
+                continue
+            }
+            let held = end ? 0 : Self.partialTag(at: input, tag)
+            if !inShown { spoken += input.dropLast(held) }
+            carry = String(input.suffix(held))
+            input = ""
+        }
+        return spoken
+    }
+
+    /// How many characters at the end of `text` could be the start of `tag`.
+    private static func partialTag(at text: String, _ tag: String) -> Int {
+        for length in stride(from: min(tag.count - 1, text.count), through: 1, by: -1) where text.hasSuffix(tag.prefix(length)) { return length }
+        return 0
     }
 }

@@ -280,6 +280,10 @@ test("voice mode: a spoken message tells Umpi it is heard aloud, and talking ove
   const after = f.owner.operation(String(record(await (await send({ id: "s4", text: "Wait, which one?", voice: true, spoken: true, interrupts: running.id, heard: "Once upon a time" }))!.json()).id))!;
   assert.match(String(f.owner.modelContent(after)), /heard only this much of it: «Once upon a time»/);
   assert.equal(f.owner.interrupt(running.id, interruptedReply), false, "a finished reply is left alone");
+  // What a spoken reply showed stays in the chat as ordinary text.
+  const shown = f.owner.operation(String(record(await (await send({ id: "s5", text: "Compare the two plans.", voice: true, spoken: true }))!.json()).id))!;
+  f.owner.settle(shown.id, "Plan B is cheaper; the numbers are in the chat.\n<chat>\n| Plan | Cost |\n|---|---|\n| B | 10 |\n</chat>");
+  assert.equal(f.chat.page({ limit: 100 }).entries.find(entry => entry.id === `umpi:answer:${shown.id}`)?.text, "Plan B is cheaper; the numbers are in the chat.\n\n| Plan | Cost |\n|---|---|\n| B | 10 |");
   const typed = f.owner.admit("t1", "typed", "telegram", "telegram-session", { kind: "app-text" });
   assert.equal(f.owner.interrupt(typed.id, interruptedReply), false, "only spoken replies are interrupted");
 });

@@ -49,4 +49,25 @@ final class VoiceTests: XCTestCase {
         let chat = try JSONDecoder().decode(VoiceConversation.Frame.self, from: Data(#"{"type":"chat","latest":12}"#.utf8))
         XCTAssertEqual(chat.latest, 12)
     }
+
+    func testWhatIsShownInTheChatIsNotSpokenEvenWhenItsTagsAreSplit() {
+        var filter = SpokenFilter()
+        var spoken = ""
+        for piece in ["Plan B is cheaper. The numbers are in the chat.\n<ch", "at>\n| Plan | Cost |\n|---|---|\n| B | 10 |\n</c", "hat> Anything else?"] {
+            spoken += filter.feed(piece)
+        }
+        spoken += filter.feed("", end: true)
+        XCTAssertEqual(spoken, "Plan B is cheaper. The numbers are in the chat.\n Anything else?")
+        XCTAssertTrue(filter.sawShown)
+        var plain = SpokenFilter()
+        XCTAssertEqual(plain.feed("Costs < 5 dollars"), "Costs < 5 dollars", "a lone < is not held forever")
+        XCTAssertEqual(plain.feed("x <", end: false), "x ", "a possible tag start waits for the next text")
+        XCTAssertEqual(plain.feed("", end: true), "<")
+    }
+
+    func testTheChatsCopySpeaksOnlyItsLead() {
+        XCTAssertEqual(VoiceConversation.spokenLead("Plan B is cheaper.\n\n| Plan | Cost |\n|---|---|"), "Plan B is cheaper.")
+        XCTAssertEqual(VoiceConversation.spokenLead("Here it is:\nhttps://example.com"), "Here it is:")
+        XCTAssertEqual(VoiceConversation.spokenLead("Just talking."), "Just talking.")
+    }
 }

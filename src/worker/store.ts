@@ -2,7 +2,7 @@ import { InputError, identifier, boundedText, timestamp, parseAssignment, parseP
 import { formatTelegramApproval } from "./telegram-view.js";
 import { renderTelegramMarkdown } from "./telegram-markdown.js";
 import type { ChatLog } from "./chat.js";
-import { SPOKEN_TURN_NOTE } from "./speech-relay.js";
+import { SPOKEN_TURN_NOTE, writtenReply } from "./speech-relay.js";
 import { parseReminderIntensity, type ReminderIntensity } from "../shared/knock.js";
 import { IMAGE_TYPES, MAX_FILE_TEXT, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE, type TelegramDocument, type TelegramImage } from "../shared/voice-note.js";
 
@@ -332,7 +332,8 @@ export class Store {
       this.db.all("DELETE FROM umpi_operation_images WHERE id=?", id);
       // A successful tool-only turn may already have posted its native interaction.
       if (!op.background && (result.trim() || failed)) {
-        const output = result.trim() || "The model request failed. Check protected model status.";
+        // A spoken reply keeps what it showed in the chat, without the tags that kept it from being read aloud.
+        const output = (op.ownerSource?.spoken && !failed ? writtenReply(result) : result.trim()) || "The model request failed. Check protected model status.";
         if (op.surface === "app") this.chat?.appReply(id, output);
         else if (op.channel === "telegram") {
           // The app shows the Markdown; Telegram gets it rendered.
