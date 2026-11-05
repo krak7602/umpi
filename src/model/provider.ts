@@ -23,6 +23,29 @@ export interface SubscriptionFallback {
 /** Console API keys are `sk-ant-<kind>-…` (such as `api03` or `usr`); subscription OAuth and Admin API keys are never accepted. */
 export function isAnthropicApiKey(value: string): boolean { return /^sk-ant-(?!oat|admin)[a-z]+\d*-[A-Za-z0-9_-]{20,}$/.test(value); }
 
+/**
+ * A refresh the sign-in service refused for a passing reason (HTTP 403, 408, 429 or 5xx, or the network), not a
+ * spent or revoked refresh token, which is HTTP 400 `invalid_grant` and never helped by asking again.
+ */
+export function isTransientRefreshFailure(error: unknown): boolean {
+  const text = error instanceof Error ? `${error.message} ${String((error as { cause?: unknown }).cause ?? "")}` : String(error);
+  if (/invalid_grant|status=400\b|status=401\b/i.test(text)) return false;
+  return /status=(403|408|429|5\d\d)\b/i.test(text) || /fetch failed|network|ECONN|ETIMEDOUT|EAI_AGAIN|socket hang up/i.test(text);
+}
+
+/** Refreshes once more after a short wait when the first refusal was passing; two mail reviews failed on 2026-10-30 from one. */
+export async function refreshWithRetry<T>(refresh: () => Promise<T>, signal?: AbortSignal, waitMs = 5_000): Promise<T> {
+  try { return await refresh(); }
+  catch (error) {
+    if (!isTransientRefreshFailure(error) || signal?.aborted) throw error;
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(resolve, waitMs);
+      signal?.addEventListener("abort", () => { clearTimeout(timer); reject(error); }, { once: true });
+    });
+    return await refresh();
+  }
+}
+
 /** Pi treats a non-OAuth Anthropic token as an API key, which bills API credits instead of the plan. */
 function claudeSubscriptionOnly(provider: ReturnType<typeof anthropicProvider>, fallback?: SubscriptionFallback): typeof provider {
   const oauth = provider.auth.oauth;
@@ -30,7 +53,7 @@ function claudeSubscriptionOnly(provider: ReturnType<typeof anthropicProvider>, 
   provider.auth.oauth = {
     ...oauth,
     refresh: async (credential, signal) => {
-      const refreshed = await oauth.refresh(credential, signal);
+      const refreshed = await refreshWithRetry(() => oauth.refresh(credential, signal), signal);
       if (!isClaudeSubscriptionToken(refreshed.access)) throw new AuthInputError("Anthropic refresh did not return a Claude subscription OAuth token");
       return refreshed;
     },
