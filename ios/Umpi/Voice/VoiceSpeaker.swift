@@ -122,7 +122,7 @@ enum VoiceCatalog {
         switch voice.quality {
         case .premium: return "Premium"
         case .enhanced: return "Enhanced"
-        default: return "Default"
+        default: return "Basic"
         }
     }
 

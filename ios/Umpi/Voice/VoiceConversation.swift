@@ -118,7 +118,7 @@ final class VoiceConversation {
     func applySettings() {
         audio.pause = settings.pause
         audio.cutIn = settings.cutIn
-        speaker.voice = .init(identifier: settings.voiceIdentifier, rate: Float(settings.rate), pitch: Float(settings.pitch))
+        speaker.voice = .init(identifier: settings.voiceIdentifier, rate: Float(settings.rate), pitch: VoiceSettings.cleanPitch(settings.pitch))
     }
 
     func returnedToApp() { if started { audio.ensureRunning() } }

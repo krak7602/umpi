@@ -30,6 +30,9 @@ final class VoiceSettings {
     /// The chosen voice if it is still installed.
     var voice: AVSpeechSynthesisVoice? { voiceIdentifier.flatMap(AVSpeechSynthesisVoice.init(identifier:)) ?? VoiceCatalog.bestDefault() }
 
+    /// Normal pitch exactly when the setting is near it, so the voice is not reprocessed for a change nobody hears.
+    nonisolated static func cleanPitch(_ value: Double) -> Float { abs(value - 1) < 0.03 ? 1 : Float(value) }
+
     var speedLabel: String {
         switch rate / Self.normalRate {
         case ..<0.94: return "Slower"
