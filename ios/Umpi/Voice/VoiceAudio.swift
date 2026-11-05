@@ -249,6 +249,12 @@ final class VoiceAudio: @unchecked Sendable {
         }
     }
 
+    /// The owner left mid-turn: stop listening and let the recognizer give its final words for what was heard.
+    func endTurn() {
+        mode = .off
+        request?.endAudio()
+    }
+
     private func endRecognition(cancel: Bool) {
         if cancel { task?.cancel() } else { request?.endAudio() }
         task = nil; request = nil
