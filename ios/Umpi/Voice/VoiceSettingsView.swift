@@ -20,7 +20,8 @@ struct VoiceSettingsView: View {
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     HStack { Text("Pitch"); Spacer(); Text(settings.pitch < 0.97 ? "Lower" : settings.pitch > 1.03 ? "Higher" : "Normal").foregroundStyle(.secondary) }
-                    Slider(value: $settings.pitch, in: 0.8...1.3) { Text("Pitch") }
+                    // Steps, so Normal is exactly 1: any other pitch makes iOS reprocess the voice, which can warble.
+                    Slider(value: $settings.pitch, in: 0.8...1.3, step: 0.05) { Text("Pitch") }
                         onEditingChanged: { editing in if !editing { play() } }
                 }
                 Button { play() } label: { Label("Play a sample", systemImage: "play.circle") }
@@ -36,7 +37,7 @@ struct VoiceSettingsView: View {
                     .tint(.primary)
                 }
             } header: { Text("Voice") } footer: {
-                Text("More natural Enhanced and Premium voices are a free download in Settings › Accessibility › Spoken Content › Voices. They appear here once installed.")
+                Text("Basic voices, including the Siri voices apps are given, are small copies that can sound mechanical. Premium and Enhanced voices sound far more natural: download them free in Settings › Accessibility › Spoken Content › Voices, and they appear here.")
             }
 
             Section {
@@ -85,7 +86,7 @@ struct VoiceSettingsView: View {
         let utterance = AVSpeechUtterance(string: "Hi, I'm Umpi. This is how I'll sound when we talk.")
         utterance.voice = settings.voice
         utterance.rate = Float(settings.rate)
-        utterance.pitchMultiplier = Float(settings.pitch)
+        utterance.pitchMultiplier = VoiceSettings.cleanPitch(settings.pitch)
         sample.play(utterance)
     }
 }
