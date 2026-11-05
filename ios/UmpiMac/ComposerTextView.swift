@@ -14,7 +14,14 @@ struct ComposerTextView: NSViewRepresentable {
 
     /// Room on the right for the send button that sits over the field.
     static let trailingRoom: CGFloat = 28
-    static let inset = NSSize(width: 14, height: 9)
+    static let horizontalInset: CGFloat = 14
+
+    /// The vertical margin that centres one line of `font` in the field, so text, placeholder, and the buttons beside
+    /// it share a centre line.
+    static func inset(for font: NSFont) -> NSSize {
+        let line = NSLayoutManager().defaultLineHeight(for: font)
+        return NSSize(width: horizontalInset, height: max(4, ((ChatView.fieldHeight - line) / 2).rounded(.down)))
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -28,7 +35,7 @@ struct ComposerTextView: NSViewRepresentable {
         textView.allowsUndo = true
         textView.drawsBackground = false
         textView.font = .preferredFont(forTextStyle: .body)
-        textView.textContainerInset = Self.inset
+        textView.textContainerInset = Self.inset(for: textView.font!)
         textView.textContainer?.lineFragmentPadding = 0
         textView.textContainer?.widthTracksTextView = true
         textView.isVerticallyResizable = true
@@ -76,12 +83,13 @@ struct ComposerTextView: NSViewRepresentable {
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSView, context: Context) -> CGSize? {
         let width = proposal.width ?? 300
         guard let textView = context.coordinator.textView, let layout = textView.layoutManager, let container = textView.textContainer else { return nil }
-        container.size = NSSize(width: max(1, width - Self.trailingRoom - Self.inset.width * 2), height: .greatestFiniteMagnitude)
+        let inset = textView.textContainerInset
+        container.size = NSSize(width: max(1, width - Self.trailingRoom - inset.width * 2), height: .greatestFiniteMagnitude)
         layout.ensureLayout(for: container)
         let used = layout.usedRect(for: container).height
         let line = layout.defaultLineHeight(for: textView.font ?? .preferredFont(forTextStyle: .body))
-        let fitting = max(used, line) + Self.inset.height * 2
-        let maximum = line * 8 + Self.inset.height * 2
+        let fitting = max(used, line) + inset.height * 2
+        let maximum = line * 8 + inset.height * 2
         return CGSize(width: width, height: max(ChatView.fieldHeight, min(fitting, maximum)))
     }
 
