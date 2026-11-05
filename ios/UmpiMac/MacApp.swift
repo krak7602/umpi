@@ -39,6 +39,25 @@ final class MacApp {
     /// Shortcuts the system refused, such as one another app already uses.
     private(set) var refusedShortcuts: Set<ShortcutSettings.Action> = []
     private(set) var launchAtLogin = SMAppService.mainApp.status == .enabled
+    /// Quitting from the window (Command-Q, the app or Dock menu) only closes it; Umpi stays in the menu bar. Quit
+    /// Umpi in the menu bar item always quits.
+    var keepRunningWhenQuit = UserDefaults.standard.object(forKey: "mac.keepRunningWhenQuit") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(keepRunningWhenQuit, forKey: "mac.keepRunningWhenQuit") }
+    }
+    /// Set by the menu bar item's Quit Umpi: this quit is meant.
+    @ObservationIgnored var quittingForReal = false
+
+    func quitCompletely() {
+        quittingForReal = true
+        NSApp.terminate(nil)
+    }
+
+    /// Closes the window and the panel; Umpi keeps running in the menu bar.
+    func runInBackground() {
+        panel.hide()
+        NSApp.windows.filter { $0.isVisible && !($0 is NSPanel) }.forEach { $0.performClose(nil) }
+        NSApp.setActivationPolicy(.accessory)
+    }
     private(set) var launchAtLoginProblem: String?
 
     @ObservationIgnored let panel = ChatPanelController()
@@ -238,6 +257,19 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationC
 
     /// Closing the window keeps Umpi in the menu bar, with the chat connected and the shortcuts working.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    /// Quitting from the window keeps Umpi running in the menu bar, when the owner chose that. Logging out, restarting,
+    /// and shutting down always quit, as does Quit Umpi in the menu bar item.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let reason = NSAppleEventManager.shared().currentAppleEvent?.attributeDescriptor(forKeyword: kAEQuitReason)?.enumCodeValue
+        let systemQuit = reason.map { [kAELogOut, kAEReallyLogOut, kAEShowRestartDialog, kAERestart, kAEShowShutdownDialog, kAEShutDown].map { OSType($0) }.contains($0) } ?? false
+        return MainActor.assumeIsolated {
+            let app = MacApp.shared
+            if systemQuit || app.quittingForReal || !app.keepRunningWhenQuit { return .terminateNow }
+            app.runInBackground()
+            return .terminateCancel
+        }
+    }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
         MainActor.assumeIsolated { MacApp.shared.showMain() }
