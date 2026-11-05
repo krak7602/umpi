@@ -48,7 +48,7 @@ struct VoiceModeView: View {
                 .foregroundStyle(.secondary)
                 .contentTransition(.opacity)
                 .animation(.easeInOut(duration: 0.25), value: status)
-                .padding(.top, 4)
+                .padding(.top, 32)
             Text(conversation.caption)
                 .font(.title3)
                 .multilineTextAlignment(.center)
