@@ -7,6 +7,8 @@ struct ChatView: View {
     @Environment(CompanionStore.self) private var store
     @Environment(T3CodeModel.self) private var t3
     @Environment(\.openVoiceMode) private var openVoiceMode
+    /// Shown in the Mac's floating panel, whose own header has the controls the toolbar would add.
+    @Environment(\.chatInPanel) private var inPanel
     @State private var chat: ChatModel
     /// The chat keeps its own live connection; false when the app keeps one for every chat it shows (the Mac).
     private let ownsConnection: Bool
@@ -72,6 +74,11 @@ struct ChatView: View {
                 }
                 .padding(.horizontal)
                 .padding(.vertical, 8)
+                #if os(macOS)
+                // A wide Mac window keeps lines at a readable length, centred.
+                .frame(maxWidth: 760)
+                .frame(maxWidth: .infinity)
+                #endif
             }
             .defaultScrollAnchor(.bottom)
             // Content that grows after layout (a diagram, a photo) keeps the newest message in view, unless the owner
@@ -107,10 +114,12 @@ struct ChatView: View {
         .navigationTitle("Chat")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Image(systemName: chat.isLive ? "dot.radiowaves.left.and.right" : "wifi.slash")
-                    .foregroundStyle(chat.isLive ? Color.green : Color.secondary)
-                    .accessibilityLabel(chat.isLive ? "Live" : "Not connected")
+            if !inPanel {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Image(systemName: chat.isLive ? "dot.radiowaves.left.and.right" : "wifi.slash")
+                        .foregroundStyle(chat.isLive ? Color.green : Color.secondary)
+                        .accessibilityLabel(chat.isLive ? "Live" : "Not connected")
+                }
             }
         }
         .overlay(alignment: .top) {
@@ -166,6 +175,11 @@ struct ChatView: View {
     private var composer: some View {
         composerRow
             .padding(.horizontal).padding(.vertical, 8)
+            #if os(macOS)
+            // Lined up with the messages above it.
+            .frame(maxWidth: 760)
+            .frame(maxWidth: .infinity)
+            #endif
             .composerBackground()
     }
 
@@ -544,7 +558,12 @@ private struct PendingBubble: View {
 extension View {
     /// The system's soft fade where content scrolls under the bars (iOS 26 and later).
     @ViewBuilder func softScrollEdges() -> some View {
+        #if os(macOS)
+        // A Mac window's toolbar is not floating glass: messages stop cleanly under it instead of showing through.
+        self.scrollEdgeEffectStyle(.hard, for: .top)
+        #else
         if #available(iOS 26.0, *) { self.scrollEdgeEffectStyle(.soft, for: .all) } else { self }
+        #endif
     }
     /// The system's Liquid Glass on iOS 26, like Messages' composer; a filled shape on earlier systems.
     @ViewBuilder func glassOrFill<S: Shape>(in shape: S) -> some View {
@@ -660,4 +679,5 @@ extension EnvironmentValues {
     /// Opens voice mode somewhere other than over the chat, such as the Mac's floating panel. Nil on the phone, where
     /// the chat opens voice mode itself.
     @Entry var openVoiceMode: (@MainActor () -> Void)? = nil
+    @Entry var chatInPanel = false
 }
