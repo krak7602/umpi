@@ -8,8 +8,11 @@ struct UmpiMacApp: App {
     @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var delegate
 
     var body: some Scene {
-        MenuBarExtra("Umpi", systemImage: "bubble.left.and.text.bubble.right") {
+        MenuBarExtra {
             MenuBarMenu().environment(MacApp.shared).environment(MacApp.shared.store)
+        } label: {
+            // The voice orb's three flowing layers, as a template image that macOS tints for the menu bar.
+            Image("MenuBarIcon").accessibilityLabel("Umpi")
         }
         .commands {
             CommandGroup(replacing: .appSettings) {
