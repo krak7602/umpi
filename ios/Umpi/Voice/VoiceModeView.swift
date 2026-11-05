@@ -8,12 +8,22 @@ struct VoiceModeView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var conversation = VoiceConversation()
     @State private var showSettings = false
+    /// Ends voice mode where it is not presented over the chat, such as in the Mac's floating panel.
+    var onEnd: (() -> Void)? = nil
+    #if os(macOS)
+    /// Keeps the display awake while voice mode shows.
+    @State private var awake: NSObjectProtocol?
+    static let orbSize: CGFloat = 240
+    #else
+    static let orbSize: CGFloat = 340
+    #endif
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
                 Spacer()
                 Button { showSettings = true } label: { Image(systemName: "slider.horizontal.3").font(.system(size: 17, weight: .semibold)).frame(width: 44, height: 44) }
+                    .shapedButton()
                     .accessibilityLabel("Voice settings")
             }
             .tint(.primary)
@@ -21,7 +31,7 @@ struct VoiceModeView: View {
 
             Spacer(minLength: 12)
             VoiceOrb(phase: conversation.phase, level: conversation.level)
-                .frame(width: 340, height: 340)
+                .frame(width: Self.orbSize, height: Self.orbSize)
                 .contentShape(Circle())
                 .onTapGesture { conversation.tapped() }
                 #if DEBUG
@@ -59,24 +69,39 @@ struct VoiceModeView: View {
             HStack(spacing: 28) {
                 control(conversation.muted ? "mic.slash.fill" : "mic.fill", label: conversation.muted ? "Unmute" : "Mute", active: conversation.muted) { conversation.muted.toggle() }
                 control(conversation.phase == .paused ? "play.fill" : "pause.fill", label: conversation.phase == .paused ? "Resume" : "Pause", active: conversation.phase == .paused) { conversation.togglePause() }
-                Button { dismiss() } label: {
+                Button { if let onEnd { onEnd() } else { dismiss() } } label: {
                     Image(systemName: "xmark").font(.system(size: 22, weight: .semibold)).foregroundStyle(.white)
                         .frame(width: 64, height: 64).background(Circle().fill(Color.red))
                 }
+                .shapedButton()
                 .accessibilityLabel("End")
             }
             .padding(.bottom, 24)
         }
         .background(Color(.systemBackground).ignoresSafeArea())
         .task { await conversation.start(store) }
+        #if os(iOS)
         .onAppear { UIApplication.shared.isIdleTimerDisabled = true }
         .onDisappear { conversation.stop(); UIApplication.shared.isIdleTimerDisabled = false }
+        #else
+        .onAppear { awake = ProcessInfo.processInfo.beginActivity(options: [.idleDisplaySleepDisabled, .userInitiated], reason: "Voice mode is open") }
+        .onDisappear {
+            // Closing voice mode mid-sentence still sends what was heard, as leaving the app does on the phone.
+            Task { await conversation.leaving() }
+            if let awake { ProcessInfo.processInfo.endActivity(awake) }
+            awake = nil
+        }
+        #endif
         // Voice mode only listens while it is on screen.
         .onChange(of: scenePhase) { _, phase in
             if phase == .background {
+                #if os(iOS)
                 // Words said just before leaving are still sent; iOS gives a few seconds to do it.
                 let task = UIApplication.shared.beginBackgroundTask(withName: "voice leaving")
                 Task { await conversation.leaving(); UIApplication.shared.endBackgroundTask(task) }
+                #else
+                Task { await conversation.leaving() }
+                #endif
             }
             else if phase == .active { conversation.returnedToApp(); Task { await conversation.start(store) } }
         }
@@ -85,6 +110,9 @@ struct VoiceModeView: View {
         .onChange(of: showSettings) { _, open in if open { conversation.stop() } }
         .sheet(isPresented: $showSettings, onDismiss: { conversation.applySettings(); Task { await conversation.start(store) } }) {
             NavigationStack { VoiceSettingsView() }
+            #if os(macOS)
+                .frame(minWidth: 460, minHeight: 560)
+            #endif
         }
         .sensoryFeedback(.impact(weight: .light), trigger: conversation.phase == .speaking)
     }
@@ -118,6 +146,7 @@ struct VoiceModeView: View {
                 .frame(width: 56, height: 56)
                 .background(Circle().fill(active ? Color.primary : Color(.secondarySystemBackground)))
         }
+        .shapedButton()
         .accessibilityLabel(label)
     }
 }

@@ -1,5 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 import WebKit
 
 /// A Mermaid diagram drawn by Pele, Obsidian's MIT-licensed renderer, bundled in the app. Pele runs offline in a small
@@ -24,33 +26,29 @@ struct MermaidView: View {
     }
 }
 
-private struct MermaidWebView: UIViewRepresentable {
+@MainActor private struct MermaidWebView {
     let source: String
     @Binding var height: CGFloat
     @Binding var failed: Bool
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
-    func makeUIView(context: Context) -> WKWebView {
+    private func makeView(_ coordinator: Coordinator) -> DiagramWebView {
         let configuration = WKWebViewConfiguration()
-        configuration.userContentController.add(context.coordinator, name: "pele")
+        configuration.userContentController.add(coordinator, name: "pele")
         configuration.websiteDataStore = .nonPersistent()
-        let view = WKWebView(frame: .zero, configuration: configuration)
+        let view = DiagramWebView(frame: .zero, configuration: configuration)
+        #if os(iOS)
         view.isOpaque = false
         view.backgroundColor = .clear
         view.scrollView.isScrollEnabled = false
         view.scrollView.backgroundColor = .clear
-        view.navigationDelegate = context.coordinator
+        #else
+        view.setValue(false, forKey: "drawsBackground")
+        #endif
+        view.navigationDelegate = coordinator
         load(view)
         return view
-    }
-
-    func updateUIView(_ view: WKWebView, context: Context) {
-        if context.coordinator.loaded != source { load(view) }
-    }
-
-    static func dismantleUIView(_ view: WKWebView, coordinator: Coordinator) {
-        view.configuration.userContentController.removeScriptMessageHandler(forName: "pele")
     }
 
     private func load(_ view: WKWebView) {
@@ -109,10 +107,43 @@ private struct MermaidWebView: UIViewRepresentable {
         /// Links in a diagram open outside, never inside this view.
         func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction) async -> WKNavigationActionPolicy {
             if action.navigationType == .linkActivated, let url = action.request.url, ["http", "https"].contains(url.scheme) {
-                await UIApplication.shared.open(url)
+                await openOutside(url)
                 return .cancel
             }
             return action.navigationType == .other ? .allow : .cancel
         }
     }
 }
+
+#if os(iOS)
+private typealias DiagramWebView = WKWebView
+
+extension MermaidWebView: UIViewRepresentable {
+    func makeUIView(context: Context) -> WKWebView { makeView(context.coordinator) }
+
+    func updateUIView(_ view: WKWebView, context: Context) {
+        if context.coordinator.loaded != source { load(view) }
+    }
+
+    static func dismantleUIView(_ view: WKWebView, coordinator: Coordinator) {
+        view.configuration.userContentController.removeScriptMessageHandler(forName: "pele")
+    }
+}
+#else
+/// A diagram does not scroll; the wheel scrolls the conversation around it.
+private final class DiagramWebView: WKWebView {
+    override func scrollWheel(with event: NSEvent) { nextResponder?.scrollWheel(with: event) }
+}
+
+extension MermaidWebView: NSViewRepresentable {
+    func makeNSView(context: Context) -> DiagramWebView { makeView(context.coordinator) }
+
+    func updateNSView(_ view: DiagramWebView, context: Context) {
+        if context.coordinator.loaded != source { load(view) }
+    }
+
+    static func dismantleNSView(_ view: DiagramWebView, coordinator: Coordinator) {
+        view.configuration.userContentController.removeScriptMessageHandler(forName: "pele")
+    }
+}
+#endif

@@ -1,6 +1,8 @@
 import Markdown
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 
 /// Renders Markdown the way the owner's notes look: Apple Notes for text, checklists, and tables; Obsidian for code,
 /// quotes, callouts (`> [!note]`), highlights (`==text==`), wiki links (`[[Note]]`), and Mermaid diagrams.
@@ -356,7 +358,7 @@ private struct CodeBlockView: View {
                 Text(language?.isEmpty == false ? language! : "code").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button {
-                    UIPasteboard.general.string = text
+                    Clipboard.copy(text)
                     copied = true
                     Task { try? await Task.sleep(for: .seconds(2)); copied = false }
                 } label: {

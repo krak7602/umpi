@@ -1,7 +1,7 @@
 ---
 title: Phone companion and device acknowledgment
-aliases: [iPhone companion, personal Umpi app, SwiftUI, AlarmKit, device alarms]
-updated: 2026-11-03
+aliases: [iPhone companion, personal Umpi app, SwiftUI, AlarmKit, device alarms, Mac app, floating chat]
+updated: 2026-11-05
 ---
 
 # Phone companion and device acknowledgment
@@ -10,7 +10,7 @@ updated: 2026-11-03
 
 ### Implemented companion
 
-`ios/` contains a native SwiftUI app and a WidgetKit Live Activity extension. The app has Workflows, Activity, and Settings tabs, scoped pairing, dynamic native forms and actions, protected command review, durable local drafts/outbox, AlarmKit alarms, and local notifications. The coordinator stores companion records in application tables in its existing Durable Object SQLite database. This code is implemented; deployment, private signing, and physical-device delivery are separate operating steps.
+`ios/` contains a native SwiftUI app and a WidgetKit Live Activity extension. The app has Workflows, Activity, and Settings tabs, scoped pairing, dynamic native forms and actions, protected command review, durable local drafts/outbox, AlarmKit alarms, and local notifications. The coordinator stores companion records in application tables in its existing Durable Object SQLite database. This code is implemented; deployment, private signing, and physical-device delivery are separate operating steps. A [Mac app](#mac-app) is built from the same sources.
 
 The companion is separate from any external caller or voice system. Calls are not a prerequisite; any later voice work must meet the [voice retention criteria](../concepts/interaction-quality.md#voice-retention-criteria).
 
@@ -160,6 +160,18 @@ Device effects require OS permission and either individual trusted review or the
 
 Schedule alarms ahead while the device can perform and acknowledge registration. Background APNs delivery is best effort, not a reliable last-minute scheduling channel. See [Apple's background-update delivery guidance](https://developer.apple.com/documentation/usernotifications/pushing-background-updates-to-your-app). Do not misuse VoIP pushes for non-call work. These delivery limits also apply to attempts to refresh app state in the background.
 
+### Mac app
+
+The `UmpiMac` target is the same app for the Mac, so the owner can use Umpi without the phone. It is another paired device: it uses the same device routes and pairs with server and code from a paired phone (see [pairing](#pairing-tools-and-http-contract)), under the label "Mac". It compiles the phone's sources with small platform guards; `ios/UmpiMac` holds what differs.
+
+- **Window.** Chat, Today, Work, and Settings as a sidebar, with the phone's screens. Before pairing, only the pairing form; Return pairs. Voice settings, including Kokoro's Heart, work as on the phone; the model files download on the Mac. The message field sends with Return and starts a new line with Shift-Return; pasted images and Finder files become attachments.
+- **Floating chat.** A panel over every app, on every Space and over full-screen apps, that does not bring Umpi to the front. ⌥Space opens it on the chat with the field ready to type; ⌥⇧Space opens it in voice mode. The same shortcut again, Esc, or its close button hides it; hiding it mid-sentence in voice mode still sends what was heard, as leaving the app does on the phone. It remembers its size and place. The shortcuts are Carbon hot keys, so they need no Accessibility permission, and can be changed or turned off in Settings › Shortcuts. The window's talk button also opens voice mode in the panel.
+- **Menu bar.** The menu bar item opens the chat, voice mode, the window, and settings, and quits Umpi. Closing the window leaves Umpi in the menu bar only. Settings can open Umpi at login, where it starts in the menu bar.
+- **Notifications.** While Umpi runs, it keeps the chat socket open, and a new message from Umpi shows as a local notification unless the panel shows or the window is in front on the chat. Messages from before launch are not announced. A click opens the chat. The Mac has no push: a message that arrives while Umpi is not running is not announced on the Mac.
+- **What stays on the phone.** The Mac advertises no device capabilities: alarms, reminder knocks, Live Activities, widgets, and background refresh are phone-only, and an action sent to the Mac anyway is acknowledged as unsupported. It synchronizes every 12 seconds while it is in front or the panel shows, and once a minute otherwise.
+
+Building and pairing are in [native development](../runbooks/local-development.md#mac-app). Shortcuts over full-screen apps, notification delivery, and the microphone with echo cancellation still need a check on the owner's Mac.
+
 ### Pairing, tools, and HTTP contract
 
 The owner creates a ten-minute, one-use code through Telegram `/pair`, the control pairing endpoint, or a paired device (Settings › Server › Pair another device, `POST /api/device/pairings`), which is how the Mac app is paired when Telegram is off. The phone generates a random credential and stores the exact pending claim in Keychain before sending it. The coordinator stores credential/code hashes, not plaintext credentials. Exact claim recovery is allowed within the code's lifetime; changed claims cannot reuse it. A rejected pending claim can be explicitly abandoned; unconfirmed remote revocation remains visible. Pairing grants owner-data access and version-bound command approval, not executor or OAuth administration.
@@ -262,3 +274,4 @@ Real-device signing, APNs delivery, alarm ringing, and lock-screen Live Activity
 - 2026-11-05: Added voice mode: spoken app messages, replies passed to the app as they are written, and cutting in. Chosen over an on-device speech model (LFM3-Omni ran at half real time on an iPhone 13) and paid voice APIs; Haiku was not faster than Opus at low effort for these replies.
 - 2026-11-05: Voice mode replaced the app's voice-note recording: the field's waveform button, the Talk widget button, and the "Talk to Umpi" control open it, and its turns file passing ideas, tasks, and reminders as the Voice button did.
 - 2026-11-05: Added Kokoro's Heart as the natural voice, made on the phone with FluidAudio, after the iOS voices apps can use sounded mechanical.
+- 2026-11-05: Added the Mac app: the phone's screens in a window, a floating chat and voice panel on global shortcuts, a menu bar item, and local notifications while it runs. It shares the phone's code and takes no device actions.

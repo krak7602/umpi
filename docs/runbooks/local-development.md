@@ -557,6 +557,19 @@ chmod 600 ios/Config/Signing.local.xcconfig
 
 Set the real team, app identifier, and APNs environment only in that ignored file. The widget identifier derives from the app identifier. Select a connected, developer-enabled device in Xcode and use a valid signing/provisioning configuration. Personal distribution does not bypass entitlement requirements. Never publish signing output containing private identifiers.
 
+#### Mac app
+
+The `UmpiMac` scheme builds the [Mac app](../subsystems/phone-companion.md#mac-app) from the same project and shared sources. It uses automatic signing with the team from the same ignored `Signing.local.xcconfig`; its identifier is the app identifier plus `.mac`. Building it does not install or launch it anywhere:
+
+```sh
+xcodebuild -project ios/Umpi.xcodeproj -scheme UmpiMac -destination 'platform=macOS' \
+  -derivedDataPath "$TMPDIR/UmpiMac" -allowProvisioningUpdates build
+xcodebuild -project ios/Umpi.xcodeproj -scheme UmpiMac -destination 'platform=macOS' \
+  -derivedDataPath "$TMPDIR/UmpiMac" -allowProvisioningUpdates test
+```
+
+The tests cover shortcut reading and display and which chat entries become notifications. Pair the Mac with a code from a paired phone (Settings › Server › Pair another device). Global shortcuts over full-screen apps, notifications, and the microphone in voice mode need a check by the owner on the Mac itself.
+
 #### Pair and operate
 
 The coordinator must run the companion-enabled code; building the app does not deploy the Worker. After deployment, send `/pair` to the owner-bound Telegram bot. Alternatively, the protected control API can issue a code with `POST /api/companion/pairings`. Enter the trusted server origin and the short-lived code in the native pairing screen. Do not put the control token or model credentials in the app.

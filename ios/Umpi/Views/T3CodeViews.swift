@@ -82,7 +82,7 @@ struct T3AddMachineView: View {
                 }
             }
             .task {
-                if address.isEmpty, let pasted = UIPasteboard.general.string, pasted.hasPrefix("https://"), pasted.contains("/mcp") { address = pasted }
+                if address.isEmpty, let pasted = Clipboard.string, pasted.hasPrefix("https://"), pasted.contains("/mcp") { address = pasted }
             }
         }
     }

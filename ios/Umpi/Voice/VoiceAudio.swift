@@ -87,10 +87,12 @@ final class VoiceAudio: @unchecked Sendable {
         // A call, Siri, or a route change stops the engine; start it again. Turning on echo cancellation changes the
         // audio setup once just after starting, which stops the microphone without this.
         observers.append(center.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil) { [weak self] _ in self?.restart() })
+        #if os(iOS)
         observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: nil) { [weak self] note in
             let type = (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt).flatMap(AVAudioSession.InterruptionType.init)
             if type == .ended { self?.restart() }
         })
+        #endif
     }
 
     func stop() {
@@ -103,7 +105,9 @@ final class VoiceAudio: @unchecked Sendable {
         player.stop()
         removeTaps()
         engine.stop()
+        #if os(iOS)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        #endif
     }
 
     /// Starts the engine again if it stopped; safe to call any time.
@@ -123,15 +127,22 @@ final class VoiceAudio: @unchecked Sendable {
     }
 
     private func configure() throws {
-        let session = AVAudioSession.sharedInstance()
         let processing = cutIn
+        #if os(iOS)
+        let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: processing ? .voiceChat : .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
         try session.setActive(true)
+        #endif
         let input = engine.inputNode
         if input.isVoiceProcessingEnabled != processing { try input.setVoiceProcessingEnabled(processing) }
         // Echo cancellation turns other sound down by default; it should not touch anything else on the phone.
         if processing { input.voiceProcessingOtherAudioDuckingConfiguration = .init(enableAdvancedDucking: false, duckingLevel: .min) }
+        #if os(iOS)
         print("VOICELOG audio: echo cancellation \(processing ? "on" : "off"), \(Int(session.sampleRate)) Hz, route \(session.currentRoute.outputs.map(\.portType.rawValue).joined(separator: ","))")
+        #else
+        // The Mac has no audio session: the engine uses the default input and output devices.
+        print("VOICELOG audio: echo cancellation \(processing ? "on" : "off"), \(Int(input.outputFormat(forBus: 0).sampleRate)) Hz")
+        #endif
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else { throw VoiceError("The phone gave no microphone format.") }
         inputRate = format.sampleRate

@@ -43,12 +43,12 @@ struct VoiceSettingsView: View {
                     .disabled(kokoro == .preparing)
                 }
                 if KokoroVoice.downloaded {
-                    Button("Remove the natural voice from this phone", role: .destructive) {
+                    Button("Remove the natural voice from this \(ThisDevice.noun)", role: .destructive) {
                         Task { await KokoroVoice.shared.remove(); kokoro = .notReady; if settings.kokoroVoice != nil { settings.voiceIdentifier = nil } }
                     }
                 }
             } header: { Text("Natural voice") } footer: {
-                Text("Made on this phone by Kokoro, an open voice model; nothing is sent anywhere. The first use downloads its files once.")
+                Text("Made on this \(ThisDevice.noun) by Kokoro, an open voice model; nothing is sent anywhere. The first use downloads its files once.")
             }
 
             Section {
@@ -61,7 +61,7 @@ struct VoiceSettingsView: View {
                     .tint(.primary)
                 }
             } header: { Text("Voice") } footer: {
-                Text("Basic voices, including the Siri voices apps are given, are small copies that can sound mechanical. Premium and Enhanced voices sound far more natural: download them free in Settings › Accessibility › Spoken Content › Voices, and they appear here.")
+                Text("Basic voices, including the Siri voices apps are given, are small copies that can sound mechanical. Premium and Enhanced voices sound far more natural: download them free in \(Self.voicesPath), and they appear here.")
             }
 
             Section {
@@ -74,7 +74,7 @@ struct VoiceSettingsView: View {
                         }
                     }
                 }
-            } footer: { Text("Set up a Personal Voice in Settings › Accessibility › Personal Voice, then allow Umpi to use it.") }
+            } footer: { Text("Set up a Personal Voice in \(Self.settingsApp) › Accessibility › Personal Voice, then allow Umpi to use it.") }
 
             Section {
                 VStack(alignment: .leading, spacing: 6) {
@@ -96,10 +96,17 @@ struct VoiceSettingsView: View {
         .onDisappear {
             sample.stopSpeaking(at: .immediate)
             natural.stop()
+            #if os(iOS)
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            #endif
         }
     }
 
+    #if os(macOS)
+    static let settingsApp = "System Settings", voicesPath = "System Settings › Accessibility › Spoken Content › System voice › Manage Voices"
+    #else
+    static let settingsApp = "Settings", voicesPath = "Settings › Accessibility › Spoken Content › Voices"
+    #endif
     static let sampleText = "Hi, I'm Umpi. This is how I'll sound when we talk."
 
     private func row(name: String, detail: String, selected: Bool) -> some View {
@@ -145,9 +152,11 @@ struct VoiceSettingsView: View {
             return
         }
         // Plain spoken audio, as Siri plays it: no microphone, no echo cancellation.
+        #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
         try? session.setActive(true)
+        #endif
         let utterance = AVSpeechUtterance(string: Self.sampleText)
         utterance.voice = settings.voice
         utterance.rate = Float(settings.rate)
@@ -168,9 +177,11 @@ final class PCMPlayer {
         guard !samples.isEmpty, let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)) else { return }
         buffer.frameLength = AVAudioFrameCount(samples.count)
         samples.withUnsafeBufferPointer { buffer.floatChannelData![0].update(from: $0.baseAddress!, count: samples.count) }
+        #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
         try? session.setActive(true)
+        #endif
         if player.engine == nil { engine.attach(player); engine.connect(player, to: engine.mainMixerNode, format: format) }
         do { if !engine.isRunning { try engine.start() } } catch { return }
         player.scheduleBuffer(buffer)

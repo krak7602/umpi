@@ -1,7 +1,9 @@
 import AVFoundation
 import Foundation
 import Observation
+#if canImport(UIKit)
 import UIKit
+#endif
 
 /// Voice mode's spoken conversation with the same Umpi: hands-free turns, Umpi's reply read aloud as it is written,
 /// and cutting in by talking. Every turn is an ordinary message in the shared chat.
@@ -83,7 +85,9 @@ final class VoiceConversation {
         self.store = store
         // Opened from the widget or a control, the app may still be coming to the front; iOS refuses the microphone
         // until it is.
+        #if os(iOS)
         for _ in 0..<30 where UIApplication.shared.applicationState != .active { try? await Task.sleep(for: .milliseconds(100)) }
+        #endif
         if let problem = await VoiceAudio.permissions() { phase = .failed(problem); return }
         applySettings()
         do { try audio.start() } catch { phase = .failed("The microphone could not start: \(error.localizedDescription)"); return }
@@ -177,7 +181,9 @@ final class VoiceConversation {
                 // The owner talked over Umpi: stop it and remember what was heard.
                 if reply == nil && sending { cutWhileSending = true }
                 stopReply(note: true)
+                #if os(iOS)
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                #endif
             }
             finalWaiter?.cancel()
             words = ""
@@ -255,9 +261,15 @@ final class VoiceConversation {
         sending = true
         cutWhileSending = false
         // A few seconds from iOS to finish sending if the owner leaves the app right now.
+        #if os(iOS)
         let background = UIApplication.shared.beginBackgroundTask(withName: "voice message")
+        #endif
         Task {
+            #if os(iOS)
             defer { sending = false; UIApplication.shared.endBackgroundTask(background) }
+            #else
+            defer { sending = false }
+            #endif
             struct Body: Encodable { var id: String; var text: String; var sentAt: String; var voice = true; var spoken = true; var interrupts: String?; var heard: String? }
             let body = Body(id: UUID().uuidString, text: text, sentAt: ISO8601DateFormatter().string(from: Date()), interrupts: cut?.id, heard: cut.map { String($0.heard.prefix(16_000)) })
             do {

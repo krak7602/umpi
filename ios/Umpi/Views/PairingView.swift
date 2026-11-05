@@ -1,6 +1,12 @@
 import SwiftUI
 
 struct PairingView: View {
+    /// How the coordinator lists this device.
+    #if os(macOS)
+    static let deviceLabel = "Mac"
+    #else
+    static let deviceLabel = "Companion"
+    #endif
     @Environment(CompanionStore.self) private var store
     @Binding var server: String
     @Binding var code: String
@@ -34,7 +40,7 @@ struct PairingView: View {
                 Button {
                     isPairing = true
                     Task {
-                        await store.pair(server: server.trimmingCharacters(in: .whitespacesAndNewlines), code: code.trimmingCharacters(in: .whitespacesAndNewlines))
+                        await store.pair(server: server.trimmingCharacters(in: .whitespacesAndNewlines), code: code.trimmingCharacters(in: .whitespacesAndNewlines), label: Self.deviceLabel)
                         isPairing = false
                         if store.isPaired { code = "" }
                     }
@@ -43,6 +49,13 @@ struct PairingView: View {
                 }
                 .disabled(isPairing || store.hasPendingPairing || server.isEmpty || code.isEmpty)
                 .accessibilityIdentifier("pairing.connect")
+                #if os(macOS)
+                // Return pairs; a pairing link only fills the form, so the button must stand out.
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .frame(maxWidth: .infinity)
+                #endif
                 if store.hasPendingPairing {
                     Button("Recover pending pairing") {
                         isPairing = true

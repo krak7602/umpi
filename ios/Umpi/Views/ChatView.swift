@@ -6,7 +6,10 @@ import UniformTypeIdentifiers
 struct ChatView: View {
     @Environment(CompanionStore.self) private var store
     @Environment(T3CodeModel.self) private var t3
-    @State private var chat = ChatModel()
+    @Environment(\.openVoiceMode) private var openVoiceMode
+    @State private var chat: ChatModel
+    /// The chat keeps its own live connection; false when the app keeps one for every chat it shows (the Mac).
+    private let ownsConnection: Bool
     @State private var draft = ""
     @State private var composing = false
     @State private var attachment: PreparedAttachment?
@@ -20,6 +23,12 @@ struct ChatView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var onScreen = false
     @State private var showVoice = false
+
+    /// With no model given, the chat has its own and keeps it live while it shows.
+    init(chat: ChatModel? = nil) {
+        _chat = State(initialValue: chat ?? ChatModel())
+        ownsConnection = chat == nil
+    }
 
     var body: some View {
         let pending = store.pendingMessages
@@ -79,8 +88,10 @@ struct ChatView: View {
             }
             .onScrollPhaseChange { _, phase in userScrolling = phase == .interacting || phase == .decelerating }
             .scrollDismissesKeyboard(.interactively)
+            #if os(iOS)
             // A tap anywhere in the conversation puts the keyboard away; buttons and links in messages still work.
             .simultaneousGesture(TapGesture().onEnded { composing = false })
+            #endif
             .softScrollEdges()
             .onChange(of: chat.entries.last?.seq) { old, _ in
                 // The first load jumps to the newest message; later ones scroll there.
@@ -110,7 +121,7 @@ struct ChatView: View {
                     .accessibilityIdentifier("chat.notice")
             }
         }
-        .task { await chat.stayLive(store) }
+        .task { if ownsConnection { await chat.stayLive(store) } }
         // Approval cards change in place: read the requests again whenever the chat changes and holds one.
         .task(id: chat.entries.map(\.buttons).description.hashValue) {
             if chat.entries.contains(where: { $0.id.hasPrefix("umpi:t3-request:") }) { await t3.loadRequests(store) }
@@ -122,11 +133,17 @@ struct ChatView: View {
         .onChange(of: requests.talk, initial: true) { _, wanted in
             guard wanted else { return }
             requests.talk = false
-            showVoice = true
+            talk()
         }
+        #if os(iOS)
         .fullScreenCover(isPresented: $showVoice) {
             VoiceModeView().environment(store)
         }
+        #else
+        .sheet(isPresented: $showVoice) {
+            VoiceModeView().environment(store).frame(minWidth: 420, minHeight: 600)
+        }
+        #endif
         .onChange(of: requests.draft, initial: true) { _, text in
             guard let text else { return }
             requests.draft = nil
@@ -210,14 +227,26 @@ struct ChatView: View {
             }
             .tint(.primary)
             .disabled(preparing != nil)
+            #if os(macOS)
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            #endif
             .accessibilityIdentifier("chat.attach")
             .accessibilityLabel("Attach")
             ZStack(alignment: .bottomTrailing) {
                 // A UIKit text view, so pasted photos, videos, and files arrive as attachments. Its insets keep the
                 // measured centring: a little more space above the text, and one line as tall as the + button.
+                #if os(macOS)
+                // The Mac's field: Return sends, Shift-Return starts a new line.
+                ComposerTextView(text: $draft, focused: $composing, placeholder: "Message Umpi", onReturn: { if canSend, preparing == nil { send() } }) { providers in
+                    prepare("Adding what you pasted…") { try await PreparedAttachment.pasted(providers) }
+                }
+                #else
                 ComposerTextView(text: $draft, focused: $composing, placeholder: "Message Umpi") { providers in
                     prepare("Adding what you pasted…") { try await PreparedAttachment.pasted(providers) }
                 }
+                #endif
                 Group {
                     if canSend {
                         Button(action: send) { Image(systemName: "arrow.up.circle.fill").font(.system(size: 28)).frame(width: 34, height: ChatView.fieldHeight) }
@@ -226,7 +255,7 @@ struct ChatView: View {
                             .accessibilityLabel("Send")
                     } else {
                         // With nothing typed, the button opens voice mode: a spoken conversation with Umpi.
-                        Button { composing = false; showVoice = true } label: { Image(systemName: "waveform").font(.system(size: 17, weight: .semibold)).frame(width: 34, height: ChatView.fieldHeight) }
+                        Button { composing = false; talk() } label: { Image(systemName: "waveform").font(.system(size: 17, weight: .semibold)).frame(width: 34, height: ChatView.fieldHeight) }
                             .tint(.primary)
                             .accessibilityIdentifier("chat.voiceMode")
                             .accessibilityLabel("Talk to Umpi")
@@ -235,9 +264,17 @@ struct ChatView: View {
                 // The button is as tall as one line of the field, so it is centred on a single line and stays on the
                 // last line as the text grows.
                 .padding(.trailing, 4)
+                #if os(macOS)
+                .buttonStyle(.borderless)
+                #endif
             }
             .glassOrFill(in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
+    }
+
+    /// Opens voice mode: over the chat, or where the app shows it instead (the Mac's floating panel).
+    private func talk() {
+        if let openVoiceMode { openVoiceMode() } else { showVoice = true }
     }
 
     private func send() {
@@ -279,13 +316,13 @@ struct PreparedAttachment {
             defer { try? FileManager.default.removeItem(at: url) }
             return try await self.video(url, name: nil)
         }
-        let imageProviders = providers.filter { $0.canLoadObject(ofClass: UIImage.self) }
+        let imageProviders = providers.filter { $0.canLoadObject(ofClass: PlatformImage.self) }
         if !imageProviders.isEmpty {
-            var images: [UIImage] = []
+            var images: [PlatformImage] = []
             for provider in imageProviders.prefix(MediaPrep.maxImages) {
-                if let image = try? await withCheckedThrowingContinuation({ (continuation: CheckedContinuation<UIImage?, Error>) in
-                    _ = provider.loadObject(ofClass: UIImage.self) { object, error in
-                        if let error { continuation.resume(throwing: error) } else { continuation.resume(returning: object as? UIImage) }
+                if let image = try? await withCheckedThrowingContinuation({ (continuation: CheckedContinuation<PlatformImage?, Error>) in
+                    _ = provider.loadObject(ofClass: PlatformImage.self) { object, error in
+                        if let error { continuation.resume(throwing: error) } else { continuation.resume(returning: object as? PlatformImage) }
                     }
                 }) { images.append(image) }
             }
@@ -328,9 +365,9 @@ struct PreparedAttachment {
             defer { try? FileManager.default.removeItem(at: movie.url) }
             return try await video(movie.url, name: nil)
         }
-        var images: [UIImage] = []
+        var images: [PlatformImage] = []
         for item in items {
-            if let data = try await item.loadTransferable(type: Data.self), let image = UIImage(data: data) { images.append(image) }
+            if let data = try await item.loadTransferable(type: Data.self), let image = PlatformImage(data: data) { images.append(image) }
         }
         guard !images.isEmpty else { throw MediaError.unreadable("The photos could not be loaded.") }
         return .init(summary: images.count == 1 ? "1 photo" : "\(images.count) photos", symbol: "photo", value: .init(images: try MediaPrep.images(images)),
@@ -511,8 +548,13 @@ extension View {
     }
     /// The system's Liquid Glass on iOS 26, like Messages' composer; a filled shape on earlier systems.
     @ViewBuilder func glassOrFill<S: Shape>(in shape: S) -> some View {
+        #if os(iOS)
         if #available(iOS 26.0, *) { self.glassEffect(.regular.interactive(), in: shape) }
         else { self.background(Color(.secondarySystemBackground), in: shape) }
+        #else
+        // The Mac draws the field and the attach button as quiet fills, as Messages does.
+        self.background(Color(.secondarySystemBackground), in: shape)
+        #endif
     }
     /// On iOS 26 the composer floats over the softly faded content; earlier systems get the bar material.
     @ViewBuilder func composerBackground() -> some View {
@@ -551,15 +593,15 @@ struct ChatMediaView: View {
     }
 
     @ViewBuilder private var photos: some View {
-        let images = (local?.thumbnails ?? []).compactMap(UIImage.init(data:))
+        let images = (local?.thumbnails ?? []).compactMap(PlatformImage.init(data:))
         if images.isEmpty {
             chip(entry.images.map { $0 == 1 ? "Photo" : "\($0) photos" } ?? "Photo", symbol: "photo")
         } else if images.count == 1 {
-            Image(uiImage: images[0]).resizable().scaledToFill().frame(maxWidth: 274, maxHeight: 320).clipShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
+            Image(platformImage: images[0]).resizable().scaledToFill().frame(maxWidth: 274, maxHeight: 320).clipShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
         } else {
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2)], spacing: 2) {
                 ForEach(Array(images.prefix(4).enumerated()), id: \.offset) { _, image in
-                    Color.clear.aspectRatio(1, contentMode: .fit).overlay(Image(uiImage: image).resizable().scaledToFill()).clipped()
+                    Color.clear.aspectRatio(1, contentMode: .fit).overlay(Image(platformImage: image).resizable().scaledToFill()).clipped()
                 }
             }
             .frame(width: 274)
@@ -569,8 +611,8 @@ struct ChatMediaView: View {
 
     @ViewBuilder private var video: some View {
         let seconds = entry.media?.seconds ?? local?.seconds
-        if let data = local?.thumbnails.first, let image = UIImage(data: data) {
-            Image(uiImage: image).resizable().scaledToFill().frame(width: 274, height: 200).clipped()
+        if let data = local?.thumbnails.first, let image = PlatformImage(data: data) {
+            Image(platformImage: image).resizable().scaledToFill().frame(width: 274, height: 200).clipped()
                 .overlay { Image(systemName: "play.fill").font(.title2).foregroundStyle(.white).padding(14).background(.black.opacity(0.45), in: Circle()) }
                 .overlay(alignment: .bottomLeading) {
                     if let seconds {
@@ -614,3 +656,8 @@ struct ChatMediaView: View {
 }
 
 
+extension EnvironmentValues {
+    /// Opens voice mode somewhere other than over the chat, such as the Mac's floating panel. Nil on the phone, where
+    /// the chat opens voice mode itself.
+    @Entry var openVoiceMode: (@MainActor () -> Void)? = nil
+}

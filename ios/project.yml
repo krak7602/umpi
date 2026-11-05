@@ -66,6 +66,56 @@ targets:
         CODE_SIGN_ENTITLEMENTS: UmpiWidgets/UmpiWidgets.entitlements
         APPLICATION_EXTENSION_API_ONLY: YES
         SKIP_INSTALL: YES
+  # The Mac app shares the phone's code. iOS-only parts (app delegate, background refresh, alarms and Live
+  # Activities, the UIKit message field) are left out and replaced by files in UmpiMac.
+  UmpiMac:
+    type: application
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: Umpi
+        excludes:
+          - Info.plist
+          - Umpi.entitlements
+          - Assets.xcassets
+          - AppDelegate.swift
+          - UmpiApp.swift
+          - BackgroundSync.swift
+          - DeviceCapabilities.swift
+          - Views/ComposerTextView.swift
+      - path: Shared/WidgetShared.swift
+      - path: UmpiMac
+        excludes:
+          - Info.plist
+          - UmpiMac.entitlements
+    settings:
+      base:
+        SDKROOT: macosx
+        PRODUCT_BUNDLE_IDENTIFIER: $(UMPI_BUNDLE_IDENTIFIER).mac
+        PRODUCT_NAME: Umpi
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: UmpiMac/UmpiMac.entitlements
+        INFOPLIST_FILE: UmpiMac/Info.plist
+        ENABLE_HARDENED_RUNTIME: YES
+        COMBINE_HIDPI_IMAGES: YES
+    dependencies:
+      - package: Markdown
+      - package: FluidAudio
+        product: FluidAudio
+  # Logic tests for the Mac-only code that needs no running app.
+  UmpiMacTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      - UmpiMacTests
+      - path: UmpiMac/Shortcut.swift
+      - path: UmpiMac/ChatNotifier.swift
+    settings:
+      base:
+        SDKROOT: macosx
+        PRODUCT_BUNDLE_IDENTIFIER: $(UMPI_BUNDLE_IDENTIFIER).mactests
+        GENERATE_INFOPLIST_FILE: YES
   UmpiTests:
     type: bundle.unit-test
     platform: iOS
@@ -101,5 +151,17 @@ schemes:
       targets:
         - UmpiTests
         - UmpiUITests
+    archive:
+      config: Release
+  UmpiMac:
+    build:
+      targets:
+        UmpiMac: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - UmpiMacTests
     archive:
       config: Release
