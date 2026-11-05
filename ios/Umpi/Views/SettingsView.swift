@@ -72,6 +72,13 @@ struct SettingsView: View {
             } header: { Text("Widget") } footer: {
                 Text("The small widget shows the first button; medium and large show all of them. Umpi can change these too when you ask.")
             }
+            Section {
+                NavigationLink { VoiceSettingsView() } label: {
+                    LabeledContent("Voice", value: VoiceSettings.shared.voice?.name ?? "Automatic")
+                }
+            } header: { Text("Voice mode") } footer: {
+                Text("How Umpi sounds when you talk to it: the voice, its speed and pitch, and how long it waits before replying.")
+            }
             T3MachinesSection()
             Section {
                 Toggle("Let Umpi act on this phone", isOn: Binding(get: { store.remoteEffectsAllowed }, set: { allowed in

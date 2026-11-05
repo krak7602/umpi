@@ -34,7 +34,8 @@ import { enqueuePlanningControls, handlePlanningCallback, formatPlanningStatus }
 import { MailStore } from "./mail-store.js";
 import { MailRuntime } from "./mail-runtime.js";
 import { mailScreen } from "./mail-screen.js";
-import { DECISION_INSTRUCTIONS, DEFAULT_DECISION_MONTHLY_BUDGET, Decisions, chooseEffort, decisionTools, type Effort, type WorkersAi } from "./decisions.js";
+import { DECISION_INSTRUCTIONS, DEFAULT_DECISION_MONTHLY_BUDGET, Decisions, SPOKEN_EFFORT, chooseEffort, decisionTools, type Effort, type WorkersAi } from "./decisions.js";
+import { SpeechRelay, cutOffNote, interruptedReply } from "./speech-relay.js";
 import { mailReplies } from "./mail-replies.js";
 import { mailFact } from "./mail-facts.js";
 import { DreamStore } from "./dream-store.js";
@@ -221,6 +222,9 @@ class Coordinator extends LifecycleCapability {
           if (answer.status === "done") {
             this.assistant.modelIssue = undefined;
             store.settle(op.id, (answer.text ?? "").slice(0, 65_536));
+          } else if (store.operation(op.id)?.interrupted) {
+            // Cut off by the owner talking, not a model failure.
+            store.settle(op.id, interruptedReply(store.operation(op.id)!.interrupted!.heard ?? this.assistant.spokenText(op.id)));
           } else {
             const failure = classifyModelError(await this.assistant.lastModelError(op.sessionId) ?? answer.reason);
             this.assistant.recordModelFailure(failure);
@@ -638,6 +642,7 @@ export class Assistant extends Agent<Env> {
       if (this.store.operation(op.id)?.status === "admitted") {
         await this.prepareOwnerTurn(op);
         if (this.store.operation(op.id)?.status === "admitted") {
+          await this.relaySpeech(op);
           await this.harness.submit(this.store.modelContent(op), { session: op.sessionId, operationId: op.id });
           this.store.submitted(op.id);
         }
@@ -649,9 +654,45 @@ export class Assistant extends Agent<Env> {
   private async prepareOwnerTurn(op: Operation): Promise<void> {
     if (this.store.isBackgroundSession(op.sessionId)) return;
     const previous = this.store.recentOperations(false).find(other => other.id !== op.id && other.channel === op.channel && other.status === "done" && other.result)?.result;
-    const effort = await chooseEffort(this.decisions, op.modelInput ?? op.text, previous);
+    const effort = await chooseEffort(this.decisions, op.modelInput ?? op.text, previous, op.ownerSource?.spoken ? SPOKEN_EFFORT : undefined);
     this.efforts[effort]++;
     await (await this.harness.conversation(op.sessionId)).configure({ thinkingLevel: effort }, BACKGROUND_CONTEXT);
+  }
+
+  /** Spoken replies being read aloud in the app, by operation; kept a while after they end for an interruption's text. */
+  private readonly speech = new Map<string, SpeechRelay>();
+  /**
+   * Starts passing a spoken turn's reply to the app as it is written. Attached before the turn is submitted, so the
+   * run that answers it is not missed. If watching fails, the app reads the finished reply from the chat instead.
+   */
+  private async relaySpeech(op: Operation): Promise<void> {
+    if (!op.ownerSource?.spoken || this.speech.has(op.id)) return;
+    const relay = new SpeechRelay(op.id, frame => { this.chatSocket?.broadcast(frame); });
+    this.speech.set(op.id, relay);
+    const forget = () => setTimeout(() => { if (this.speech.get(op.id) === relay) this.speech.delete(op.id); }, 10 * 60_000);
+    try {
+      const stream = await this.harness.sessions.get(op.sessionId).events(BACKGROUND_CONTEXT);
+      const end = () => { relay.finish(); void stream.stop().catch(() => undefined); };
+      const limit = setTimeout(end, 15 * 60_000);
+      void stream.closed.then(() => { clearTimeout(limit); relay.finish(); forget(); }, () => { clearTimeout(limit); relay.finish(); forget(); });
+      relay.handle([stream.snapshot]);
+      stream.start(async events => { if (relay.handle(events)) end(); });
+    } catch { relay.finish(); forget(); }
+  }
+  /** What a spoken reply had said when it stopped. */
+  spokenText(operationId: string): string { return this.speech.get(operationId)?.spoken ?? ""; }
+  /**
+   * The owner talked over a spoken reply: stop it if it is still running, and keep what the phone had read aloud as
+   * the reply. Even a finished reply may not have been heard in full, so Umpi is told how much was.
+   */
+  async interruptSpoken(operationId: string, heard?: string): Promise<string | undefined> {
+    const op = this.store.operation(operationId);
+    if (!op?.ownerSource?.spoken || op.surface !== "app") return undefined;
+    if (this.store.interrupt(operationId, interruptedReply, heard)) {
+      this.speech.get(operationId)?.finish();
+      await this.harness.abort({ session: op.sessionId, operationId });
+    }
+    return cutOffNote(heard ?? this.spokenText(operationId));
   }
 
   async modelReady(): Promise<boolean> {
@@ -814,7 +855,7 @@ export class Assistant extends Agent<Env> {
     const kind = message.images ? "app-image" : message.document ? "app-file" : message.voice ? "app-voice" : "app-text";
     const text = message.text.trim() ? message.text : message.images ? IMAGE_WITHOUT_CAPTION : message.document ? FILE_WITHOUT_CAPTION : message.text;
     return this.admit(id, text, "telegram", () => { this.companion.requireDevice(deviceId); }, {
-      kind, ...(message.sentAt ? { sentAt: message.sentAt } : {}), ...(message.context ? { note: message.context } : {}), ...(message.media ? { media: message.media } : {}),
+      kind, ...(message.spoken ? { spoken: true as const } : {}), ...(message.sentAt ? { sentAt: message.sentAt } : {}), ...(message.context ? { note: message.context } : {}), ...(message.media ? { media: message.media } : {}),
       ...(message.document ? { file: { name: message.document.name, characters: message.document.text.length, ...(message.document.truncated ? { truncated: true as const } : {}) } } : {}),
     }, message.images, message.document);
   }
@@ -967,6 +1008,7 @@ export class Assistant extends Agent<Env> {
       const companion = await companionRequest(request, {
         companion: this.companion, config: this.config, wake: () => this.coordinator.wake(), chat: this.chat,
         admitApp: (id, deviceId, message) => this.admitApp(id, deviceId, message),
+        interrupt: (operationId, heard) => this.interruptSpoken(operationId, heard),
         press: (seq, data) => this.pressChatButton(seq, data),
         today: async day => {
           if (!this.obsyVault) throw new StateError(503, this.obsyIssue ?? "No notes vault is configured");

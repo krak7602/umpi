@@ -5,6 +5,7 @@ import { generateKeyPairSync, randomBytes } from "node:crypto";
 import type { Capability } from "../src/shared/companion.js";
 import { record } from "../src/shared/protocol.js";
 import { ChatLog, type ChatEntry } from "../src/worker/chat.js";
+import { SPOKEN_TURN_NOTE, cutOffNote, interruptedReply } from "../src/worker/speech-relay.js";
 import { Store, type Database } from "../src/worker/store.js";
 import { CompanionStore } from "../src/worker/companion-store.js";
 import { companionRequest, type CompanionHttpContext } from "../src/worker/companion-http.js";
@@ -31,10 +32,15 @@ function fixture(t: TestContext) {
   const chat = new ChatLog(db); owner.chat = chat;
   const appended: ChatEntry[] = []; chat.appended = entry => { appended.push(entry); };
   const companion = new CompanionStore(owner);
+  const interrupted: [string, boolean][] = [];
   const context: CompanionHttpContext = { companion, config, chat, t3: new T3CodeStore(db), t3Requests: () => [], async t3Act() { return {}; }, async decideT3() { return { text: "" }; }, async cloud() { return {}; }, async wake() {}, async requireModel() {},
+    async interrupt(operationId, heard) {
+      interrupted.push([operationId, owner.interrupt(operationId, interruptedReply, heard)]);
+      return owner.operation(operationId)?.ownerSource?.spoken ? cutOffNote(heard ?? "") : undefined;
+    },
     async admitApp(id, deviceId, message) {
       companion.requireDevice(deviceId);
-      return owner.admit(id, message.text || "[attachment]", "telegram", "telegram-session", { kind: message.images ? "app-image" : message.document ? "app-file" : message.voice ? "app-voice" : "app-text",
+      return owner.admit(id, message.text || "[attachment]", "telegram", "telegram-session", { kind: message.images ? "app-image" : message.document ? "app-file" : message.voice ? "app-voice" : "app-text", ...(message.spoken ? { spoken: true as const } : {}),
         ...(message.context ? { note: message.context } : {}), ...(message.media ? { media: message.media } : {}),
         ...(message.document ? { file: { name: message.document.name, characters: message.document.text.length } } : {}) }, message.images, message.document);
     },
@@ -50,7 +56,7 @@ function fixture(t: TestContext) {
     async widget() { return { items: [], source: "default", updatedAt: "" }; },
     async setWidgetActions(value) { return { actions: value }; },
     };
-  return { db, owner, chat, appended, companion, context };
+  return { db, owner, chat, appended, companion, context, interrupted };
 }
 function pair(companion: CompanionStore) {
   const token = randomBytes(32).toString("base64url");
@@ -238,4 +244,42 @@ test("a reminder is a one-line title with optional details; older long reminders
   const reopened = new Store(f.db).reminder("old")!;
   assert.equal(reopened.text, "Elsewhere: check what you're waiting on (D-U-N-S window opens today)");
   assert.equal(reopened.details, long);
+});
+
+test("voice mode: a spoken message tells Umpi it is heard aloud, and talking over a reply stops it without a failure", async t => {
+  const f = fixture(t);
+  const token = pair(f.companion);
+  const send = async (body: object) => companionRequest(request("/api/device/messages", token, body), f.context);
+  await assert.rejects(send({ id: "s0", text: "hi", spoken: true }), /spoken must be true, and only on a voice message/);
+  await assert.rejects(send({ id: "s0", text: "hi", voice: true, interrupts: "message:telegram:app:x" }), /Only a spoken message interrupts/);
+  await assert.rejects(send({ id: "s0", text: "hi", voice: true, spoken: true, interrupts: "not valid!" }), /Invalid interrupted operation/);
+  await assert.rejects(send({ id: "s0", text: "hi", voice: true, spoken: true, heard: "x" }), /heard goes with interrupts/);
+  assert.throws(() => f.owner.admit("x", "hi", "telegram", "telegram-session", { kind: "app-text", spoken: true }), /Only app voice messages are spoken/);
+
+  const first = record(await (await send({ id: "s1", text: "What's the weather like?", voice: true, spoken: true }))!.json());
+  const op = f.owner.operation(String(first.id))!;
+  assert.equal(op.ownerSource?.spoken, true);
+  assert.ok(String(f.owner.modelContent(op)).includes(SPOKEN_TURN_NOTE), "Umpi is told its reply is read aloud");
+  assert.match(String(f.owner.modelContent(op)), /"spoken":true/);
+  assert.equal(f.chat.page().entries.at(-1)?.kind, "voice", "the history shows a voice message");
+
+  // Not yet sent to the model: talking over it ends it at once.
+  const next = f.owner.operation(String(record(await (await send({ id: "s2", text: "Actually, never mind.", voice: true, spoken: true, interrupts: op.id }))!.json()).id))!;
+  assert.ok(String(f.owner.modelContent(next)).includes("before hearing any of it"), "Umpi is told how much of its reply was heard");
+  assert.deepEqual(f.interrupted, [[op.id, false]]);
+  assert.equal(f.owner.operation(op.id)?.status, "done");
+  assert.equal(f.chat.page().entries.find(entry => entry.id === `umpi:answer:${op.id}`)?.text, "(Stopped when you started talking.)");
+
+  // Running: it is marked so its stopped run is not a model failure; the caller stops it.
+  const running = f.owner.operation(String(record(await (await send({ id: "s3", text: "Tell me a long story.", voice: true, spoken: true }))!.json()).id))!;
+  f.owner.submitted(running.id);
+  assert.equal(f.owner.interrupt(running.id, interruptedReply, "Once upon a time"), true);
+  assert.deepEqual(f.owner.operation(running.id)?.interrupted, { heard: "Once upon a time" }, "what the phone read aloud is kept, not what was written ahead of it");
+  f.owner.settle(running.id, interruptedReply(f.owner.operation(running.id)!.interrupted!.heard!));
+  // Already finished but still being read aloud: left as it is, and the next message says how much was heard.
+  const after = f.owner.operation(String(record(await (await send({ id: "s4", text: "Wait, which one?", voice: true, spoken: true, interrupts: running.id, heard: "Once upon a time" }))!.json()).id))!;
+  assert.match(String(f.owner.modelContent(after)), /heard only this much of it: «Once upon a time»/);
+  assert.equal(f.owner.interrupt(running.id, interruptedReply), false, "a finished reply is left alone");
+  const typed = f.owner.admit("t1", "typed", "telegram", "telegram-session", { kind: "app-text" });
+  assert.equal(f.owner.interrupt(typed.id, interruptedReply), false, "only spoken replies are interrupted");
 });

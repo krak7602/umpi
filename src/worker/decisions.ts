@@ -235,17 +235,24 @@ const EFFORT_OF = { quick: "low", normal: "medium", deep: "high" } as const;
 const EFFORT_MIN_CONFIDENCE = 0.6;
 const EFFORT_TIMEOUT_MS = 3_000;
 
-export async function chooseEffort(decisions: Decisions, message: string, previousReply: string | undefined): Promise<Effort> {
-  if (!decisions.available()) return "high";
+/**
+ * A spoken turn cannot wait: the owner hears the silence. It gets a short limit, and an unsure or late answer keeps
+ * the quick `low` effort instead of `high`; a confident `deep` still raises it.
+ */
+export const SPOKEN_EFFORT = { timeoutMs: 700, fallback: "low" } as const satisfies { timeoutMs: number; fallback: Effort };
+
+export async function chooseEffort(decisions: Decisions, message: string, previousReply: string | undefined,
+  options: { timeoutMs: number; fallback: Effort } = { timeoutMs: EFFORT_TIMEOUT_MS, fallback: "high" }): Promise<Effort> {
+  if (!decisions.available()) return options.fallback;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const answer = await Promise.race([
       decisions.ask("effort", { previousReply: previousReply?.slice(-1_500) ?? null, message: message.slice(0, 4_000) }, EFFORT_QUESTION),
-      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new DecisionUnavailable("timed out")), EFFORT_TIMEOUT_MS); }),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new DecisionUnavailable("timed out")), options.timeoutMs); }),
     ]);
     const choice = answer.effort.choice as keyof typeof EFFORT_OF;
-    return (answer.effort.probabilities[choice] ?? 0) >= EFFORT_MIN_CONFIDENCE ? EFFORT_OF[choice] : "high";
-  } catch { return "high"; }
+    return (answer.effort.probabilities[choice] ?? 0) >= EFFORT_MIN_CONFIDENCE ? EFFORT_OF[choice] : options.fallback;
+  } catch { return options.fallback; }
   finally { clearTimeout(timer); }
 }
 

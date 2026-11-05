@@ -2,7 +2,7 @@ import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import type { Database } from "../src/worker/store.js";
-import { DecisionUnavailable, Decisions, chooseEffort, decisionTools, type WorkersAi } from "../src/worker/decisions.js";
+import { DecisionUnavailable, Decisions, SPOKEN_EFFORT, chooseEffort, decisionTools, type WorkersAi } from "../src/worker/decisions.js";
 
 function database(t: TestContext): Database {
   const sqlite = new DatabaseSync(":memory:"); t.after(() => sqlite.close());
@@ -86,6 +86,11 @@ test("owner-message effort drops only on a confident quick or normal answer, and
   pick = { choice: "normal", p: 0.7 }; assert.equal(await chooseEffort(decisions, "what's on my calendar tomorrow?", undefined), "medium");
   pick = { choice: "quick", p: 0.4 }; assert.equal(await chooseEffort(decisions, "yes", "Shall I refactor the sync engine?"), "high", "an unsure answer keeps high");
   pick = { choice: "deep", p: 0.9 }; assert.equal(await chooseEffort(decisions, "plan my week", undefined), "high");
+  pick = { choice: "quick", p: 0.4 }; assert.equal(await chooseEffort(decisions, "hmm", undefined, SPOKEN_EFFORT), "low", "a spoken turn that is unsure stays quick");
+  pick = { choice: "deep", p: 0.9 }; assert.equal(await chooseEffort(decisions, "plan my week", undefined, SPOKEN_EFFORT), "high", "a confident deep answer still raises a spoken turn");
   assert.equal(await chooseEffort(new Decisions(database(t), undefined, () => 1_000), "hi", undefined), "high");
   assert.equal(await chooseEffort(new Decisions(database(t), { async run() { throw new Error("down"); } }, () => 1_000), "hi", undefined), "high");
+  assert.equal(await chooseEffort(new Decisions(database(t), { async run() { throw new Error("down"); } }, () => 1_000), "hi", undefined, SPOKEN_EFFORT), "low", "a spoken turn does not wait for a failed decision");
+  const slow: WorkersAi = { run: () => new Promise(resolve => setTimeout(() => resolve({}), 300)) };
+  assert.equal(await chooseEffort(new Decisions(database(t), slow, () => 1_000), "hi", undefined, { timeoutMs: 20, fallback: "low" }), "low", "a late answer is not waited for");
 });

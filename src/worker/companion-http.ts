@@ -18,6 +18,11 @@ export interface CompanionHttpContext {
   chat: ChatLog;
   /** Admits an app message to the owner's shared conversation; the reply stays in the app. */
   admitApp(id: string, deviceId: string, message: AppMessage): Promise<Operation>;
+  /**
+   * Stops a spoken reply the owner cut off by talking, keeping what the phone had read aloud; a finished one is left
+   * alone. Returns a note for Umpi about what was heard, or undefined when the operation is not a spoken reply.
+   */
+  interrupt(operationId: string, heard?: string): Promise<string | undefined>;
   readFile(name: string, bytes: Uint8Array): Promise<TelegramDocument>;
   press(seq: number, data: string): Promise<{ text: string }>;
   /** The day's note (today by default); undefined when no vault is configured. */
@@ -38,7 +43,11 @@ export interface CompanionHttpContext {
 }
 /** What an attachment was, for the history to show: the app sends its preview separately, never through the chat. */
 export interface AppMedia { kind: "photos" | "video" | "audio" | "file" | "voice"; name?: string; seconds?: number; count?: number }
-export interface AppMessage { text: string; sentAt?: string; voice?: true; images?: TelegramImage[]; document?: TelegramDocument; context?: string; media?: AppMedia }
+/**
+ * `spoken`: sent from voice mode, so the reply is read aloud as it is written (a voice message only). `interrupts`: the
+ * operation of the spoken reply this message cut off, and `heard` what the phone had read aloud of it by then.
+ */
+export interface AppMessage { text: string; sentAt?: string; voice?: true; spoken?: true; interrupts?: string; heard?: string; images?: TelegramImage[]; document?: TelegramDocument; context?: string; media?: AppMedia }
 
 const MAX_APP_MESSAGE_BYTES = 15_000_000;
 function chatPosition(value: string | null): number | undefined {
@@ -47,7 +56,7 @@ function chatPosition(value: string | null): number | undefined {
   return Number(value);
 }
 async function appMessage(body: unknown, readFile: CompanionHttpContext["readFile"]): Promise<{ id: string; message: AppMessage }> {
-  const input = record(body); exactKeys(input, ["id", "text", "sentAt", "voice", "images", "file", "context", "media"]);
+  const input = record(body); exactKeys(input, ["id", "text", "sentAt", "voice", "spoken", "interrupts", "heard", "images", "file", "context", "media"]);
   // Text for Umpi only, such as a video's frames note and transcript; the history shows the owner's own words.
   const context = input.context === undefined ? undefined : boundedText(input.context, 13_000, "message context");
   let media: AppMedia | undefined;
@@ -60,6 +69,11 @@ async function appMessage(body: unknown, readFile: CompanionHttpContext["readFil
       ...(value.count !== undefined ? { count: Number.isSafeInteger(value.count) && Number(value.count) > 0 && Number(value.count) <= 10 ? Number(value.count) : (() => { throw new InputError("Invalid media count"); })() } : {}) };
   }
   if (input.voice !== undefined && input.voice !== true) throw new InputError("voice must be true when present");
+  if (input.spoken !== undefined && (input.spoken !== true || input.voice !== true)) throw new InputError("spoken must be true, and only on a voice message");
+  if (input.interrupts !== undefined && input.spoken !== true) throw new InputError("Only a spoken message interrupts a reply");
+  const interrupts = input.interrupts === undefined ? undefined : identifier(input.interrupts, "interrupted operation");
+  if (input.heard !== undefined && !interrupts) throw new InputError("heard goes with interrupts");
+  const heard = input.heard === undefined || input.heard === "" ? undefined : boundedText(input.heard, 16_384, "heard text");
   const id = identifier(input.id, "message ID");
   const text = input.text === undefined || input.text === "" ? "" : boundedText(input.text, 16_384, "message");
   const sentAt = input.sentAt === undefined ? undefined : timestamp(input.sentAt, "sent time");
@@ -85,7 +99,7 @@ async function appMessage(body: unknown, readFile: CompanionHttpContext["readFil
   if (images && document) throw new InputError("Send images and a file as separate messages");
   if (!text.trim() && !images && !document && !context) throw new InputError("Message needs text, images, or a file");
   if (input.voice === true && (!text.trim() || images || document)) throw new InputError("A voice message is its transcript only");
-  return { id, message: { text, ...(sentAt ? { sentAt } : {}), ...(context ? { context } : {}), ...(media ? { media } : {}), ...(input.voice === true ? { voice: true as const } : {}), ...(images ? { images } : {}), ...(document ? { document } : {}) } };
+  return { id, message: { text, ...(sentAt ? { sentAt } : {}), ...(context ? { context } : {}), ...(media ? { media } : {}), ...(input.voice === true ? { voice: true as const } : {}), ...(input.spoken === true ? { spoken: true as const } : {}), ...(interrupts ? { interrupts } : {}), ...(heard ? { heard } : {}), ...(images ? { images } : {}), ...(document ? { document } : {}) } };
 }
 /** Returns undefined only for routes outside the narrow companion surface. Auth precedes every body read. */
 export async function companionRequest(request: Request, context: CompanionHttpContext): Promise<Response | undefined> {
@@ -214,6 +228,9 @@ export async function companionRequest(request: Request, context: CompanionHttpC
   if (path === "/api/device/messages") {
     const { id, message } = await appMessage(body, context.readFile);
     companion.requireDevice(device.id);
+    // Stop the reply being talked over first, so this message does not wait behind it.
+    const note = message.interrupts ? await context.interrupt(message.interrupts, message.heard) : undefined;
+    if (note) message.context = message.context ? `${note}\n\n${message.context}` : note;
     // Fixed-size, device-scoped identity also fits the existing 128-character message ID contract.
     return Response.json(await context.admitApp(`app:${companionHash(JSON.stringify([device.id, id]))}`, device.id, message), { status: 202 });
   }

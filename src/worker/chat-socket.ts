@@ -6,8 +6,9 @@ export const CHAT_SOCKET_TAG = "umpi-chat";
 interface ChatAttachment { kind: typeof CHAT_SOCKET_TAG; deviceId: string }
 
 /**
- * A paired phone's live view of the shared conversation. The socket carries only {"type":"chat","latest":N} when the
- * conversation grows; the app then reads the new entries through the authenticated chat route. Nothing is sent to it.
+ * A paired phone's live view of the shared conversation. The socket carries {"type":"chat","latest":N} when the
+ * conversation grows; the app then reads the new entries through the authenticated chat route. While a spoken reply
+ * is written it also carries that reply's text as `speech` frames (see speech-relay.ts). Nothing the app sends is read.
  */
 export class ChatSocket extends LifecycleCapability {
   constructor(private readonly options: { authenticate(request: Request): Promise<string>; active(deviceId: string): boolean; latest(): number }) { super("umpi-chat-socket"); }
@@ -47,6 +48,17 @@ export class ChatSocket extends LifecycleCapability {
       // A revoked device's socket is closed, not told.
       if (!this.options.active(attachment.deviceId)) { try { socket.close(1008, "revoked"); } catch { /* Already closed. */ } continue; }
       try { socket.send(JSON.stringify({ type: "chat", latest })); sent++; } catch { /* The app reconnects and reads. */ }
+    }
+    return sent;
+  }
+  /** Sends a spoken reply's frame to every open app; each app speaks only the replies to its own messages. */
+  broadcast(frame: object): number {
+    const text = JSON.stringify(frame);
+    let sent = 0;
+    for (const socket of this.sockets()) {
+      const attachment = this.attachment(socket);
+      if (!attachment || !this.options.active(attachment.deviceId)) continue;
+      try { socket.send(text); sent++; } catch { /* The app falls back to the finished reply in the chat. */ }
     }
     return sent;
   }

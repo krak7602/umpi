@@ -104,7 +104,7 @@ private struct RootView: View {
 
 
 extension RootView {
-    /// Opens one of the widget's actions: chat, today, work, remind, or voice (record a voice message).
+    /// Opens one of the widget's actions: chat, today, work, remind, voice (record a voice message), or talk (voice mode).
     func route(_ action: String) {
         switch action {
         case "chat": selectedTab = 0
@@ -115,6 +115,9 @@ extension RootView {
         case "voice", "idea", "capture":
             selectedTab = 0
             ChatRequests.shared.capture = true
+        case "talk":
+            selectedTab = 0
+            ChatRequests.shared.talk = true
         default: selectedTab = 2
         }
         Task { await store.synchronize() }
@@ -127,6 +130,8 @@ extension RootView {
 final class ChatRequests {
     static let shared = ChatRequests()
     var capture = false
+    /// Open voice mode.
+    var talk = false
     var draft: String?
     /// The chat is the screen in front, so its messages need no notification.
     var chatVisible = false
