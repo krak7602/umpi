@@ -287,3 +287,23 @@ test("voice mode: a spoken message tells Umpi it is heard aloud, and talking ove
   const typed = f.owner.admit("t1", "typed", "telegram", "telegram-session", { kind: "app-text" });
   assert.equal(f.owner.interrupt(typed.id, interruptedReply), false, "only spoken replies are interrupted");
 });
+
+test("Telegram turned off: the app carries alerts, the webhook is refused, and a paired phone pairs the next device", async t => {
+  const f = fixture(t);
+  const token = pair(f.companion);
+  f.chat.telegramOff = true;
+  assert.equal(f.chat.settings().notify, "app", "alerts come through the app whatever was chosen");
+  assert.throws(() => f.chat.configure({ expectedVersion: 1, notify: "telegram" }), /Telegram is turned off/);
+  f.owner.enqueue("reminder:r9:1", "telegram", "Reminder: call the bank");
+  assert.equal(f.chat.nextPush()?.text, "Reminder: call the bank", "Umpi's own messages are announced in the app");
+
+  const webhook = new Request("https://coordinator.example/telegram/webhook", { method: "POST", headers: { "x-telegram-bot-api-secret-token": "secret-".repeat(5) } });
+  const telegram = { ...config, UMPI_TELEGRAM: "off", TELEGRAM_BOT_TOKEN: "1:x", TELEGRAM_WEBHOOK_SECRET: "secret-".repeat(5), TELEGRAM_OWNER_ID: "1", TELEGRAM_CHAT_ID: "1" };
+  await assert.rejects(authorize(webhook, telegram, "forward-device"), /Telegram is turned off/);
+
+  const created = await companionRequest(request("/api/device/pairings", token, {}), f.context);
+  assert.equal(created!.status, 201);
+  const { code } = record(await created!.json()) as { code: string };
+  const claimed = f.companion.claimPairing({ code, token: randomBytes(32).toString("base64url"), deviceId: "mac-1", label: "Mac", capabilities });
+  assert.equal(claimed.deviceId, "mac-1", "the code pairs the next device");
+});

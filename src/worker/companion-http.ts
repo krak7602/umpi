@@ -225,6 +225,11 @@ export async function companionRequest(request: Request, context: CompanionHttpC
     await context.requireModel();
     return Response.json(companion.answerChoice(device.id, choice[1]!, body), { status: 202 });
   }
+  // A paired device pairs another, such as the Mac app: a one-use code for 10 minutes, shown only to this device.
+  if (path === "/api/device/pairings") {
+    companion.requireDevice(device.id);
+    return Response.json(companion.createPairing({}), { status: 201 });
+  }
   if (path === "/api/device/messages") {
     const { id, message } = await appMessage(body, context.readFile);
     companion.requireDevice(device.id);

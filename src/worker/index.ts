@@ -11,7 +11,7 @@ import { InputError, boundedText, identifier, record } from "../shared/protocol.
 import { DurableCredentials } from "./credentials.js";
 import { Store, StateError, type Channel, type Operation, type OwnerMessageSource, type TelegramMarkup } from "./store.js";
 import { assistantTools, ASSISTANT_INSTRUCTIONS, RESPONSE_STYLE_INSTRUCTIONS } from "./tools.js";
-import { readJson, authorize, isChatSocketUpgrade, isExecutorWakeUpgrade, telegramMissing, telegramUpdate, sendTelegram, answerTelegramCallback, editTelegramKeyboard, type TelegramConfig } from "./transport.js";
+import { readJson, authorize, isChatSocketUpgrade, isExecutorWakeUpgrade, telegramEnabled, telegramMissing, telegramUpdate, sendTelegram, answerTelegramCallback, editTelegramKeyboard, type TelegramConfig } from "./transport.js";
 import { formatTelegramStatus } from "./telegram-view.js";
 import { coreContextSection, coreContextTools, readCoreContext, replaceCoreContext, readMemoryReviews, readMemoryReview, readMemoryHistory, readMemoryRevision, proposeMemoryRestore, decideMemoryReview } from "./core-context.js";
 import { reconcileMemoryTelegram, handleMemoryTelegramCallback, enqueueMemoryOverview } from "./memory-telegram.js";
@@ -243,8 +243,12 @@ class Coordinator extends LifecycleCapability {
         if (state === "drop") store.discardDeliveryGroup(groupId, "This proactive update is no longer relevant or permitted.");
         else store.holdDeliveryGroup(groupId, state === "deferred");
       }
+      // Telegram turned off: nothing is sent there. The chat already holds every message, and the app notifies.
+      if (!telegramEnabled(this.assistant.config)) {
+        for (const ready of store.readyDeliveries()) store.discardDeliveryGroup(ready.groupId, "Telegram is turned off; this message is in the app's chat.");
+      }
       // One bounded external send per drive. Later chunks cannot pass a failed or uncertain earlier chunk.
-      const next = store.readyDeliveries()[0];
+      const next = telegramEnabled(this.assistant.config) ? store.readyDeliveries()[0] : undefined;
       if (next) {
         const delivery = store.beginDelivery(next.id);
         if (delivery) {
@@ -399,6 +403,7 @@ export class Assistant extends Agent<Env> {
     this.contextHealth = new ContextHealth(this.store.db);
     this.knocks = new KnockStore(this.store.db);
     this.chat = new ChatLog(this.store.db);
+    this.chat.telegramOff = !telegramEnabled(this.config);
     this.widgets = new WidgetStore(this.store.db);
     this.knockPushes = new KnockPushStore(this.store.db);
     // A reminder the phone has not set as a knock is knocked by push, when a phone can take alerts.
@@ -827,7 +832,7 @@ export class Assistant extends Agent<Env> {
     const result = await this.pressButton(data, sent?.messageId, groupId);
     if (result.replyMarkup) {
       this.chat.setButtons(seq, result.replyMarkup);
-      if (sent?.messageId !== undefined) await editTelegramKeyboard(sent.messageId, result.replyMarkup, this.config).catch(() => undefined);
+      if (sent?.messageId !== undefined && telegramEnabled(this.config)) await editTelegramKeyboard(sent.messageId, result.replyMarkup, this.config).catch(() => undefined);
     }
     return result;
   }
@@ -980,7 +985,7 @@ export class Assistant extends Agent<Env> {
       coding: this.codingRuntime.status(),
       browser: this.browserRuntime.status(),
       subagents: await this.subagents.status(),
-      telegram: { configured: telegramMissing(this.config).length === 0, missing: telegramMissing(this.config),
+      telegram: { enabled: telegramEnabled(this.config), configured: telegramMissing(this.config).length === 0, missing: telegramMissing(this.config),
         voiceNotes: { transcriptionModel: SUBSCRIPTION_TRANSCRIPTION_MODEL, credentialPresent: (await this.credentials.read("openai-codex"))?.type === "oauth", maxSeconds: MAX_VOICE_NOTE_SECONDS, maxBytes: MAX_VOICE_NOTE_BYTES, inbox: this.telegramInbox.status() } },
       operations: this.store.recentOperations(), jobs: this.store.jobs(), reminders: this.store.reminders(), choices: this.store.choices(),
       deliveries: this.store.deliveries(), executors: this.store.executors(),

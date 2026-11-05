@@ -4,6 +4,8 @@ import { companionRole } from "./companion-routes.js";
 import { IMAGE_TYPES, MAX_IMAGE_BYTES, MAX_IMAGE_SIDE, type TelegramFileMessage, type TelegramImageMessage, type TelegramTextMessage, type TelegramUnreadableMessage, type TelegramVoiceNote } from "../shared/voice-note.js";
 
 export interface TelegramConfig {
+  /** "off" turns Telegram off without removing it: no webhook, no sends; the app's chat and notifications carry everything. */
+  UMPI_TELEGRAM?: string;
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
   TELEGRAM_OWNER_ID?: string;
@@ -32,6 +34,9 @@ export async function readJson(request: Pick<Request, "headers" | "body">, maxBy
   try { return JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes)) as unknown; }
   catch { throw new InputError("Invalid JSON body"); }
 }
+
+/** Telegram is on unless turned off; an installation without the app keeps it. */
+export function telegramEnabled(config: TelegramConfig): boolean { return config.UMPI_TELEGRAM?.trim().toLowerCase() !== "off"; }
 
 export function telegramMissing(config: TelegramConfig): string[] {
   return (["TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET", "TELEGRAM_OWNER_ID", "TELEGRAM_CHAT_ID"] as const)
@@ -300,6 +305,7 @@ export async function authorize(request: Request, env: TelegramConfig & { UMPI_C
   // A cloud machine that is being stopped asks to be saved first; the coordinator checks the machine's own token.
   if (path === "/api/cloud/stopping" && request.method === "POST") return;
   if (path === "/telegram/webhook" && request.method === "POST") {
+    if (!telegramEnabled(env)) throw new StateError(404, "Telegram is turned off");
     const missing = telegramMissing(env);
     if (missing.length) throw new StateError(503, `Telegram is not configured: ${missing.join(", ")}`);
     if (!await secretEqual(request.headers.get("x-telegram-bot-api-secret-token") ?? "", env.TELEGRAM_WEBHOOK_SECRET!)) throw new StateError(401, "Unauthorized");

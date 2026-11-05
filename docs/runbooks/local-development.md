@@ -767,7 +767,7 @@ Menu updates are repeatable settings operations, unlike message delivery. If syn
 
 #### Provision or rotate credentials deliberately
 
-The hosted service requires six Worker secrets: `UMPI_CONTROL_TOKEN`, `UMPI_EXECUTOR_TOKEN`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `TELEGRAM_OWNER_ID`, and `TELEGRAM_CHAT_ID`. Control and executor tokens are distinct. The ignored, mode-0600 `.dev.vars` is the local administrative source for these values; do not inspect it with context-printing tools. Model selection and timezone are non-secret Wrangler variables; deployment identities and personal settings still belong in private configuration.
+The hosted service requires six Worker secrets: `UMPI_CONTROL_TOKEN`, `UMPI_EXECUTOR_TOKEN`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `TELEGRAM_OWNER_ID`, and `TELEGRAM_CHAT_ID`. Control and executor tokens are distinct. The ignored, mode-0600 `.dev.vars` is the local administrative source for these values; do not inspect it with context-printing tools. Model selection, timezone, and `UMPI_TELEGRAM` (`off` turns Telegram off while keeping its code; see [Telegram](../subsystems/assistant-runtime.md#telegram)) are non-secret Wrangler variables; deployment identities and personal settings still belong in private configuration.
 
 For an authorized first provisioning or rotation, send only those six fields as a JSON object to `npx wrangler secret bulk --config wrangler.local.jsonc` on stdin from a non-echoing local process. Do not pass values in arguments, upload the entire vars file, or create a plaintext temporary export. Changing secrets is a deployment; recheck authenticated status after propagation.
 
