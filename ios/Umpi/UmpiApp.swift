@@ -37,6 +37,10 @@ private struct RootView: View {
     /// Voice mode over the whole app, opened by a shortcut, widget, control, or link: shown at once, with no slide and
     /// without the chat appearing first. A request already waiting at launch shows it from the first frame.
     @State private var talking = ["voice", "talk", "idea", "capture"].contains(UmpiRoute.peek() ?? "")
+    /// False until the app is first in front. While it opens, the app shows a plain screen like the launch screen, not
+    /// the chat: iOS hands over a shortcut's or widget's request (such as voice mode) up to a second after it starts
+    /// drawing, and always before the app becomes active.
+    @State private var opened = false
     @Environment(T3CodeModel.self) private var t3
     @Environment(\.scenePhase) private var scenePhase
 
@@ -67,8 +71,12 @@ private struct RootView: View {
         .overlay {
             if talking && store.isPaired {
                 VoiceModeView(onEnd: { talking = false }).transition(.identity)
+            } else if !opened {
+                Color(.systemBackground).ignoresSafeArea()
             }
         }
+        .onAppear { if scenePhase == .active { opened = true } }
+        .onChange(of: scenePhase) { _, phase in if phase == .active { opened = true } }
         .onOpenURL { url in
             guard url.scheme == "umpi" else { return }
             if url.host == "pair" {
@@ -92,6 +100,7 @@ private struct RootView: View {
         // The Work badge counts approvals; reading them needs no machine, so it is done on every return to the app.
         .task(id: scenePhase) { if scenePhase == .active, store.isPaired { await t3.loadRequests(store) } }
         .onAppear { if let action = UmpiRoute.take() { route(action) } }
+        .modifier(IntentRoutes(route: route))
         .alert("Pairing link", isPresented: Binding(get: { linkMessage != nil }, set: { if !$0 { linkMessage = nil } })) {
             Button("OK", role: .cancel) { linkMessage = nil }
         } message: {
@@ -128,5 +137,21 @@ extension RootView {
         default: selectedTab = 2
         }
         Task { await store.synchronize() }
+    }
+}
+
+/// Routes Umpi's intents as the system delivers them to the scene, before the app comes to the front (iOS 26 and later),
+/// so a shortcut or widget opens straight on its destination instead of the screen the app was showing.
+private struct IntentRoutes: ViewModifier {
+    let route: (String) -> Void
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content
+                .onAppIntentExecution(TalkToUmpiIntent.self) { _ in _ = UmpiRoute.take(); route("talk") }
+                .onAppIntentExecution(OpenUmpiAction.self) { intent in _ = UmpiRoute.take(); route(intent.action) }
+        } else {
+            content
+        }
     }
 }
