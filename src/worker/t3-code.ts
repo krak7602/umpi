@@ -131,6 +131,8 @@ export interface CloudAdapter {
   prepare(t3Id: string): Promise<void>;
   /** Whether it sleeps now, and the threads it had when it went to sleep. */
   asleep(t3Id: string): { threads?: T3Thread[] } | undefined;
+  /** What a new thread on it uses when the request does not say: its own project, and the only model it has. */
+  defaults?(t3Id: string): { projectId?: string; modelSelection: { provider: string; model: string } };
 }
 export const CLOUD_HOST_SUFFIX = ".cloud.umpi.internal";
 type Session = { call(name: string, args: Record<string, unknown>): Promise<unknown> };
@@ -446,9 +448,11 @@ export class T3CodeStore {
             if (!found) throw new T3Error(`No project called "${action.project.slice(0, 60)}". Projects: ${projects.map(([, name]) => name).join(", ") || "none"}`);
             projectId = found[0];
           }
+          const defaults = this.row(id).kind === "cloud" ? this.cloud?.defaults?.(id) : undefined;
+          projectId ??= defaults?.projectId;
           const workspace = action.branch || action.worktree ? { workspaceStrategy: { type: "worktree", ...(action.branch ? { branch: action.branch } : {}), ...(action.baseRef ? { baseRef: action.baseRef } : {}) } } : {};
           const launched = record(await session.call("t3_thread_launch", { title: action.title, message: action.message, clientRequestId,
-            ...(projectId ? { projectId } : { scratch: true }), ...workspace, ...(action.plan ? { interactionMode: "plan" } : {}) }));
+            ...(projectId ? { projectId } : { scratch: true }), ...(defaults ? { modelSelection: defaults.modelSelection } : {}), ...workspace, ...(action.plan ? { interactionMode: "plan" } : {}) }));
           const created = Array.isArray(launched.threads) && launched.threads.length ? record(launched.threads[0]) : launched;
           return { threadId: created.threadId, title: action.title, ...(typeof created.status === "string" ? { status: created.status } : {}), ...(typeof created.model === "string" ? { model: created.model } : {}) };
         }
