@@ -109,78 +109,92 @@ struct VoiceModeView: View {
     }
 }
 
-/// The orb: breathes while listening, follows the owner's voice while they talk, turns slowly while Umpi thinks,
-/// circles while a tool runs, and moves with Umpi's voice while it speaks. Colour only marks the state.
+/// The orb: breathes while listening, follows the owner's voice while they talk, flows and morphs while Umpi thinks or
+/// works, and moves with Umpi's voice while it speaks. Every change of state eases in; there is no spinner.
 struct VoiceOrb: View {
     var phase: VoiceConversation.Phase
     var level: Float
+    @State private var motion = OrbMotion()
 
-    private struct Look { var color: Color; var wobble: Double; var speed: Double; var reactive: Double }
-    private var look: Look {
+    /// What each state aims for; `OrbMotion` eases toward it frame by frame.
+    private var target: OrbMotion.Values {
         switch phase {
-        case .starting, .paused: return Look(color: .gray, wobble: 0.02, speed: 0.3, reactive: 0)
-        case .listening: return Look(color: .accentColor, wobble: 0.035, speed: 0.6, reactive: 0.6)
-        case .hearing: return Look(color: .accentColor, wobble: 0.05, speed: 1.1, reactive: 1.2)
-        case .thinking: return Look(color: Color(white: 0.6), wobble: 0.05, speed: 1.6, reactive: 0)
-        case .working: return Look(color: .orange, wobble: 0.05, speed: 1.4, reactive: 0)
-        case .speaking: return Look(color: .accentColor, wobble: 0.06, speed: 1.3, reactive: 1.0)
-        case .failed: return Look(color: .red, wobble: 0.02, speed: 0.3, reactive: 0)
+        case .starting, .paused: return .init(wobble: 0.02, reactive: 0, flow: 0, dim: 0.35, gray: 1, red: 0)
+        case .listening: return .init(wobble: 0.035, reactive: 0.6, flow: 0.15, dim: 0, gray: 0, red: 0)
+        case .hearing: return .init(wobble: 0.05, reactive: 1.2, flow: 0.25, dim: 0, gray: 0, red: 0)
+        case .thinking: return .init(wobble: 0.085, reactive: 0, flow: 1, dim: 0.22, gray: 0, red: 0)
+        case .working: return .init(wobble: 0.1, reactive: 0, flow: 1.4, dim: 0.22, gray: 0, red: 0)
+        case .speaking: return .init(wobble: 0.06, reactive: 1.0, flow: 0.35, dim: 0, gray: 0, red: 0)
+        case .failed: return .init(wobble: 0.02, reactive: 0, flow: 0, dim: 0.2, gray: 0, red: 1)
         }
     }
 
     var body: some View {
         TimelineView(.animation) { context in
             let t = context.date.timeIntervalSinceReferenceDate
-            let look = self.look
-            let energy = min(1, Double(level) * look.reactive)
+            let v = motion.step(toward: target, at: t)
+            let energy = min(1, Double(level) * v.reactive)
+            let color = Color.accentColor.mix(with: .gray, by: v.gray * 0.85).mix(with: .red, by: v.red * 0.8)
             Canvas { canvas, size in
                 let center = CGPoint(x: size.width / 2, y: size.height / 2)
                 // Room for the glow inside the canvas, so its blur is not cut off square.
                 let base = min(size.width, size.height) * 0.25
-                let breathing = 0.025 * sin(t * 1.4)
-                // A soft glow that grows with the voice.
+                // Breathing, slower and deeper while Umpi thinks.
+                let breathing = 0.025 * sin(t * 1.4) * (1 - v.flow * 0.3) + 0.03 * sin(t * 0.8) * min(1, v.flow)
                 canvas.drawLayer { layer in
                     layer.addFilter(.blur(radius: base * 0.4))
                     let r = base * (1.0 + energy * 0.35 + breathing)
-                    layer.fill(Path(ellipseIn: CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2)), with: .color(look.color.opacity(0.28 + energy * 0.3)))
+                    layer.fill(Path(ellipseIn: CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2)), with: .color(color.opacity((0.28 + energy * 0.3) * (1 - v.dim))))
                 }
                 for k in 0..<3 {
                     let radius = base * (1 - Double(k) * 0.1) * (1 + energy * 0.2 + breathing)
-                    let path = Self.blob(center: center, radius: radius, time: t * look.speed + Double(k) * 1.9, wobble: look.wobble + energy * 0.09, lobes: 3 + k)
-                    canvas.fill(path, with: .radialGradient(Gradient(colors: [look.color.opacity(0.95 - Double(k) * 0.22), look.color.opacity(0.35)]),
-                                                           center: CGPoint(x: center.x - radius * 0.25, y: center.y - radius * 0.3), startRadius: 0, endRadius: radius * 1.3))
-                }
-                switch phase {
-                case .thinking:
-                    // A light that sweeps around: the wait reads as work.
-                    let angle = Angle(radians: t * 2.2)
-                    var arc = Path()
-                    arc.addArc(center: center, radius: base * 1.12, startAngle: angle, endAngle: angle + .degrees(110), clockwise: false)
-                    canvas.stroke(arc, with: .color(.primary.opacity(0.35)), style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                case .working:
-                    for i in 0..<3 {
-                        let a = t * 1.8 + Double(i) * 2 * .pi / 3
-                        let p = CGPoint(x: center.x + cos(a) * base * 1.2, y: center.y + sin(a) * base * 1.2)
-                        canvas.fill(Path(ellipseIn: CGRect(x: p.x - 4, y: p.y - 4, width: 8, height: 8)), with: .color(look.color.opacity(0.9)))
-                    }
-                default: break
+                    // Layers drift against each other, more while Umpi thinks, so the orb flows rather than spins.
+                    let turn = (t * 0.12 + v.flowPhase * 0.5) * (k % 2 == 0 ? 1 : -1) + Double(k) * 1.9
+                    let path = Self.blob(center: center, radius: radius, time: t * 0.9 + v.flowPhase + Double(k) * 1.9, wobble: v.wobble + energy * 0.09, lobes: 3 + k, turn: turn)
+                    // The light inside wanders slowly while thinking.
+                    let light = CGPoint(x: center.x - radius * 0.25 + cos(t * 0.7 + Double(k)) * radius * 0.3 * min(1, v.flow),
+                                        y: center.y - radius * 0.3 + sin(t * 0.9 + Double(k)) * radius * 0.3 * min(1, v.flow))
+                    canvas.fill(path, with: .radialGradient(Gradient(colors: [color.opacity((0.95 - Double(k) * 0.22) * (1 - v.dim)), color.opacity(0.35 * (1 - v.dim))]),
+                                                           center: light, startRadius: 0, endRadius: radius * 1.3))
                 }
             }
         }
-        .animation(.easeInOut(duration: 0.4), value: phase)
     }
 
     /// A closed, softly wobbling shape around `center`.
-    static func blob(center: CGPoint, radius: Double, time: Double, wobble: Double, lobes: Int) -> Path {
+    static func blob(center: CGPoint, radius: Double, time: Double, wobble: Double, lobes: Int, turn: Double = 0) -> Path {
         var path = Path()
         let steps = 96
         for i in 0...steps {
             let theta = Double(i) / Double(steps) * 2 * .pi
             let r = radius * (1 + wobble * (0.6 * sin(Double(lobes) * theta + time) + 0.4 * sin(Double(lobes + 2) * theta - time * 1.3)))
-            let point = CGPoint(x: center.x + cos(theta) * r, y: center.y + sin(theta) * r)
+            let point = CGPoint(x: center.x + cos(theta + turn) * r, y: center.y + sin(theta + turn) * r)
             if i == 0 { path.move(to: point) } else { path.addLine(to: point) }
         }
         path.closeSubpath()
         return path
+    }
+}
+
+/// The orb's look, eased toward each state's values so a change of state flows instead of jumping.
+final class OrbMotion {
+    struct Values { var wobble: Double; var reactive: Double; var flow: Double; var dim: Double; var gray: Double; var red: Double; var flowPhase: Double = 0 }
+    private var current = Values(wobble: 0.02, reactive: 0, flow: 0, dim: 0.35, gray: 1, red: 0)
+    private var last: Double?
+
+    func step(toward target: Values, at time: Double) -> Values {
+        let dt = min(0.1, max(0, time - (last ?? time)))
+        last = time
+        let k = min(1, dt * 3)   // about a third of a second to settle
+        func ease(_ a: Double, _ b: Double) -> Double { a + (b - a) * k }
+        current.wobble = ease(current.wobble, target.wobble)
+        current.reactive = ease(current.reactive, target.reactive)
+        current.flow = ease(current.flow, target.flow)
+        current.dim = ease(current.dim, target.dim)
+        current.gray = ease(current.gray, target.gray)
+        current.red = ease(current.red, target.red)
+        // Phase accumulates at the current flow, so speeding up never makes the shape jump.
+        current.flowPhase += dt * current.flow * 0.9
+        return current
     }
 }
