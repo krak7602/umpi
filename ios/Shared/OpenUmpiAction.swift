@@ -29,6 +29,8 @@ enum UmpiRoute {
         UserDefaults.standard.set(action, forKey: key)
         NotificationCenter.default.post(name: notification, object: action)
     }
+    /// The pending request, left in place.
+    @MainActor static func peek() -> String? { UserDefaults.standard.string(forKey: key) }
     /// The pending request, once.
     @MainActor static func take() -> String? {
         let action = UserDefaults.standard.string(forKey: key)
