@@ -4,7 +4,7 @@ import SwiftUI
 /// Umpi's voice: which installed voice, how fast, how high, and how voice mode takes turns.
 struct VoiceSettingsView: View {
     @State private var settings = VoiceSettings.shared
-    @State private var sample = SamplePlayer()
+    @State private var sample = AVSpeechSynthesizer()
     @State private var voices = VoiceCatalog.voices()
     @State private var personal = AVSpeechSynthesizer.personalVoiceAuthorizationStatus
     @Environment(\.dismiss) private var dismiss
@@ -65,8 +65,12 @@ struct VoiceSettingsView: View {
         .navigationTitle("Voice")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        // A voice downloaded in Settings appears without reopening this screen.
+        .onReceive(NotificationCenter.default.publisher(for: AVSpeechSynthesizer.availableVoicesDidChangeNotification)) { _ in voices = VoiceCatalog.voices() }
+        .onAppear { voices = VoiceCatalog.voices() }
         .onDisappear {
-            sample.stop()
+            sample.stopSpeaking(at: .immediate)
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         }
     }
 
@@ -83,60 +87,15 @@ struct VoiceSettingsView: View {
     }
 
     private func play() {
+        sample.stopSpeaking(at: .immediate)
+        // Plain spoken audio, as Siri plays it: no microphone, no echo cancellation.
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+        try? session.setActive(true)
         let utterance = AVSpeechUtterance(string: "Hi, I'm Umpi. This is how I'll sound when we talk.")
         utterance.voice = settings.voice
         utterance.rate = Float(settings.rate)
         utterance.pitchMultiplier = VoiceSettings.cleanPitch(settings.pitch)
-        sample.play(utterance)
-    }
-}
-
-/// Plays a voice sample the way voice mode speaks: the whole sentence is made first, then played, so a voice that is
-/// slow to make on this phone cannot stutter. Plain spoken audio, with no microphone or echo cancellation.
-@MainActor
-final class SamplePlayer {
-    private let synthesizer = AVSpeechSynthesizer()
-    private let engine = AVAudioEngine()
-    private let player = AVAudioPlayerNode()
-    private var format: AVAudioFormat?
-    private var generation = 0
-
-    func play(_ utterance: AVSpeechUtterance) {
-        stop()
-        generation += 1
-        let generation = self.generation
-        var buffers: [AVAudioPCMBuffer] = []
-        synthesizer.write(utterance) { [weak self] buffer in
-            guard let pcm = buffer as? AVAudioPCMBuffer else { return }
-            let copy = pcm.frameLength > 0 ? VoiceAudio.floatCopy(pcm) : nil
-            Task { @MainActor in
-                guard let self, generation == self.generation else { return }
-                if let copy { buffers.append(copy) } else { self.start(buffers) }
-            }
-        }
-    }
-
-    func stop() {
-        generation += 1
-        synthesizer.stopSpeaking(at: .immediate)
-        player.stop()
-        engine.stop()
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-    }
-
-    private func start(_ buffers: [AVAudioPCMBuffer]) {
-        guard let first = buffers.first else { return }
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
-        try? session.setActive(true)
-        if player.engine == nil { engine.attach(player) }
-        if format != first.format {
-            engine.disconnectNodeOutput(player)
-            engine.connect(player, to: engine.mainMixerNode, format: first.format)
-            format = first.format
-        }
-        do { if !engine.isRunning { try engine.start() } } catch { return }
-        for buffer in buffers { player.scheduleBuffer(buffer) }
-        player.play()
+        sample.speak(utterance)
     }
 }
