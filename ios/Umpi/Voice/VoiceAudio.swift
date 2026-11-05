@@ -258,7 +258,8 @@ final class VoiceAudio: @unchecked Sendable {
 
     /// Plays one buffer of Umpi's speech; `played` runs on the audio thread when it has been heard.
     func play(_ buffer: AVAudioPCMBuffer, played: @escaping @Sendable () -> Void) {
-        guard let float = Self.floatBuffer(buffer) else { played(); return }
+        // A copy: the synthesizer may reuse its buffer for the next piece before this one has played.
+        guard let float = Self.floatCopy(buffer) else { played(); return }
         if playerFormat == nil || playerFormat!.sampleRate != float.format.sampleRate || playerFormat!.channelCount != float.format.channelCount {
             player.stop()
             playerFormat = float.format
@@ -300,8 +301,14 @@ final class VoiceAudio: @unchecked Sendable {
         onEvent?(.level(min(1, max(0, (db + 50) / 40))))
     }
 
+    /// A float copy that stays valid after the synthesizer reuses its buffer.
+    static func floatCopy(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        guard let float = floatBuffer(buffer) else { return nil }
+        return float === buffer ? (buffer.copy() as? AVAudioPCMBuffer) : float
+    }
+
     /// The synthesizer's buffers can be 16-bit; the player takes float.
-    private static func floatBuffer(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+    static func floatBuffer(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
         if buffer.format.commonFormat == .pcmFormatFloat32, !buffer.format.isInterleaved { return buffer }
         guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: buffer.format.sampleRate, channels: 1, interleaved: false),
               let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: buffer.frameLength), let target = out.floatChannelData?[0] else { return nil }
