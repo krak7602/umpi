@@ -1,6 +1,8 @@
 import JavaScriptCore
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 
 /// Colors code with highlight.js (BSD-3-Clause, bundled) running in JavaScriptCore. The result is native text in an
 /// Xcode-like palette for light and dark mode. A block without a language is detected; unknown or long code stays plain.
@@ -77,8 +79,13 @@ final class SyntaxHighlighter {
         return nil
     }
     private static func dynamic(_ light: UInt32, _ dark: UInt32) -> Color {
+        #if canImport(UIKit)
         func ui(_ hex: UInt32) -> UIColor { UIColor(red: CGFloat(hex >> 16 & 0xff) / 255, green: CGFloat(hex >> 8 & 0xff) / 255, blue: CGFloat(hex & 0xff) / 255, alpha: 1) }
         return Color(UIColor { $0.userInterfaceStyle == .dark ? ui(dark) : ui(light) })
+        #else
+        func ns(_ hex: UInt32) -> NSColor { NSColor(srgbRed: CGFloat(hex >> 16 & 0xff) / 255, green: CGFloat(hex >> 8 & 0xff) / 255, blue: CGFloat(hex & 0xff) / 255, alpha: 1) }
+        return Color(NSColor(name: nil) { $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? ns(dark) : ns(light) })
+        #endif
     }
     /// Close to Xcode's default themes.
     private static let palette: [String: Color] = {

@@ -26,7 +26,9 @@ final class VoiceSpeaker: @unchecked Sendable {
 
     init(audio: VoiceAudio) {
         self.audio = audio
+        #if os(iOS)
         synthesizer.usesApplicationAudioSession = true
+        #endif
     }
 
     func say(_ sentence: String) {

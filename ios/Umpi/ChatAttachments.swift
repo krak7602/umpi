@@ -1,7 +1,11 @@
 import AVFoundation
 import Foundation
 import Speech
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 
 /// What an app message carries besides its text, kept in its own protected file until the message is sent.
 struct OutgoingAttachment: Codable, Equatable, Sendable {
@@ -52,7 +56,7 @@ enum MediaPrep {
     static let maxImages = 4, imageBudget = 1_000_000, fileBudget = 10_000_000, transcriptLimit = 12_000
 
     /// Scales and compresses images so they fit the shared 1 MB budget.
-    static func images(_ sources: [UIImage]) throws -> [OutgoingAttachment.Image] {
+    static func images(_ sources: [PlatformImage]) throws -> [OutgoingAttachment.Image] {
         let chosen = Array(sources.prefix(maxImages))
         guard !chosen.isEmpty else { return [] }
         let each = imageBudget / chosen.count
@@ -65,13 +69,12 @@ enum MediaPrep {
             }
         }
     }
-    private static func scaled(_ image: UIImage, longestSide: CGFloat) -> UIImage {
+    private static func scaled(_ image: PlatformImage, longestSide: CGFloat) -> PlatformImage {
         let size = image.size, longest = max(size.width, size.height)
         guard longest > longestSide else { return image }
         let factor = longestSide / longest
         let target = CGSize(width: (size.width * factor).rounded(), height: (size.height * factor).rounded())
-        let format = UIGraphicsImageRendererFormat.default(); format.scale = 1
-        return UIGraphicsImageRenderer(size: target, format: format).image { _ in image.draw(in: CGRect(origin: .zero, size: target)) }
+        return image.resized(to: target)
     }
 
     static func file(at url: URL) throws -> OutgoingAttachment.File {
@@ -81,7 +84,7 @@ enum MediaPrep {
     }
 
     /// A few evenly spaced frames of a video, for Umpi to see what it shows.
-    static func frames(of url: URL, count: Int = 4) async throws -> [UIImage] {
+    static func frames(of url: URL, count: Int = 4) async throws -> [PlatformImage] {
         let asset = AVURLAsset(url: url)
         let duration = try await asset.load(.duration).seconds
         let generator = AVAssetImageGenerator(asset: asset)
@@ -91,10 +94,10 @@ enum MediaPrep {
         let tolerance = CMTime(seconds: 0.1, preferredTimescale: 600)
         generator.requestedTimeToleranceBefore = tolerance
         generator.requestedTimeToleranceAfter = tolerance
-        var images: [UIImage] = []
+        var images: [PlatformImage] = []
         for index in 0..<count {
             let time = CMTime(seconds: max(0, duration) * (Double(index) + 0.5) / Double(count), preferredTimescale: 600)
-            if let frame = try? await generator.image(at: time).image { images.append(UIImage(cgImage: frame)) }
+            if let frame = try? await generator.image(at: time).image { images.append(PlatformImage(cgImage: frame)) }
         }
         guard !images.isEmpty else { throw MediaError.unreadable("The video's frames could not be read.") }
         return images
@@ -166,12 +169,11 @@ struct LocalMedia: Codable, Equatable, Sendable {
         try? FileManager.default.removeItem(at: to)
         try? FileManager.default.moveItem(at: from, to: to)
     }
-    static func thumbnail(_ image: UIImage) -> Data? {
+    static func thumbnail(_ image: PlatformImage) -> Data? {
         let side: CGFloat = 480, longest = max(image.size.width, image.size.height)
         let factor = min(1, side / max(longest, 1))
         let size = CGSize(width: (image.size.width * factor).rounded(), height: (image.size.height * factor).rounded())
-        let format = UIGraphicsImageRendererFormat.default(); format.scale = 1
-        return UIGraphicsImageRenderer(size: size, format: format).image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }.jpegData(compressionQuality: 0.7)
+        return image.resized(to: size).jpegData(compressionQuality: 0.7)
     }
 }
 

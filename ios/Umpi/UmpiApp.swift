@@ -120,15 +120,3 @@ extension RootView {
         Task { await store.synchronize() }
     }
 }
-
-/// What the chat should do when it appears or is already showing: open voice mode, or begin a draft. Kept here
-/// rather than sent as a notification, so a chat screen that does not exist yet still gets it.
-@MainActor @Observable
-final class ChatRequests {
-    static let shared = ChatRequests()
-    /// Open voice mode.
-    var talk = false
-    var draft: String?
-    /// The chat is the screen in front, so its messages need no notification.
-    var chatVisible = false
-}

@@ -45,6 +45,10 @@ final class KnockScheduler {
     /// Brings the phone's pending knocks in line with the coordinator's scheduled reminders. Returns the reminders that
     /// are set as knocks, or nil when notifications are not allowed (then Telegram stays the alert).
     static func reconcile(_ reminders: [Reminder], now: Date = Date()) async -> [Reminder]? {
+        #if os(macOS)
+        // Reminders knock on the phone. A Mac sets none, so the phone and the coordinator's pushes stay the only knocks.
+        return nil
+        #else
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
         guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { return nil }
@@ -92,6 +96,7 @@ final class KnockScheduler {
         }
         let set = Set(await center.pendingNotificationRequests().map(\.identifier))
         return wanted.filter { $0.status == "scheduled" && (set.contains(identifier($0, 0)) || delivered.contains(identifier($0, 0))) }
+        #endif
     }
 
     /// Stops a reminder's remaining repeats and clears its delivered knocks.

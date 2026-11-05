@@ -94,6 +94,8 @@ final class ChatModel {
     }
 
     @ObservationIgnored private var refreshedOnce = false
+    /// The first read since launch has finished, so what arrives next is new.
+    var hasRefreshed: Bool { refreshedOnce }
 
     init() {
         // The last messages, kept on the phone, show at once; the first refresh brings them up to date.
@@ -184,4 +186,16 @@ final class ChatModel {
         isLive = false
     }
     private struct Change: Decodable { var type: String; var latest: Int }
+}
+
+/// What the chat should do when it appears or is already showing: open voice mode, or begin a draft. Kept here
+/// rather than sent as a notification, so a chat screen that does not exist yet still gets it.
+@MainActor @Observable
+final class ChatRequests {
+    static let shared = ChatRequests()
+    /// Open voice mode.
+    var talk = false
+    var draft: String?
+    /// The chat is the screen in front, so its messages need no notification.
+    var chatVisible = false
 }

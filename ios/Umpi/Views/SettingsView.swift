@@ -1,5 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#endif
 import WidgetKit
 
 struct SettingsView: View {
@@ -109,7 +111,9 @@ struct SettingsView: View {
                     ForEach(store.capabilities) { capability in
                         LabeledContent(capability.id) { Text(capability.status.replacingOccurrences(of: "_", with: " ")).font(.footnote) }
                     }
+                    #if os(iOS)
                     Button("Open iOS Settings") { if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) } }
+                    #endif
                 }
             }
             Section {
@@ -207,7 +211,7 @@ struct PairAnotherDeviceView: View {
     }
 
     private func copy(_ text: String, _ what: String) {
-        UIPasteboard.general.string = text
+        Clipboard.copy(text)
         copied = what
     }
 
