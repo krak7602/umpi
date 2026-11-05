@@ -11,7 +11,7 @@ import { StateError, type Database } from "./store.js";
 export interface WidgetItem { title: string; detail?: string; symbol?: string; link?: "chat" | "today" | "work" }
 export interface WidgetContent { items: WidgetItem[]; source: "umpi" | "default"; updatedAt: string; note?: string; actions: WidgetAction[] }
 /** The widget's buttons: what each opens in the app. */
-export const WIDGET_ACTIONS = ["voice", "talk", "today", "chat", "work", "remind"] as const;
+export const WIDGET_ACTIONS = ["voice", "today", "chat", "work", "remind"] as const;
 export type WidgetAction = (typeof WIDGET_ACTIONS)[number];
 export const DEFAULT_WIDGET_ACTIONS: WidgetAction[] = ["voice", "today", "chat", "work"];
 export function parseWidgetActions(value: unknown): WidgetAction[] {
@@ -98,7 +98,7 @@ export function widgetTools(store: WidgetStore, wake: () => Promise<void>): Tool
         hours: Type.Optional(Type.Number({ minimum: 0.25, maximum: 48 })), note: Type.Optional(Type.String({ maxLength: 200 })),
       }, { additionalProperties: false }), replay: "safe",
       async execute(input) { return result(() => store.set(input)); } }),
-    defineTool({ name: "set_widget_actions", description: `Set the buttons on the owner's phone widget, in order, when they ask to change them: 1 to 4 of ${WIDGET_ACTIONS.join(", ")}. voice records a voice message to Umpi; talk opens voice mode, a spoken conversation with Umpi; today, chat, and work open those views; remind opens the chat ready to set a reminder. The first is the small widget's button.`,
+    defineTool({ name: "set_widget_actions", description: `Set the buttons on the owner's phone widget, in order, when they ask to change them: 1 to 4 of ${WIDGET_ACTIONS.join(", ")}. voice opens voice mode, a spoken conversation with Umpi; today, chat, and work open those views; remind opens the chat ready to set a reminder. The first is the small widget's button.`,
       parameters: Type.Object({ actions: Type.Array(Type.Union(WIDGET_ACTIONS.map(action => Type.Literal(action))), { minItems: 1, maxItems: 4 }) }, { additionalProperties: false }), replay: "safe",
       async execute(input) { return result(() => ({ actions: store.setActions(record(input).actions) })); } }),
     defineTool({ name: "clear_widget", description: "Return the owner's phone widgets to the default view (today's open tasks, next reminders, what is waiting).",

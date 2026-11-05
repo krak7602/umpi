@@ -104,7 +104,7 @@ private struct RootView: View {
 
 
 extension RootView {
-    /// Opens one of the widget's actions: chat, today, work, remind, voice (record a voice message), or talk (voice mode).
+    /// Opens one of the widget's actions: chat, today, work, remind, or voice (voice mode, a spoken conversation).
     func route(_ action: String) {
         switch action {
         case "chat": selectedTab = 0
@@ -112,10 +112,7 @@ extension RootView {
         case "remind":
             selectedTab = 0
             ChatRequests.shared.draft = "Remind me "
-        case "voice", "idea", "capture":
-            selectedTab = 0
-            ChatRequests.shared.capture = true
-        case "talk":
+        case "voice", "talk", "idea", "capture":
             selectedTab = 0
             ChatRequests.shared.talk = true
         default: selectedTab = 2
@@ -124,12 +121,11 @@ extension RootView {
     }
 }
 
-/// What the chat should do when it appears or is already showing: start recording an idea, or begin a draft. Kept here
+/// What the chat should do when it appears or is already showing: open voice mode, or begin a draft. Kept here
 /// rather than sent as a notification, so a chat screen that does not exist yet still gets it.
 @MainActor @Observable
 final class ChatRequests {
     static let shared = ChatRequests()
-    var capture = false
     /// Open voice mode.
     var talk = false
     var draft: String?
