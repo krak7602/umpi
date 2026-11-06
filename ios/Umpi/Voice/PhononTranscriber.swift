@@ -26,6 +26,7 @@ actor PhononTranscriber {
         if manager != nil { return }
         if let preparing { return try await preparing.value }
         state = Self.downloaded ? .preparing : .downloading(0)
+        voiceLog(Self.downloaded ? "phonon preparing (minutes after an install or update, while it is compiled for the Neural Engine)" : "phonon downloading")
         let task = Task {
             let started = Date()
             let models = try await AsrModels.downloadAndLoad(version: .phonon2) { progress in
@@ -43,7 +44,7 @@ actor PhononTranscriber {
         }
         preparing = task
         do { try await task.value; state = .ready; preparing = nil }
-        catch { state = .failed(error.localizedDescription); preparing = nil; throw error }
+        catch { state = .failed(error.localizedDescription); preparing = nil; voiceLog("phonon could not load: \(error.localizedDescription)"); throw error }
     }
 
     private func report(_ progress: DownloadProgress) {
@@ -56,7 +57,7 @@ actor PhononTranscriber {
 
     /// The words in `audio` (mono, any sample rate), or nil when the model is not loaded yet or fails.
     func transcribe(_ audio: TurnAudio) async -> String? {
-        guard let manager else { return nil }
+        guard let manager else { voiceLog("phonon not ready yet (\(state)); sending the recognizer's words"); return nil }
         let started = Date()
         do {
             var decoder = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)

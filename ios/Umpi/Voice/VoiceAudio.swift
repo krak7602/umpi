@@ -90,6 +90,8 @@ final class VoiceAudio: @unchecked Sendable {
     private var pauseNumber = 0
     private var _finished: Bool?
     private var probeStarted: Date?
+    /// Set when words over Umpi's voice made it the owner's turn; the audio thread then starts counting afresh.
+    private var _promoted = false
     private var levelTick = 0
     private var inputRate = 48_000.0
 
@@ -237,6 +239,10 @@ final class VoiceAudio: @unchecked Sendable {
         case .waiting:
             if recent.suffix(12).filter({ $0 }).count >= 8 { begin(cutIn: false) }
         case .listening:
+            if lock.withLock({ defer { _promoted = false }; return _promoted }) {
+                heardFrames = 0; silentFrames = 0; pauseChecked = false
+                lock.withLock { pauseNumber += 1; _finished = nil }
+            }
             request?.append(buffer)
             keep(buffer)
             heardFrames += frames
@@ -288,9 +294,14 @@ final class VoiceAudio: @unchecked Sendable {
         case .probing:
             request?.append(buffer)
             keep(buffer)
-            if let started = lock.withLock({ probeStarted }), Date().timeIntervalSince(started) > 1.6 {
+            // Ends only while still probing: words may have just made it the owner's turn.
+            let expired = lock.withLock { () -> Bool in
+                guard _mode == .probing, let started = probeStarted, Date().timeIntervalSince(started) > 1.6 else { return false }
+                _mode = .replying; probeStarted = nil
+                return true
+            }
+            if expired {
                 endRecognition(cancel: true)
-                self.mode = .replying
                 recent.removeAll()
                 onEvent?(.notCutIn)
             }
@@ -329,11 +340,13 @@ final class VoiceAudio: @unchecked Sendable {
             if let result {
                 let text = result.bestTranscription.formattedString
                 // Words while checking a possible cut-in: two or more is the owner talking.
-                if self.mode == .probing, text.split(separator: " ").count >= 2 {
-                    self.lock.withLock { self._mode = .listening; self.probeStarted = nil }
-                    self.heardFrames = 0; self.silentFrames = 0
-                    self.onEvent?(.started(cutIn: true))
+                // Checked and changed in one step, so the probe running out at the same moment cannot undo it.
+                let promoted = text.split(separator: " ").count >= 2 && self.lock.withLock { () -> Bool in
+                    guard self._mode == .probing else { return false }
+                    self._mode = .listening; self.probeStarted = nil; self._promoted = true
+                    return true
                 }
+                if promoted { self.onEvent?(.started(cutIn: true)) }
                 self.lock.withLock { if text != self.lastWords { self.lastWords = text; self.lastWordsChange = text.isEmpty ? nil : Date() } }
                 self.onEvent?(.words(text, final: result.isFinal, turn: turn))
             } else if let error {

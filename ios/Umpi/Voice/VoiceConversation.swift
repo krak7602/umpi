@@ -42,6 +42,7 @@ final class VoiceConversation {
     private var words = ""
     private var turn = 0
     private var finalWaiter: Task<Void, Never>?
+    private var hearingWatch: Task<Void, Never>?
     /// Phonon-2 is writing out the turn: Apple's final words do not send it early.
     private var transcribing = false
     /// The ended turn's audio, until it is sent.
@@ -81,8 +82,14 @@ final class VoiceConversation {
 
     init() {
         speaker = VoiceSpeaker(audio: audio)
-        audio.onEvent = { [weak self] event in Task { @MainActor in self?.handle(event) } }
-        speaker.onEvent = { [weak self] event in Task { @MainActor in self?.handle(event) } }
+        // One ordered stream each: a task per event could reach the main actor out of order, so "the turn ended" could
+        // arrive before "the owner started talking" and leave voice mode hearing with the microphone already moved on.
+        let (audioEvents, audioSink) = AsyncStream.makeStream(of: VoiceAudio.Event.self)
+        let (speakerEvents, speakerSink) = AsyncStream.makeStream(of: VoiceSpeaker.Event.self)
+        audio.onEvent = { audioSink.yield($0) }
+        speaker.onEvent = { speakerSink.yield($0) }
+        Task { [weak self] in for await event in audioEvents { self?.handle(event) } }
+        Task { [weak self] in for await event in speakerEvents { self?.handle(event) } }
     }
 
     // MARK: Start and stop
@@ -190,6 +197,7 @@ final class VoiceConversation {
         case .level(let value):
             level = value
         case .started(let cutIn):
+            let unsent = finalWaiter != nil
             if cutIn {
                 // The owner talked over Umpi: stop it and remember what was heard.
                 if reply == nil && sending { cutWhileSending = true }
@@ -198,7 +206,7 @@ final class VoiceConversation {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 #endif
             }
-            if finalWaiter != nil {
+            if unsent {
                 // The turn ended but is not sent yet, and the owner carried on: one message, not two.
                 carried = (Self.join(carried?.words, words), turnAudio)
                 voiceLog("carried on talking before the turn was sent; joining the two")
@@ -209,6 +217,7 @@ final class VoiceConversation {
             captionIsOwner = true
             showsInChat = false
             phase = .hearing
+            watchHearing()
         case .words(let text, let final, let turn):
             guard phase == .hearing || phase == .thinking && finalWaiter != nil else { break }
             if !text.isEmpty { words = text; if phase == .hearing { caption = Self.join(carried?.words, text); captionIsOwner = true } }
@@ -242,6 +251,25 @@ final class VoiceConversation {
 
     // MARK: The owner's turn
 
+    /// A safety net: while voice mode shows the owner talking, the microphone must be taking their turn. If it is not
+    /// (it moved on without saying so), the words so far are sent, or voice mode listens again, instead of waiting for ever.
+    private func watchHearing() {
+        hearingWatch?.cancel()
+        hearingWatch = Task { [weak self] in
+            var strikes = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard let self, !Task.isCancelled, self.started, self.phase == .hearing else { return }
+                let mode = self.audio.mode
+                strikes = mode == .listening || mode == .probing ? 0 : strikes + 1
+                guard strikes >= 2 else { continue }
+                voiceLog("hearing, but the microphone was \(mode); recovering")
+                if self.words.trimmingCharacters(in: .whitespaces).count >= 2 || self.carried != nil { self.finishTurn(audio: nil) } else { self.listen() }
+                return
+            }
+        }
+    }
+
     /// The owner stopped talking. With Phonon-2 ready, its transcript of the turn's audio is sent (Apple's words if it
     /// fails or takes over 4 s); otherwise the recognizer's final words, waited for briefly.
     private func finishTurn(audio ended: TurnAudio?) {
@@ -272,7 +300,7 @@ final class VoiceConversation {
                 self.transcribing = false
                 self.finalWaiter = nil
                 if let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty { self.words = text; self.caption = text }
-                else { voiceLog("phonon gave nothing in time; sending the recognizer's words") }
+                else { voiceLog("phonon gave no words within 4 s; sending the recognizer's words") }
                 self.send()
             }
             return
