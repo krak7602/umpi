@@ -17,9 +17,13 @@ import UIKit
 enum VoiceModelWarmup {
     private static let key = "voice.preparedFor"
     private static var running = false
+    /// When the encoder's shorter versions started compiling, while they do.
+    private static var speedingUp: Date?
 
     /// This build of the app on this system version.
-    static var build: String {
+    static var build: String { buildKey }
+
+    nonisolated static var buildKey: String {
         let info = Bundle.main.infoDictionary ?? [:]
         let version = "\(info["CFBundleShortVersionString"] ?? "")-\(info["CFBundleVersion"] ?? "")"
         // Builds of the same version differ in their executable; its date tells them apart.
@@ -85,7 +89,17 @@ enum VoiceModelWarmup {
         }
         var ready = true
         if kokoro { do { try await KokoroVoice.shared.prepare() } catch { ready = false } }
-        if phonon { do { try await PhononTranscriber.shared.prepare() } catch { ready = false } }
+        if phonon {
+            do {
+                try await PhononTranscriber.shared.prepare()
+                // Phonon-2 works now; the encoder's shorter versions make short turns quicker.
+                if !PhononTranscriber.speedUpsReady {
+                    speedingUp = Date()
+                    if await !PhononTranscriber.shared.prepareSpeedUps() { ready = false }
+                    speedingUp = nil
+                }
+            } catch { ready = false }
+        }
         ticker?.cancel()
         if ready, let markBuild { UserDefaults.standard.set(markBuild, forKey: key) }
         voiceLog(String(format: "voice models %@ after %.0f s", ready ? "prepared" : "not all prepared", Date().timeIntervalSince(started)))
@@ -118,15 +132,26 @@ enum VoiceModelWarmup {
             }
         }
         if let phonon {
-            let weight = 1 - kokoroWeight
+            // With the encoder's shorter versions still to compile, they take about two thirds of the compile time.
+            let speedUps = !PhononTranscriber.speedUpsReady
+            let weight = (1 - kokoroWeight) * (speedUps ? 0.4 : 1), speedUpWeight = (1 - kokoroWeight) * (speedUps ? 0.6 : 0)
+            func left(_ expected: TimeInterval, _ elapsed: TimeInterval) -> String {
+                let left = max(0, expected - elapsed)
+                return left > 60 ? "about \(Int((left / 60).rounded(.up))) min" : "almost done"
+            }
+            let fallback = 250.0, stored = UserDefaults.standard.double(forKey: "phonon.prepareSeconds")
             switch phonon {
             case .downloading(let fraction): done += weight * fraction * 0.3; detail = "Recognition · downloading \(Int(fraction * 100))%"
             case .preparing:
-                let expected = UserDefaults.standard.double(forKey: "phonon.prepareSeconds")
-                done += weight * (0.3 + 0.7 * estimate(phononFor, key: "phonon.prepareSeconds", fallback: 420))
-                let left = max(0, (expected > 0 ? expected : 420) - phononFor)
-                detail = left > 60 ? "Recognition · preparing, about \(Int((left / 60).rounded(.up))) min" : "Recognition · preparing, almost done"
-            case .ready: done += weight
+                done += weight * (0.3 + 0.7 * estimate(phononFor, key: "phonon.prepareSeconds", fallback: fallback))
+                detail = "Recognition · preparing, \(left(stored > 0 ? stored : fallback, phononFor))"
+            case .ready:
+                done += weight
+                if let speedingUp {
+                    let elapsed = Date().timeIntervalSince(speedingUp), saved = UserDefaults.standard.double(forKey: "phonon.speedUpSeconds")
+                    done += speedUpWeight * estimate(elapsed, key: "phonon.speedUpSeconds", fallback: 2 * fallback)
+                    detail = "Recognition ready · speeding up, \(left(saved > 0 ? saved : 2 * fallback, elapsed))"
+                }
             default: break
             }
         }
