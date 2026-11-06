@@ -74,9 +74,11 @@ actor PhononTranscriber {
         let started = Date()
         for function in ["enc_5040ms", "enc_10160ms"] {
             if Task.isCancelled { return false }
-            // Minutes of blocking work: on a thread of its own, not one of Swift's few shared ones.
+            // Minutes of blocking work: on a thread of its own, not one of Swift's few shared ones. At the first stage's
+            // priority: at utility priority the system's compile ran about three times slower (1,020 s against 152 s
+            // for one version, on an iPhone 13).
             let error: String? = await withCheckedContinuation { done in
-                DispatchQueue.global(qos: .utility).async {
+                DispatchQueue.global(qos: .userInitiated).async {
                     let configuration = Self.configuration(Self.encoderUnits)
                     configuration.functionName = function
                     do { _ = try MLModel(contentsOf: encoder, configuration: configuration); done.resume(returning: nil) }
