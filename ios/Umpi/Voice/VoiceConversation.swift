@@ -44,6 +44,10 @@ final class VoiceConversation {
     private var finalWaiter: Task<Void, Never>?
     /// Phonon-2 is writing out the turn: Apple's final words do not send it early.
     private var transcribing = false
+    /// The ended turn's audio, until it is sent.
+    private var turnAudio: TurnAudio?
+    /// A turn that ended but was not sent yet when the owner carried on talking: the next turn continues it.
+    private var carried: (words: String, audio: TurnAudio?)?
     /// The reply the owner just talked over, sent with the next message.
     private var interrupted: (id: String, heard: String)?
     private var started = false
@@ -102,6 +106,7 @@ final class VoiceConversation {
     func stop() {
         guard started else { return }
         started = false
+        carried = nil
         finalWaiter?.cancel(); transcribing = false
         socketTask?.cancel()
         socket?.cancel(with: .goingAway, reason: nil)
@@ -128,7 +133,8 @@ final class VoiceConversation {
             audio.endTurn()
             // The recognizer's final words, briefly; otherwise what it had heard so far.
             for _ in 0..<8 where finalTurn < turn { try? await Task.sleep(for: .milliseconds(100)) }
-            let text = words.trimmingCharacters(in: .whitespacesAndNewlines)
+            let text = Self.join(carried?.words, words).trimmingCharacters(in: .whitespacesAndNewlines)
+            carried = nil
             words = ""
             if text.count >= 2, let store {
                 voiceLog("left the app mid-turn; sending what was heard through the outbox")
@@ -169,6 +175,7 @@ final class VoiceConversation {
     func returnedToApp() { if started { audio.ensureRunning() } }
 
     private func listen() {
+        carried = nil
         words = ""
         caption = ""
         audio.mode = .waiting
@@ -191,15 +198,20 @@ final class VoiceConversation {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 #endif
             }
+            if finalWaiter != nil {
+                // The turn ended but is not sent yet, and the owner carried on: one message, not two.
+                carried = (Self.join(carried?.words, words), turnAudio)
+                voiceLog("carried on talking before the turn was sent; joining the two")
+            }
             finalWaiter?.cancel(); transcribing = false
             words = ""
-            caption = ""
+            caption = carried?.words ?? ""
             captionIsOwner = true
             showsInChat = false
             phase = .hearing
         case .words(let text, let final, let turn):
             guard phase == .hearing || phase == .thinking && finalWaiter != nil else { break }
-            if !text.isEmpty { words = text; if phase == .hearing { caption = text; captionIsOwner = true } }
+            if !text.isEmpty { words = text; if phase == .hearing { caption = Self.join(carried?.words, text); captionIsOwner = true } }
             if final { finalTurn = turn }
             if final, self.turn == turn, finalWaiter != nil, !transcribing { finalWaiter?.cancel(); finalWaiter = nil; send() }
             self.turn = turn
@@ -232,7 +244,15 @@ final class VoiceConversation {
 
     /// The owner stopped talking. With Phonon-2 ready, its transcript of the turn's audio is sent (Apple's words if it
     /// fails or takes over 4 s); otherwise the recognizer's final words, waited for briefly.
-    private func finishTurn(audio turnAudio: TurnAudio?) {
+    private func finishTurn(audio ended: TurnAudio?) {
+        var turnAudio = ended
+        if let carried {
+            words = Self.join(carried.words, words)
+            // Phonon-2 writes out both parts only when it has the audio of both.
+            turnAudio = carried.audio != nil && ended != nil ? TurnAudio.joined(carried.audio, ended) : nil
+            self.carried = nil
+        }
+        self.turnAudio = turnAudio
         audio.mode = .replying
         phase = .thinking
         caption = words
@@ -277,7 +297,12 @@ final class VoiceConversation {
     }
     #endif
 
+    nonisolated static func join(_ first: String?, _ second: String) -> String {
+        [first ?? "", second].map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
     private func send() {
+        turnAudio = nil
         let text = words.trimmingCharacters(in: .whitespacesAndNewlines)
         // Too short to be a request, such as a cough: listen again.
         guard text.count >= 2, let transport = store?.chatTransport else {

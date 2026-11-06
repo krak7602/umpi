@@ -265,7 +265,7 @@ test("voice mode: a spoken message tells Umpi it is heard aloud, and talking ove
 
   // Not yet sent to the model: talking over it ends it at once.
   const next = f.owner.operation(String(record(await (await send({ id: "s2", text: "Actually, never mind.", voice: true, spoken: true, interrupts: op.id }))!.json()).id))!;
-  assert.ok(String(f.owner.modelContent(next)).includes("before hearing any of it"), "Umpi is told how much of its reply was heard");
+  assert.ok(String(f.owner.modelContent(next)).includes("continues their previous message"), "Umpi is told the owner carried on before hearing any of its reply");
   assert.deepEqual(f.interrupted, [[op.id, false]]);
   assert.equal(f.owner.operation(op.id)?.status, "done");
   assert.equal(f.chat.page().entries.find(entry => entry.id === `umpi:answer:${op.id}`)?.text, "(Stopped when you started talking.)");
