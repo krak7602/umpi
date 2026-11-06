@@ -160,6 +160,10 @@ final class MacApp {
 
     /// The chat's socket stays open while Umpi runs, so its messages arrive and can be announced with the window closed.
     private func keepChatLive() async {
+        // After sleep the old connection is usually dead: open a new one at once rather than waiting for a ping.
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { MacApp.shared.chat.reconnect() }
+        }
         while !Task.isCancelled {
             if store.isPaired { await chat.stayLive(store) }
             if !store.isPaired, announcedThrough != nil || !chat.entries.isEmpty {
