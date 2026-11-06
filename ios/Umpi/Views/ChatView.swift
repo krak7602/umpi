@@ -18,6 +18,7 @@ struct ChatView: View {
     @State private var showPhotos = false
     @State private var showFiles = false
     @State private var pinned = true
+    @State private var showModels = false
     @State private var userScrolling = false
     @State private var requests = ChatRequests.shared
     @Environment(\.scenePhase) private var scenePhase
@@ -142,6 +143,13 @@ struct ChatView: View {
                     Image(systemName: "wifi.slash")
                         .foregroundStyle(Color.secondary)
                         .accessibilityLabel("Not connected")
+                }
+            }
+            // Likewise the voice models, only while they download or prepare (such as after an update).
+            if VoiceModelStatus.shared.showing {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showModels = true } label: { VoiceModelIcon() }
+                        .popover(isPresented: $showModels) { VoiceModelsPopover().presentationCompactAdaptation(.popover) }
                 }
             }
             #endif
