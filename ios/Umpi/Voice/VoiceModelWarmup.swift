@@ -95,9 +95,12 @@ enum VoiceModelWarmup {
 
     /// The share of the work done: a download's own fraction, and a compile against how long the last one took here.
     private static func progress(kokoro: KokoroVoice.State?, phonon: PhononTranscriber.State?, kokoroFor: TimeInterval, phononFor: TimeInterval) -> (Double, String) {
+        // Steady to 90% at the expected time, then slower but never still: iOS stops a task whose progress stops moving,
+        // and a compile in the background can take twice as long as one with the app open.
         func estimate(_ seconds: TimeInterval, key: String, fallback: TimeInterval) -> Double {
             let expected = UserDefaults.standard.double(forKey: key)
-            return min(0.95, seconds / (expected > 0 ? expected : fallback))
+            let share = seconds / (expected > 0 ? expected : fallback)
+            return share <= 1 ? 0.9 * share : 0.9 + 0.1 * (1 - exp(-(share - 1)))
         }
         // Weights: Phonon-2's compile is most of the time.
         let kokoroWeight = phonon == nil ? 1.0 : (kokoro == nil ? 0 : 0.15)
@@ -135,18 +138,23 @@ enum VoiceModelWarmup {
         let registered = BGTaskScheduler.shared.register(forTaskWithIdentifier: identifier, using: .main) { task in
             guard let task = task as? BGContinuedProcessingTask else { task.setTaskCompleted(success: false); return }
             MainActor.assumeIsolated {
-                task.progress.totalUnitCount = 1000
+                let total: Int64 = 100_000
+                task.progress.totalUnitCount = total
                 let job = Task {
                     let ready = await work(kokoro: kokoro, phonon: phonon, markBuild: markBuild) { fraction, detail in
-                        task.progress.completedUnitCount = Int64(fraction * 1000)
+                        // Moves on every tick, even when the estimate has nothing new to show.
+                        let units = min(total - 1, max(Int64(fraction * Double(total)), task.progress.completedUnitCount + 1))
+                        task.progress.completedUnitCount = units
                         task.updateTitle("Preparing voice models", subtitle: detail)
                     }
-                    task.progress.completedUnitCount = 1000
+                    task.progress.completedUnitCount = total
                     task.setTaskCompleted(success: ready)
                 }
-                // iOS can stop it (low power, the owner swipes it away): it runs again the next time the app opens.
+                // iOS can stop it (low power, the owner swipes it away). The compile itself carries on in the system,
+                // and what is left runs again the next time the app opens.
                 task.expirationHandler = {
-                    voiceLog("voice models: iOS stopped the background preparation; it continues the next time Umpi opens")
+                    voiceLog(String(format: "voice models: iOS stopped the background preparation at %.0f%%; it continues the next time Umpi opens",
+                                    task.progress.fractionCompleted * 100))
                     job.cancel()
                 }
             }
