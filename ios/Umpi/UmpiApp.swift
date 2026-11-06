@@ -13,6 +13,8 @@ struct UmpiApp: App {
                 .environment(appDelegate.t3)
                 .task(id: scenePhase) {
                     guard scenePhase == .active else { return }
+                    // After an install or update, voice models are compiled again; start now rather than in voice mode.
+                    VoiceModelWarmup.run()
                     while !Task.isCancelled {
                         await appDelegate.synchronize()
                         do { try await Task.sleep(for: .seconds(12)) }

@@ -95,9 +95,13 @@ final class VoiceConversation {
 
     // MARK: Start and stop
 
+    /// Voice mode is open somewhere: its models stay loaded.
+    static var active = false
+
     func start(_ store: CompanionStore) async {
         guard !started else { return }
         started = true
+        Self.active = true
         self.store = store
         // Opened from the widget or a control, the app may still be coming to the front; iOS refuses the microphone
         // until it is.
@@ -114,6 +118,7 @@ final class VoiceConversation {
     func stop() {
         guard started else { return }
         started = false
+        Self.active = false
         carried = nil
         finalWaiter?.cancel(); transcribing = false
         socketTask?.cancel()
