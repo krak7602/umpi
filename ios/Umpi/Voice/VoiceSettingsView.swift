@@ -24,6 +24,8 @@ struct VoiceSettingsView: View {
                     Slider(value: $settings.rate, in: VoiceSettings.normalRate * 0.85...VoiceSettings.normalRate * 1.4) { Text("Speed") }
                         minimumValueLabel: { Image(systemName: "tortoise") } maximumValueLabel: { Image(systemName: "hare") }
                         onEditingChanged: { editing in if !editing { play() } }
+                        // The row above names it; a Mac form would show the slider's own label as a second title.
+                        .labelsHidden()
                 }
                 // The natural voice has no pitch control; its speed follows the slider above.
                 if settings.kokoroVoice == nil {
@@ -32,6 +34,7 @@ struct VoiceSettingsView: View {
                         // Steps, so Normal is exactly 1: any other pitch makes iOS reprocess the voice, which can warble.
                         Slider(value: $settings.pitch, in: 0.8...1.3, step: 0.05) { Text("Pitch") }
                             onEditingChanged: { editing in if !editing { play() } }
+                            .labelsHidden()
                     }
                 } else {
                     LabeledContent("Pitch") { Text("Set by the voice").foregroundStyle(.secondary) }
@@ -109,6 +112,7 @@ struct VoiceSettingsView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack { Text("Wait before replying"); Spacer(); Text(String(format: "%.1f s", settings.pause)).monospacedDigit().foregroundStyle(.secondary) }
                     Slider(value: $settings.pause, in: 0.6...2.5, step: 0.1) { Text("Wait before replying") }
+                        .labelsHidden()
                 }
                 Toggle("Cut in by talking", isOn: $settings.cutIn)
             } header: { Text("Conversation") } footer: {
