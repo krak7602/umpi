@@ -170,7 +170,11 @@ struct ChatView: View {
         // On screen only when this tab shows and the app is in front; another tab keeps the view alive but hidden.
         .onAppear { onScreen = true; requests.chatVisible = scenePhase == .active }
         .onDisappear { onScreen = false; requests.chatVisible = false }
-        .onChange(of: scenePhase) { _, phase in requests.chatVisible = onScreen && phase == .active }
+        .onChange(of: scenePhase) { old, phase in
+            requests.chatVisible = onScreen && phase == .active
+            // Back from the background: the connection may have died while the app was suspended.
+            if ownsConnection, old == .background, phase != .background { chat.catchUp(store) }
+        }
         .onChange(of: requests.talk, initial: true) { _, wanted in
             guard wanted else { return }
             requests.talk = false

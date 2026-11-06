@@ -202,8 +202,9 @@ final class ChatModel {
             heartbeat.cancel()
             isLive = false
             task.cancel(with: .goingAway, reason: nil)
-            try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
-            delay = min(delay * 2, 30)
+            // Waits before trying again, unless asked to connect at once (the app came back to the front).
+            for _ in 0..<delay where !hurry && !Task.isCancelled { try? await Task.sleep(for: .seconds(1)) }
+            if hurry { hurry = false; delay = 1 } else { delay = min(delay * 2, 30) }
         }
         socket?.cancel(with: .goingAway, reason: nil)
         isLive = false
@@ -215,8 +216,14 @@ final class ChatModel {
 
     private static let log = Logger(subsystem: "umpi.chat", category: "socket")
 
-    /// Closes the socket so that a new one opens and reads what was missed, such as after the Mac wakes.
-    func reconnect() { socket?.cancel(with: .goingAway, reason: nil) }
+    /// Catches up at once and opens a new socket, which reads what was missed: when the app comes back to the front
+    /// or the Mac wakes, as the old connection may have died while it was away.
+    func catchUp(_ store: CompanionStore) {
+        hurry = true
+        socket?.cancel(with: .goingAway, reason: nil)
+        Task { await refresh(store) }
+    }
+    @ObservationIgnored private var hurry = false
 
     /// Whether the coordinator answers a ping within `seconds`.
     nonisolated private static func ping(_ task: URLSessionWebSocketTask, within seconds: Double) async -> Bool {

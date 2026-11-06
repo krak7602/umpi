@@ -28,6 +28,8 @@ final class ChatPanelController: NSObject, NSWindowDelegate {
         let panel = self.panel ?? make()
         self.panel = panel
         state.mode = mode
+        // Reads anything new, in case the socket missed it.
+        if !panel.isVisible { Task { await MacApp.shared.chat.refresh(MacApp.shared.store) } }
         if !panel.isVisible { place(panel) }
         panel.orderFrontRegardless()
         panel.makeKey()

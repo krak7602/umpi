@@ -162,7 +162,7 @@ final class MacApp {
     private func keepChatLive() async {
         // After sleep the old connection is usually dead: open a new one at once rather than waiting for a ping.
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
-            MainActor.assumeIsolated { MacApp.shared.chat.reconnect() }
+            MainActor.assumeIsolated { MacApp.shared.chat.catchUp(MacApp.shared.store) }
         }
         while !Task.isCancelled {
             if store.isPaired { await chat.stayLive(store) }
