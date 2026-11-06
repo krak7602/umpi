@@ -71,12 +71,16 @@ final class VoiceSpeaker: @unchecked Sendable {
     private func speakWithKokoro(_ text: String, voice kokoro: String, number: Int, generation: Int) {
         let speed = voice.kokoroSpeed
         Task {
-            let samples = try? await KokoroVoice.shared.speak(text, voice: kokoro, speed: speed)
+            var samples: [Float]?, notReady = false
+            do {
+                samples = try await KokoroVoice.shared.speakIfReady(text, voice: kokoro, speed: speed)
+                notReady = samples == nil
+            } catch {}
             queue.async {
                 guard generation == self.generation else { return }
                 guard let samples, !samples.isEmpty, let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 24_000, channels: 1, interleaved: false),
                       let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)) else {
-                    voiceLog("kokoro failed for a stretch; using the iOS voice")
+                    voiceLog(notReady ? "kokoro not ready yet; using the iOS voice" : "kokoro failed for a stretch; using the iOS voice")
                     self.writeWithApple(text, number: number, generation: generation)
                     return
                 }

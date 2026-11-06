@@ -55,6 +55,13 @@ actor KokoroVoice {
         state = .downloading(min(1, max(0, progress.fractionCompleted)))
     }
 
+    /// Speech for `text` only when the model is already loaded: nil while it downloads or prepares, so a reply is spoken
+    /// at once with the iOS voice instead of waiting minutes after an install.
+    func speakIfReady(_ text: String, voice: String, speed: Float) async throws -> [Float]? {
+        guard manager != nil else { return nil }
+        return try await speak(text, voice: voice, speed: speed)
+    }
+
     /// 24 kHz mono speech for `text`. `speed` 1 is normal.
     func speak(_ text: String, voice: String, speed: Float) async throws -> [Float] {
         try await prepare()

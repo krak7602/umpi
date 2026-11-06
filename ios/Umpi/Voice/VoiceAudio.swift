@@ -266,10 +266,14 @@ final class VoiceAudio: @unchecked Sendable {
                     voiceLog(String(format: "turn detector: %.2f finished (%@) in %.0f ms", probability, current ? "used" : "too late", took * 1000))
                 }
             }
+            let quietFor = Double(silentFrames) * 0.02
             let (quiet, wordsSettled, noWords) = lock.withLock { () -> (Double, Bool, Bool) in
                 let quiet = Self.quietNeeded(after: lastWords, pause: _pause, finished: _finished)
                 guard let changed = lastWordsChange else { return (quiet, false, true) }
-                return (quiet, Date().timeIntervalSince(changed) >= quiet + 0.6, false)
+                // Words that stopped changing end a turn in a room too noisy to fall quiet, but only after a moment without
+                // speech: a recognizer that stalls (such as while a model compiles) must not cut the owner off mid-sentence.
+                let unchanged = Date().timeIntervalSince(changed)
+                return (quiet, unchanged >= quiet + 0.6 && (quietFor >= 0.3 || unchanged >= quiet + 4), false)
             }
             if heardFrames / 50 != (heardFrames - frames) / 50 {
                 voiceLog(String(format: "listening: loudest %.0f dB, floor %.0f dB, voiced %d/%d frames, quiet %.1f of %.1f s, heard %.1f s, words %@",
