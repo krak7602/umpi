@@ -11,8 +11,8 @@ final class VoiceAudio: @unchecked Sendable {
         case started(cutIn: Bool)
         /// Words so far, and the final text once the recognizer has it.
         case words(String, final: Bool, turn: Int)
-        /// The owner stopped talking for the set pause.
-        case ended(turn: Int)
+        /// The owner stopped talking for the set pause, with the turn's audio for a better transcription.
+        case ended(turn: Int, audio: TurnAudio?)
         /// Loud enough to be the owner over Umpi's voice: lower Umpi while words are checked.
         case maybeCutIn
         /// It was not words after all.
@@ -35,8 +35,25 @@ final class VoiceAudio: @unchecked Sendable {
         get { lock.withLock { _mode } }
         set { lock.withLock { _mode = newValue; if newValue != .probing { probeStarted = nil } } }
     }
-    private var _pause = 0.7
+    private var _pause = 1.2
     var pause: Double { get { lock.withLock { _pause } } set { lock.withLock { _pause = newValue } } }
+
+    /// The quiet that ends a turn: the set pause after words that sound finished, and longer after words that trail off
+    /// ("…and", "…so I", "…um"), where people usually pause to think and carry on.
+    static func quietNeeded(after words: String, pause: Double) -> Double {
+        let trimmed = words.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let last = trimmed.last else { return pause }
+        let longer = max(pause * 2, 2.5)
+        if last == "," || last == "-" || last == "…" { return longer }
+        if ".?!".contains(last) { return pause }
+        let word = trimmed.split(whereSeparator: { $0 == " " }).last.map { $0.lowercased().trimmingCharacters(in: .punctuationCharacters) } ?? ""
+        return trailingWords.contains(word) ? longer : pause
+    }
+    private static let trailingWords: Set<String> = [
+        "and", "but", "or", "so", "because", "cause", "like", "um", "uh", "er", "erm", "hmm", "the", "a", "an", "to", "of",
+        "for", "with", "in", "on", "at", "from", "about", "that", "which", "who", "if", "when", "then", "maybe", "also",
+        "i", "i'm", "my", "your", "is", "was", "are", "it's", "gonna", "want", "just", "kind", "sort", "basically", "actually",
+    ]
     private var _cutIn = true
     /// With cutting in off, the microphone is not used while Umpi speaks, so its voice is played without echo
     /// cancellation, which can briefly turn speech down when it thinks someone is talking over it.
@@ -59,6 +76,9 @@ final class VoiceAudio: @unchecked Sendable {
     /// When the recognizer's words for this turn last changed; the turn ends when they stop changing, however noisy.
     private var lastWordsChange: Date?
     private var lastWords = ""
+    /// The turn's audio from just before the owner started, for the transcriber; at most about a minute.
+    private var turnAudio: [AVAudioPCMBuffer] = []
+    private var turnAudioFrames = 0
     private var probeStarted: Date?
     private var levelTick = 0
     private var inputRate = 48_000.0
@@ -207,23 +227,27 @@ final class VoiceAudio: @unchecked Sendable {
             if recent.suffix(12).filter({ $0 }).count >= 8 { begin(cutIn: false) }
         case .listening:
             request?.append(buffer)
+            keep(buffer)
             heardFrames += frames
             // A buffer is speech only with several voiced moments, so a click or a short noise does not hold the turn open.
             silentFrames = voicedFrames >= max(2, frames / 4) ? 0 : silentFrames + frames
-            let (wordsSettled, noWords) = lock.withLock { () -> (Bool, Bool) in
-                guard let changed = lastWordsChange else { return (false, true) }
-                return (Date().timeIntervalSince(changed) >= _pause + 0.6, false)
+            let (quiet, wordsSettled, noWords) = lock.withLock { () -> (Double, Bool, Bool) in
+                let quiet = Self.quietNeeded(after: lastWords, pause: _pause)
+                guard let changed = lastWordsChange else { return (quiet, false, true) }
+                return (quiet, Date().timeIntervalSince(changed) >= quiet + 0.6, false)
             }
             if heardFrames / 50 != (heardFrames - frames) / 50 {
-                voiceLog(String(format: "listening: loudest %.0f dB, floor %.0f dB, voiced %d/%d frames, quiet %.1f s, heard %.1f s, words %@",
-                             loudest, floorDB, voicedFrames, frames, Double(silentFrames) * 0.02, Double(heardFrames) * 0.02, noWords ? "none" : (wordsSettled ? "settled" : "changing")))
+                voiceLog(String(format: "listening: loudest %.0f dB, floor %.0f dB, voiced %d/%d frames, quiet %.1f of %.1f s, heard %.1f s, words %@",
+                             loudest, floorDB, voicedFrames, frames, Double(silentFrames) * 0.02, quiet, Double(heardFrames) * 0.02, noWords ? "none" : (wordsSettled ? "settled" : "changing")))
             }
             // Ends on quiet, on words that stopped changing, after 55 s, or after 8 s of sound with no words at all.
-            if Double(silentFrames) * 0.02 >= pause || wordsSettled || Double(heardFrames) * 0.02 >= 55 || (noWords && Double(heardFrames) * 0.02 >= 8) {
-                voiceLog("turn ended: \(Double(silentFrames) * 0.02 >= pause ? "quiet" : wordsSettled ? "words settled" : noWords ? "no words" : "too long")")
+            if Double(silentFrames) * 0.02 >= quiet || wordsSettled || Double(heardFrames) * 0.02 >= 55 || (noWords && Double(heardFrames) * 0.02 >= 8) {
+                voiceLog("turn ended: \(Double(silentFrames) * 0.02 >= quiet ? "quiet" : wordsSettled ? "words settled" : noWords ? "no words" : "too long") after waiting \(quiet) s")
                 self.mode = .replying
                 request?.endAudio()
-                onEvent?(.ended(turn: turn))
+                let audio = TurnAudio(turnAudio)
+                turnAudio = []; turnAudioFrames = 0
+                onEvent?(.ended(turn: turn, audio: audio))
             }
         case .replying:
             guard cutIn, recent.filter({ $0 }).count >= 10 else { break }
@@ -233,6 +257,7 @@ final class VoiceAudio: @unchecked Sendable {
             startRecognition()
         case .probing:
             request?.append(buffer)
+            keep(buffer)
             if let started = lock.withLock({ probeStarted }), Date().timeIntervalSince(started) > 1.6 {
                 endRecognition(cancel: true)
                 self.mode = .replying
@@ -264,7 +289,8 @@ final class VoiceAudio: @unchecked Sendable {
         turn += 1
         let turn = self.turn
         lock.withLock { lastWords = ""; lastWordsChange = nil }
-        for buffer in preroll { request.append(buffer) }
+        turnAudio = []; turnAudioFrames = 0
+        for buffer in preroll { request.append(buffer); keep(buffer) }
         self.request = request
         task = recognizer.recognitionTask(with: request) { [weak self] result, error in
             guard let self else { return }
@@ -283,6 +309,13 @@ final class VoiceAudio: @unchecked Sendable {
                 self.onEvent?(.words("", final: true, turn: turn))
             }
         }
+    }
+
+    /// Keeps a copy of the turn's audio for the transcriber, up to about a minute.
+    private func keep(_ buffer: AVAudioPCMBuffer) {
+        guard turnAudioFrames < Int(inputRate * 60), let copy = buffer.copy() as? AVAudioPCMBuffer else { return }
+        turnAudio.append(copy)
+        turnAudioFrames += Int(copy.frameLength)
     }
 
     /// The owner left mid-turn: stop listening and let the recognizer give its final words for what was heard.

@@ -68,6 +68,7 @@
 		8005F2AEC66FD7F891CB9689 /* Knocks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 642470A892264C968849E931 /* Knocks.swift */; };
 		82599F419212FC5FC8DD6117 /* knock-gentle.caf in Resources */ = {isa = PBXBuildFile; fileRef = 8E0ACFCC605F137407E0B52E /* knock-gentle.caf */; };
 		8657F212F46BAD159FEB3CEC /* CompanionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2041A9A0FEAF44FB88A99CE /* CompanionStore.swift */; };
+		89F85F1BB728EF6EC1455D57 /* PhononTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = F829182872D62A76A0600218 /* PhononTranscriber.swift */; };
 		89FEB775A5C1AA792AB7C906 /* VoiceSpeaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16FBC2D2C5B4A87AF662576 /* VoiceSpeaker.swift */; };
 		8B536063D4206A97B9DEE802 /* Shortcut.swift in Sources */ = {isa = PBXBuildFile; fileRef = 535AA11B25D67203F553D306 /* Shortcut.swift */; };
 		8C5722752F18D290889A79A3 /* MainWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3680B141D008686A56C0E4A /* MainWindow.swift */; };
@@ -84,6 +85,7 @@
 		9E71F61195A0A7FDAD6BD92B /* WidgetShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3BD3523F049B9E124DCDA19 /* WidgetShared.swift */; };
 		9FC22AEBC594653D233FB5ED /* ChatAttachments.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15C396001AD0754C3A161E58 /* ChatAttachments.swift */; };
 		A08BEA35A0A1620132A9E19E /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = C5738DEF5B668632B1605466 /* FluidAudio */; };
+		A0E15DEC9FB0CB11E62F638A /* PhononTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = F829182872D62A76A0600218 /* PhononTranscriber.swift */; };
 		A138BFEE0275119265871D59 /* ChatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 309A00142CD81859386AD711 /* ChatTests.swift */; };
 		A2E3A12BB2CF74D756AF8B34 /* knock.caf in Resources */ = {isa = PBXBuildFile; fileRef = C1917C675F6D8B3F143CBDD7 /* knock.caf */; };
 		A5A4E918E6A23F295C1A8B5C /* knock-gentle.caf in Resources */ = {isa = PBXBuildFile; fileRef = 8E0ACFCC605F137407E0B52E /* knock-gentle.caf */; };
@@ -238,6 +240,7 @@
 		E4C30AA88504D79B39CFAED6 /* TaskActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskActivityAttributes.swift; sourceTree = "<group>"; };
 		E8E065F52FC8005FCF057C38 /* VoiceModeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceModeView.swift; sourceTree = "<group>"; };
 		ECB4651A6C4489AD6CB74177 /* Platform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Platform.swift; sourceTree = "<group>"; };
+		F829182872D62A76A0600218 /* PhononTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhononTranscriber.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -367,6 +370,7 @@
 			isa = PBXGroup;
 			children = (
 				BC2A99DA94A36C2C4D650AC2 /* KokoroVoice.swift */,
+				F829182872D62A76A0600218 /* PhononTranscriber.swift */,
 				D7BC0C8D4261BF82D4BA521C /* TalkToUmpiIntent.swift */,
 				C672D512910D09D5145DD72D /* VoiceAudio.swift */,
 				7BEF7DD0A6FE7C8669EBED8D /* VoiceConversation.swift */,
@@ -723,6 +727,7 @@
 				6A8283E7BEBA92921AE890B4 /* MermaidView.swift in Sources */,
 				B15E6E983C3A2B7EB65CB29A /* Models.swift in Sources */,
 				E6E263770AC7E31C406B532D /* PairingView.swift in Sources */,
+				A0E15DEC9FB0CB11E62F638A /* PhononTranscriber.swift in Sources */,
 				E9131695DC82009AC581D43C /* Platform.swift in Sources */,
 				0FC760F9301F88C8B5E37AA0 /* QueuedChangesView.swift in Sources */,
 				07D6817B1B2E68B294F14326 /* SecureStorage.swift in Sources */,
@@ -779,6 +784,7 @@
 				DEF9887A7D5D7B3061B7DB8C /* Models.swift in Sources */,
 				253E8583D30AE97095BC6E52 /* OpenUmpiAction.swift in Sources */,
 				3C9049CC28F66DF23648C256 /* PairingView.swift in Sources */,
+				89F85F1BB728EF6EC1455D57 /* PhononTranscriber.swift in Sources */,
 				6FDDBE6072EDC8E14B89FEEC /* Platform.swift in Sources */,
 				6E39EDAB10F668DDCD9CE1C1 /* QueuedChangesView.swift in Sources */,
 				49744912F7986A50CA9EAF63 /* SecureStorage.swift in Sources */,

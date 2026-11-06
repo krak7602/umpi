@@ -42,6 +42,8 @@ final class VoiceConversation {
     private var words = ""
     private var turn = 0
     private var finalWaiter: Task<Void, Never>?
+    /// Phonon-2 is writing out the turn: Apple's final words do not send it early.
+    private var transcribing = false
     /// The reply the owner just talked over, sent with the next message.
     private var interrupted: (id: String, heard: String)?
     private var started = false
@@ -100,7 +102,7 @@ final class VoiceConversation {
     func stop() {
         guard started else { return }
         started = false
-        finalWaiter?.cancel()
+        finalWaiter?.cancel(); transcribing = false
         socketTask?.cancel()
         socket?.cancel(with: .goingAway, reason: nil)
         speaker.stop()
@@ -119,7 +121,7 @@ final class VoiceConversation {
     func leaving() async {
         guard started else { return }
         if phase == .hearing || finalWaiter != nil {
-            finalWaiter?.cancel(); finalWaiter = nil
+            finalWaiter?.cancel(); finalWaiter = nil; transcribing = false
             // Still taking the recognizer's words for this turn.
             phase = .hearing
             let turn = self.turn
@@ -145,7 +147,7 @@ final class VoiceConversation {
     /// The orb was tapped: send now while talking, or stop Umpi while it speaks.
     func tapped() {
         switch phase {
-        case .hearing: finishTurn()
+        case .hearing: finishTurn(audio: nil)   // The audio stays on the audio thread: the recognizer's words are sent.
         case .speaking, .thinking, .working: stopReply(note: true); listen()
         case .paused: togglePause()
         default: break
@@ -160,6 +162,8 @@ final class VoiceConversation {
         speaker.voice = .init(identifier: settings.voice?.identifier, rate: Float(settings.rate), pitch: VoiceSettings.cleanPitch(settings.pitch),
                               kokoro: KokoroVoice.downloaded ? kokoro : nil, kokoroSpeed: settings.kokoroSpeed)
         if kokoro != nil { Task { try? await KokoroVoice.shared.prepare(); if KokoroVoice.downloaded, settings.kokoroVoice == kokoro { speaker.voice.kokoro = kokoro } } }
+        // Loaded in the background; until it is ready, turns use Apple's words.
+        if settings.usesPhonon, PhononTranscriber.downloaded { Task { try? await PhononTranscriber.shared.prepare() } }
     }
 
     func returnedToApp() { if started { audio.ensureRunning() } }
@@ -187,7 +191,7 @@ final class VoiceConversation {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 #endif
             }
-            finalWaiter?.cancel()
+            finalWaiter?.cancel(); transcribing = false
             words = ""
             caption = ""
             captionIsOwner = true
@@ -197,11 +201,11 @@ final class VoiceConversation {
             guard phase == .hearing || phase == .thinking && finalWaiter != nil else { break }
             if !text.isEmpty { words = text; if phase == .hearing { caption = text; captionIsOwner = true } }
             if final { finalTurn = turn }
-            if final, self.turn == turn, finalWaiter != nil { finalWaiter?.cancel(); finalWaiter = nil; send() }
+            if final, self.turn == turn, finalWaiter != nil, !transcribing { finalWaiter?.cancel(); finalWaiter = nil; send() }
             self.turn = turn
-        case .ended(let turn):
+        case .ended(let turn, let audio):
             self.turn = turn
-            finishTurn()
+            finishTurn(audio: audio)
         case .maybeCutIn, .notCutIn:
             // Umpi keeps talking at full volume until words confirm the owner is cutting in.
             break
@@ -226,12 +230,33 @@ final class VoiceConversation {
 
     // MARK: The owner's turn
 
-    /// The owner stopped talking: wait briefly for the recognizer's final words, then send.
-    private func finishTurn() {
+    /// The owner stopped talking. With Phonon-2 ready, its transcript of the turn's audio is sent (Apple's words if it
+    /// fails or takes over 4 s); otherwise the recognizer's final words, waited for briefly.
+    private func finishTurn(audio turnAudio: TurnAudio?) {
         audio.mode = .replying
         phase = .thinking
         caption = words
         finalWaiter?.cancel()
+        transcribing = false
+        if settings.usesPhonon, let turnAudio {
+            transcribing = true
+            finalWaiter = Task { [weak self] in
+                let text = await withTaskGroup(of: String?.self) { group in
+                    group.addTask { await PhononTranscriber.shared.transcribe(turnAudio) }
+                    group.addTask { try? await Task.sleep(for: .seconds(4)); return nil }
+                    let first = await group.next() ?? nil
+                    group.cancelAll()
+                    return first
+                }
+                guard let self, !Task.isCancelled else { return }
+                self.transcribing = false
+                self.finalWaiter = nil
+                if let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty { self.words = text; self.caption = text }
+                else { voiceLog("phonon gave nothing in time; sending the recognizer's words") }
+                self.send()
+            }
+            return
+        }
         finalWaiter = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(900))
             guard let self, !Task.isCancelled else { return }
@@ -367,7 +392,7 @@ final class VoiceConversation {
 
     /// Stops Umpi's reply; with `note`, the next message tells Umpi where the owner cut it off.
     private func stopReply(note: Bool) {
-        finalWaiter?.cancel(); finalWaiter = nil
+        finalWaiter?.cancel(); finalWaiter = nil; transcribing = false
         let wasSpeaking = speaker.isBusy
         speaker.stop()
         guard let reply, !reply.finished else { return }

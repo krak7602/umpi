@@ -12,8 +12,10 @@ final class VoiceSettings {
     /// Speech rate as Apple counts it: 0.5 is normal speed.
     var rate: Double { didSet { defaults.set(rate, forKey: "voice.rate") } }
     var pitch: Double { didSet { defaults.set(pitch, forKey: "voice.pitch") } }
-    /// Seconds of quiet that end the owner's turn.
+    /// Seconds of quiet that end the owner's turn after words that sound finished; words that trail off wait longer.
     var pause: Double { didSet { defaults.set(pause, forKey: "voice.pause") } }
+    /// Turns are written out by Phonon-2 on this device once it is downloaded, instead of by Apple's recognizer.
+    var usesPhonon: Bool { didSet { defaults.set(usesPhonon, forKey: "voice.phonon") } }
     /// Talking over Umpi stops it.
     var cutIn: Bool { didSet { defaults.set(cutIn, forKey: "voice.cutIn") } }
 
@@ -23,7 +25,8 @@ final class VoiceSettings {
         voiceIdentifier = defaults.string(forKey: "voice.identifier")
         rate = defaults.object(forKey: "voice.rate") as? Double ?? Self.normalRate
         pitch = defaults.object(forKey: "voice.pitch") as? Double ?? 1
-        pause = defaults.object(forKey: "voice.pause") as? Double ?? 0.7
+        pause = defaults.object(forKey: "voice.pause") as? Double ?? 1.2
+        usesPhonon = defaults.bool(forKey: "voice.phonon")
         cutIn = defaults.object(forKey: "voice.cutIn") as? Bool ?? true
     }
 
@@ -34,6 +37,8 @@ final class VoiceSettings {
     }
     /// Kokoro's speed for the same setting: 1 is normal.
     var kokoroSpeed: Float { Float(rate / Self.normalRate) }
+    /// The voice and the recognizer, for the Settings row: "Heart · Phonon-2".
+    var summary: String { "\(voiceName) · \(usesPhonon && PhononTranscriber.downloaded ? "Phonon-2" : "Apple")" }
     var voiceName: String {
         if let kokoro = kokoroVoice { return KokoroVoice.voices.first { $0.id == kokoro }?.name ?? "Natural voice" }
         return voice?.name ?? "Automatic"

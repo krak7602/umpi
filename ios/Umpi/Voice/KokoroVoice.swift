@@ -9,7 +9,8 @@ actor KokoroVoice {
     static let voices: [(id: String, name: String, detail: String)] = [("af_heart", "Heart", "American English · natural voice")]
     static let prefix = "kokoro:"
 
-    enum State: Equatable, Sendable { case notReady, preparing, ready, failed(String) }
+    /// `downloading` carries the fraction done; `preparing` is loading the files already on the device.
+    enum State: Equatable, Sendable { case notReady, downloading(Double), preparing, ready, failed(String) }
     private(set) var state = State.notReady
     private var manager: KokoroAneManager?
     private var preparing: Task<Void, Error>?
@@ -30,9 +31,14 @@ actor KokoroVoice {
     func prepare() async throws {
         if manager != nil { return }
         if let preparing { return try await preparing.value }
-        state = .preparing
+        state = Self.downloaded ? .preparing : .downloading(0)
         let task = Task {
             let started = Date()
+            // The model files first, with progress for the settings screen; loading then finds them in place.
+            try await KokoroAneResourceDownloader.ensureModels(variant: .english, directory: Self.directory) { progress in
+                Task { await self.report(progress) }
+            }
+            state = .preparing
             let manager = KokoroAneManager(directory: Self.directory)
             try await manager.initialize(preloadVoices: Set(Self.voices.map(\.id)))
             self.manager = manager
@@ -42,6 +48,11 @@ actor KokoroVoice {
         preparing = task
         do { try await task.value; state = .ready; preparing = nil }
         catch { state = .failed(error.localizedDescription); preparing = nil; throw error }
+    }
+
+    private func report(_ progress: DownloadProgress) {
+        guard case .downloading = state, case .downloading = progress.phase else { return }
+        state = .downloading(min(1, max(0, progress.fractionCompleted)))
     }
 
     /// 24 kHz mono speech for `text`. `speed` 1 is normal.

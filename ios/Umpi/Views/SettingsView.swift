@@ -76,7 +76,7 @@ struct SettingsView: View {
             }
             Section {
                 NavigationLink { VoiceSettingsView() } label: {
-                    LabeledContent("Voice", value: VoiceSettings.shared.voiceName)
+                    LabeledContent("Voice", value: VoiceSettings.shared.summary)
                 }
             } header: { Text("Voice mode") } footer: {
                 Text("How Umpi sounds when you talk to it: the voice, its speed and pitch, and how long it waits before replying.")
