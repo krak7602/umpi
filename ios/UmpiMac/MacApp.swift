@@ -38,6 +38,8 @@ final class MacApp {
     var windowPaired = false
     /// Counts the times the window came back on screen; the chat is laid out afresh each time.
     var windowShows = 0
+    /// Voice mode shows in the main window's Chat, in place of the chat, started from there.
+    var mainTalking = false
     /// Shortcuts the system refused, such as one another app already uses.
     private(set) var refusedShortcuts: Set<ShortcutSettings.Action> = []
     private(set) var launchAtLogin = SMAppService.mainApp.status == .enabled
@@ -115,7 +117,18 @@ final class MacApp {
         mainWindow.show()
     }
 
-    func showPanel(_ mode: ChatPanelController.Mode) { panel.show(mode) }
+    /// One voice conversation at a time: voice mode in the panel ends the main window's.
+    func showPanel(_ mode: ChatPanelController.Mode) {
+        if mode == .voice { mainTalking = false }
+        panel.show(mode)
+    }
+
+    /// Voice mode in the main window, from its chat's waveform button; ends the panel's.
+    func talkInMain() {
+        if panel.state.mode == .voice { panel.state.mode = .chat }
+        section = .chat
+        mainTalking = true
+    }
 
     /// Command-N: the chat in the main window, ready to type.
     func newMessage() {

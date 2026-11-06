@@ -31,7 +31,10 @@ struct VoiceModeView: View {
 
             Spacer(minLength: 12)
             VoiceOrb(phase: conversation.phase, level: { [conversation] in conversation.level })
-                .frame(width: Self.orbSize, height: Self.orbSize)
+                // Full size where there is room; smaller in a short window, so the controls below always show.
+                .frame(minWidth: 120, maxWidth: Self.orbSize, minHeight: 120, maxHeight: Self.orbSize)
+                .aspectRatio(1, contentMode: .fit)
+                .layoutPriority(1)
                 .contentShape(Circle())
                 .onTapGesture { conversation.tapped() }
                 #if DEBUG

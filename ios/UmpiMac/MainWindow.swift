@@ -116,7 +116,8 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     private static let frameName = "UmpiMain"
 
     func windowWillClose(_ notification: Notification) {
-        // Only the menu bar item remains; the panel and the shortcuts keep working.
+        // Only the menu bar item remains; the panel and the shortcuts keep working. Voice mode ends with the window.
+        MacApp.shared.mainTalking = false
         NSApp.setActivationPolicy(.accessory)
     }
 }
@@ -181,11 +182,15 @@ struct MacRootView: View {
                 pairing
             }
         }
-        .environment(\.openVoiceMode) { app.showPanel(.voice) }
+        .environment(\.openVoiceMode) { app.talkInMain() }
         .onChange(of: store.isPaired) { _, paired in app.mainWindow.transition(paired: paired) }
         // The Work badge counts approvals; reading them needs no machine, so it is done whenever the window opens.
         .task { if store.isPaired { await t3.loadRequests(store) } }
-        .onChange(of: app.section) { _, _ in Task { await store.synchronize() } }
+        .onChange(of: app.section) { _, section in
+            // Voice mode listens only while it shows: leaving the Chat ends it.
+            if section != .chat { app.mainTalking = false }
+            Task { await store.synchronize() }
+        }
         .task {
             #if DEBUG
             // Test configuration only prefills the real, owner-confirmed pairing form.
@@ -229,7 +234,13 @@ struct MacRootView: View {
     @ViewBuilder private var detail: some View {
         Group {
             switch app.section {
-            case .chat: NavigationStack { ChatView(chat: app.chat) }.id("\(ObjectIdentifier(app.chat).hashValue)-\(app.windowShows)")
+            case .chat:
+                if app.mainTalking {
+                    // Voice mode in place of the chat; ending it shows the chat again, with the conversation in it.
+                    NavigationStack { VoiceModeView(onEnd: { app.mainTalking = false }) }
+                } else {
+                    NavigationStack { ChatView(chat: app.chat) }.id("\(ObjectIdentifier(app.chat).hashValue)-\(app.windowShows)")
+                }
             case .today: NavigationStack { TodayView() }
             case .work: NavigationStack { WorkView() }
             case .settings: NavigationStack { MacSettingsView() }
