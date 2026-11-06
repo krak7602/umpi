@@ -46,7 +46,9 @@ actor KokoroVoice {
             try await manager.initialize(preloadVoices: Set(Self.voices.map(\.id)))
             self.manager = manager
             UserDefaults.standard.set(true, forKey: "kokoro.downloaded")
-            voiceLog(String(format: "kokoro ready in %.1f s", Date().timeIntervalSince(started)))
+            let took = Date().timeIntervalSince(started)
+            voiceLog(String(format: "kokoro ready in %.1f s", took))
+            if took > 5 { UserDefaults.standard.set(took, forKey: "kokoro.prepareSeconds") }
         }
         preparing = task
         do { try await task.value; state = .ready; preparing = nil }

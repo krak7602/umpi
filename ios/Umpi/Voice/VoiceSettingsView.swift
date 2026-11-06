@@ -187,13 +187,16 @@ struct VoiceSettingsView: View {
     /// Uses Phonon-2: downloads and prepares it the first time.
     private func choosePhonon() {
         settings.usesPhonon = true
-        Task { try? await PhononTranscriber.shared.prepare() }
+        // Carries on if the owner leaves the app or locks the phone.
+        VoiceModelWarmup.prepare(kokoro: false, phonon: true)
     }
 
     /// Picks a natural voice: downloads it the first time, then plays the sample with it.
     private func chooseNatural(_ id: String) {
         settings.voiceIdentifier = KokoroVoice.prefix + id
+        VoiceModelWarmup.prepare(kokoro: true, phonon: false)
         Task {
+            // Joins the preparation just started, to play the sample once it is ready.
             try? await KokoroVoice.shared.prepare()
             if await KokoroVoice.shared.state == .ready { play() }
         }

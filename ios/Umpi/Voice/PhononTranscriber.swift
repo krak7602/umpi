@@ -43,7 +43,10 @@ actor PhononTranscriber {
             let manager = AsrManager(config: .default)
             try await manager.loadModels(models)
             self.manager = manager
-            voiceLog(String(format: "phonon ready in %.1f s", Date().timeIntervalSince(started)))
+            let took = Date().timeIntervalSince(started)
+            voiceLog(String(format: "phonon ready in %.1f s", took))
+            // How long a compile takes on this device, to show progress next time.
+            if took > 20 { UserDefaults.standard.set(took, forKey: "phonon.prepareSeconds") }
         }
         preparing = task
         do { try await task.value; state = .ready; preparing = nil }
