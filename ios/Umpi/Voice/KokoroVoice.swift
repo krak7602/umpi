@@ -47,7 +47,7 @@ actor KokoroVoice {
         }
         preparing = task
         do { try await task.value; state = .ready; preparing = nil }
-        catch { state = .failed(error.localizedDescription); preparing = nil; throw error }
+        catch { state = .failed(error.localizedDescription); preparing = nil; voiceLog("kokoro could not load: \(error.localizedDescription)"); throw error }
     }
 
     private func report(_ progress: DownloadProgress) {
