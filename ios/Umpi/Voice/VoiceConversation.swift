@@ -65,6 +65,7 @@ final class VoiceConversation {
         var heard = ""
         var done = false
         var spokeAnything = false
+        var loggedText = false
         var filter = SpokenFilter()
         var finished = false
         init(id: String) { self.id = id }
@@ -363,6 +364,7 @@ final class VoiceConversation {
                 if cutWhileSending { cutWhileSending = false; interrupted = (operation.id, ""); early.removeValue(forKey: operation.id); return }
                 let reply = Reply(id: operation.id)
                 self.reply = reply
+                voiceLog("sent; waiting for the reply (\(early[operation.id]?.count ?? 0) speech frames already here)")
                 for frame in early.removeValue(forKey: operation.id) ?? [] { apply(frame, to: reply) }
                 early.removeAll()
             } catch {
@@ -389,6 +391,7 @@ final class VoiceConversation {
             reply.part = part
         }
         if let text = frame.text {
+            if !reply.loggedText { reply.loggedText = true; voiceLog("reply: first words arrived") }
             // What Umpi shows in the chat is not read aloud.
             reply.pendingText += reply.filter.feed(text)
             if reply.filter.sawShown { showsInChat = true }
@@ -396,6 +399,7 @@ final class VoiceConversation {
         }
         if let tool = frame.working, phase != .speaking { phase = .working(Self.describe(tool)) }
         if frame.done == true {
+            voiceLog("reply: written in full (spoken so far: \(reply.spokeAnything))")
             reply.done = true
             reply.pendingText += reply.filter.feed("", end: true)
             flush(reply, all: true)
@@ -437,6 +441,7 @@ final class VoiceConversation {
 
     private func finishReply() {
         guard let reply, !reply.finished else { return }
+        voiceLog("reply finished (spoke anything: \(reply.spokeAnything)); listening")
         reply.finished = true
         self.reply = nil
         audio.replyEnded()
