@@ -117,11 +117,20 @@ final class NoteMarkupTests: XCTestCase {
     func testCommentsAreHiddenAndPlanMarksBecomeTags() {
         let blocks = MarkdownBlock.parse("- [target] 06:30 workout <!-- umpi-plan:routine -->\n- [ ] Buy oats <!--\nnote -->")
         guard case .list(_, _, let items) = blocks.first, items.count == 2, case .paragraph(let first) = items[0].blocks.first else { return XCTFail("\(blocks)") }
-        XCTAssertEqual(String(first.characters), "Target 06:30 workout")
+        XCTAssertEqual(items[0].mark, "Target", "the plan mark replaces the bullet")
+        XCTAssertEqual(String(first.characters), "06:30 workout")
+        XCTAssertNil(items[1].mark)
         XCTAssertEqual(items[1].line, 2, "line numbers still match the note")
+        guard case .paragraph(let plain) = MarkdownBlock.parse("[tentative] Lunch")[0] else { return XCTFail("paragraph") }
+        XCTAssertEqual(String(plain.characters), "Tentative Lunch", "outside a list the mark stays an inline tag")
         XCTAssertEqual(MarkdownBlock.withoutComments("a <!-- x\ny --> b\nc"), "a\n b\nc")
         guard case .list(_, _, let tasks) = MarkdownBlock.parse("## Tasks\n- [ ] \n- [ ] Real task\n- [x] ")[1] else { return XCTFail("tasks") }
         XCTAssertEqual(tasks.count, 1, "blank template items are not shown")
         XCTAssertEqual(tasks.first?.line, 3)
+        // With a plan marker in the note, comments are removed and the blank item loses its trailing space, so it no
+        // longer parses as a checkbox; it is still left out.
+        guard case .list(_, _, let marked) = MarkdownBlock.parse("## Tasks\n\n- [ ] \n\n- [ ] Ask <!-- umpi-plan:a -->")[1] else { return XCTFail("marked tasks") }
+        XCTAssertEqual(marked.count, 1)
+        XCTAssertEqual(marked.first?.checkbox, false)
     }
 }
