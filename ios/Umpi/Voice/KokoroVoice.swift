@@ -11,7 +11,10 @@ actor KokoroVoice {
 
     /// `downloading` carries the fraction done; `preparing` is loading the files already on the device.
     enum State: Equatable, Sendable { case notReady, downloading(Double), preparing, ready, failed(String) }
-    private(set) var state = State.notReady
+    private(set) var state = State.notReady {
+        didSet { published += 1; let state = state, number = published; Task { @MainActor in VoiceModelStatus.shared.update(kokoro: state, number: number) } }
+    }
+    private var published = 0
     private var manager: KokoroAneManager?
     private var preparing: Task<Void, Error>?
 

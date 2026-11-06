@@ -126,6 +126,7 @@ struct MacRootView: View {
     @Environment(MacApp.self) private var app
     @Environment(CompanionStore.self) private var store
     @Environment(T3CodeModel.self) private var t3
+    @State private var showModels = false
 
     var body: some View {
         @Bindable var app = app
@@ -145,12 +146,28 @@ struct MacRootView: View {
                     .navigationSplitViewColumnWidth(min: 170, ideal: 200, max: 280)
                     // The connection, quietly, only when it is down.
                     .safeAreaInset(edge: .bottom) {
-                        if app.chat.isOffline {
-                            Label("Not connected", systemImage: "wifi.slash")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 0) {
+                            // The voice models, the same way, while they download or prepare (such as after an update).
+                            if VoiceModelStatus.shared.showing {
+                                Button { showModels = true } label: {
+                                    Label { Text(VoiceModelStatus.shared.summary).monospacedDigit() } icon: { VoiceModelIcon() }
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .help("Voice models")
+                                .popover(isPresented: $showModels, arrowEdge: .trailing) { VoiceModelsPopover() }
                                 .padding(.horizontal, 16).padding(.vertical, 10)
+                            }
+                            if app.chat.isOffline {
+                                Label("Not connected", systemImage: "wifi.slash")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 16).padding(.vertical, 10)
+                            }
                         }
                     }
                 } detail: {

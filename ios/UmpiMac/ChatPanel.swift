@@ -139,6 +139,7 @@ struct ChatPanelView: View {
     let controller: ChatPanelController
     @Environment(MacApp.self) private var app
     @Environment(CompanionStore.self) private var store
+    @State private var showModels = false
 
     var body: some View {
         let state = controller.state
@@ -192,6 +193,12 @@ struct ChatPanelView: View {
                         .foregroundStyle(.secondary)
                         .help("Not connected")
                         .accessibilityLabel("Not connected")
+                }
+                if VoiceModelStatus.shared.showing {
+                    Button { showModels = true } label: { VoiceModelIcon().font(.system(size: 11, weight: .semibold)) }
+                        .buttonStyle(.plain)
+                        .help(VoiceModelStatus.shared.summary)
+                        .popover(isPresented: $showModels, arrowEdge: .bottom) { VoiceModelsPopover() }
                 }
             }
             Spacer()

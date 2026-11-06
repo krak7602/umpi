@@ -7,8 +7,10 @@ struct VoiceSettingsView: View {
     @State private var sample = AVSpeechSynthesizer()
     @State private var voices = VoiceCatalog.voices()
     @State private var personal = AVSpeechSynthesizer.personalVoiceAuthorizationStatus
-    @State private var kokoro = KokoroVoice.State.notReady
-    @State private var phonon = PhononTranscriber.State.notReady
+    /// The models' downloads and preparation, as they report them.
+    private let status = VoiceModelStatus.shared
+    private var kokoro: KokoroVoice.State { status.kokoro }
+    private var phonon: PhononTranscriber.State { status.phonon }
     @State private var natural = PCMPlayer()
     @Environment(\.dismiss) private var dismiss
     /// Shown as a sheet over voice mode, with a Done button; pushed from Settings, without one.
@@ -48,7 +50,7 @@ struct VoiceSettingsView: View {
                 }
                 if KokoroVoice.downloaded {
                     Button("Remove the natural voice from this \(ThisDevice.noun)", role: .destructive) {
-                        Task { await KokoroVoice.shared.remove(); kokoro = .notReady; if settings.kokoroVoice != nil { settings.voiceIdentifier = nil } }
+                        Task { await KokoroVoice.shared.remove(); if settings.kokoroVoice != nil { settings.voiceIdentifier = nil } }
                     }
                 }
             } header: { Text("Natural voice") } footer: {
@@ -96,7 +98,7 @@ struct VoiceSettingsView: View {
                 .allowsHitTesting(!Self.busy(phonon))
                 if PhononTranscriber.downloaded {
                     Button("Remove Phonon-2 from this \(ThisDevice.noun)", role: .destructive) {
-                        Task { await PhononTranscriber.shared.remove(); phonon = .notReady; settings.usesPhonon = false }
+                        Task { await PhononTranscriber.shared.remove(); settings.usesPhonon = false }
                     }
                 }
             } header: { Text("Recognition") } footer: {
@@ -123,15 +125,6 @@ struct VoiceSettingsView: View {
         // A voice downloaded in Settings appears without reopening this screen.
         .onReceive(NotificationCenter.default.publisher(for: AVSpeechSynthesizer.availableVoicesDidChangeNotification)) { _ in voices = VoiceCatalog.voices() }
         .onAppear { voices = VoiceCatalog.voices() }
-        .task { kokoro = await KokoroVoice.shared.state; phonon = await PhononTranscriber.shared.state }
-        // While a model downloads or prepares, its row follows along.
-        .task(id: Self.busy(kokoro) || Self.busy(phonon)) {
-            while Self.busy(kokoro) || Self.busy(phonon) {
-                try? await Task.sleep(for: .milliseconds(250))
-                kokoro = await KokoroVoice.shared.state
-                phonon = await PhononTranscriber.shared.state
-            }
-        }
         .onDisappear {
             sample.stopSpeaking(at: .immediate)
             natural.stop()
@@ -163,12 +156,8 @@ struct VoiceSettingsView: View {
         .contentShape(Rectangle())
     }
 
-    private static func progress(_ state: KokoroVoice.State) -> Double? {
-        switch state { case .downloading(let fraction): fraction; case .preparing: 1.5; default: nil }
-    }
-    private static func progress(_ state: PhononTranscriber.State) -> Double? {
-        switch state { case .downloading(let fraction): fraction; case .preparing: 1.5; default: nil }
-    }
+    private static func progress(_ state: KokoroVoice.State) -> Double? { VoiceModelStatus.fraction(state) }
+    private static func progress(_ state: PhononTranscriber.State) -> Double? { VoiceModelStatus.fraction(state) }
     private static func busy(_ state: KokoroVoice.State) -> Bool { progress(state) != nil }
     private static func busy(_ state: PhononTranscriber.State) -> Bool { progress(state) != nil }
     private static func percent(_ fraction: Double) -> String { "\(Int((fraction * 100).rounded(.down)))%" }
@@ -194,21 +183,15 @@ struct VoiceSettingsView: View {
     /// Uses Phonon-2: downloads and prepares it the first time.
     private func choosePhonon() {
         settings.usesPhonon = true
-        Task {
-            phonon = PhononTranscriber.downloaded ? .preparing : .downloading(0)
-            do { try await PhononTranscriber.shared.prepare() } catch {}
-            phonon = await PhononTranscriber.shared.state
-        }
+        Task { try? await PhononTranscriber.shared.prepare() }
     }
 
     /// Picks a natural voice: downloads it the first time, then plays the sample with it.
     private func chooseNatural(_ id: String) {
         settings.voiceIdentifier = KokoroVoice.prefix + id
         Task {
-            kokoro = KokoroVoice.downloaded ? .preparing : .downloading(0)
-            do { try await KokoroVoice.shared.prepare() } catch {}
-            kokoro = await KokoroVoice.shared.state
-            if kokoro == .ready { play() }
+            try? await KokoroVoice.shared.prepare()
+            if await KokoroVoice.shared.state == .ready { play() }
         }
     }
 

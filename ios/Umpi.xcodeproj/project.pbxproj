@@ -93,6 +93,7 @@
 		A08BEA35A0A1620132A9E19E /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = C5738DEF5B668632B1605466 /* FluidAudio */; };
 		A0E15DEC9FB0CB11E62F638A /* PhononTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = F829182872D62A76A0600218 /* PhononTranscriber.swift */; };
 		A138BFEE0275119265871D59 /* ChatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 309A00142CD81859386AD711 /* ChatTests.swift */; };
+		A2047E09A6DF3115E05AB4E0 /* VoiceModelStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50748873E3C95507B282A26E /* VoiceModelStatus.swift */; };
 		A2E3A12BB2CF74D756AF8B34 /* knock.caf in Resources */ = {isa = PBXBuildFile; fileRef = C1917C675F6D8B3F143CBDD7 /* knock.caf */; };
 		A5A4E918E6A23F295C1A8B5C /* knock-gentle.caf in Resources */ = {isa = PBXBuildFile; fileRef = 8E0ACFCC605F137407E0B52E /* knock-gentle.caf */; };
 		A6804E4451D7E7F0E05317FD /* SmartTurn-README.md in Resources */ = {isa = PBXBuildFile; fileRef = 40EC6E9C58CE4365CF3DA2EC /* SmartTurn-README.md */; };
@@ -131,6 +132,7 @@
 		EE06FB69DE12A46538C3A015 /* MermaidView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24646F2B743B59636E323FED /* MermaidView.swift */; };
 		F05A425723A1940DD55B21AB /* highlight.min.js in Resources */ = {isa = PBXBuildFile; fileRef = 8FDAA4ADB75F6C9CCDD06F98 /* highlight.min.js */; };
 		F12A0C1F25530247B442FD27 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09F78D13F600AC1683D4AF01 /* AppDelegate.swift */; };
+		F244816EC2A664635DA7A039 /* VoiceModelStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50748873E3C95507B282A26E /* VoiceModelStatus.swift */; };
 		F2EAB6990EF080A0AC071D51 /* VoiceAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = C672D512910D09D5145DD72D /* VoiceAudio.swift */; };
 		F9914674CEDF327166DB77E1 /* VoiceModeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8E065F52FC8005FCF057C38 /* VoiceModeView.swift */; };
 		FCE345FBCA4731BC372CBFFE /* UmpiApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 691633D0AABEF045AC98D419 /* UmpiApp.swift */; };
@@ -197,6 +199,7 @@
 		309A00142CD81859386AD711 /* ChatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatTests.swift; sourceTree = "<group>"; };
 		3D406A11F29877842AFB10C1 /* pele.global.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = pele.global.js; sourceTree = "<group>"; };
 		40EC6E9C58CE4365CF3DA2EC /* SmartTurn-README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = "SmartTurn-README.md"; sourceTree = "<group>"; };
+		50748873E3C95507B282A26E /* VoiceModelStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceModelStatus.swift; sourceTree = "<group>"; };
 		5130E3C64EA03895D3F8EA5A /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		535AA11B25D67203F553D306 /* Shortcut.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shortcut.swift; sourceTree = "<group>"; };
 		561433B418D0D1EEC60CAB97 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -406,6 +409,7 @@
 				C672D512910D09D5145DD72D /* VoiceAudio.swift */,
 				7BEF7DD0A6FE7C8669EBED8D /* VoiceConversation.swift */,
 				71C01667C09E6491D57E0728 /* VoiceLog.swift */,
+				50748873E3C95507B282A26E /* VoiceModelStatus.swift */,
 				FD66C4CA0F5C9E60B9C5CB81 /* VoiceModelWarmup.swift */,
 				E8E065F52FC8005FCF057C38 /* VoiceModeView.swift */,
 				9BB224BE93A28D067E6D6D52 /* VoiceSettings.swift */,
@@ -783,6 +787,7 @@
 				2193C73629817C31712BF65C /* VoiceConversation.swift in Sources */,
 				3210D4BCD838A9D3B49CB6C1 /* VoiceLog.swift in Sources */,
 				F9914674CEDF327166DB77E1 /* VoiceModeView.swift in Sources */,
+				F244816EC2A664635DA7A039 /* VoiceModelStatus.swift in Sources */,
 				A7F570597D962381F81B9D55 /* VoiceModelWarmup.swift in Sources */,
 				CE8E5C1D5E891209F354AAF2 /* VoiceSettings.swift in Sources */,
 				ED5C767B2137F1A4F30C93A9 /* VoiceSettingsView.swift in Sources */,
@@ -843,6 +848,7 @@
 				0477A64AE016CD37290B90E4 /* VoiceConversation.swift in Sources */,
 				719726320CBA2467168990DB /* VoiceLog.swift in Sources */,
 				E550BCFC4F6CEB55B67A8FAE /* VoiceModeView.swift in Sources */,
+				A2047E09A6DF3115E05AB4E0 /* VoiceModelStatus.swift in Sources */,
 				103321E58FD2B4C4A57731AF /* VoiceModelWarmup.swift in Sources */,
 				E2C50BB1C9D27E8A7473CC6E /* VoiceSettings.swift in Sources */,
 				9281883974B3C83B1051F978 /* VoiceSettingsView.swift in Sources */,
