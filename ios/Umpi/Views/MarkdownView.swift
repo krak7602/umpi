@@ -158,6 +158,14 @@ indirect enum MarkdownBlock: Equatable {
     }
 
     static let planMarks: Set<String> = ["target", "tentative", "confirmed"]
+    /// Each plan mark's colour: a target is the plan's aim, tentative may move, confirmed is fixed.
+    static func planColor(_ mark: String) -> Color {
+        switch mark.lowercased() {
+        case "tentative": .orange
+        case "confirmed": .green
+        default: .blue
+        }
+    }
     private static let planMarkFont = Font.caption.weight(.semibold)
 
     static func inline(_ children: some Sequence<Markup>) -> AttributedString {
@@ -199,7 +207,7 @@ indirect enum MarkdownBlock: Equatable {
         if let mark = rest.prefixMatch(of: /\[(target|tentative|confirmed)\][ \t]*/) {
             var tag = AttributedString(String(mark.1).capitalized)
             tag.font = planMarkFont
-            tag.foregroundColor = .secondary
+            tag.foregroundColor = planColor(String(mark.1))
             tag.inlinePresentationIntent = .code
             result += tag + AttributedString(" ")
             rest = rest[mark.range.upperBound...]
@@ -330,11 +338,12 @@ private struct MarkdownBlockView: View {
         }
     }
     private func planTag(_ text: String) -> some View {
-        Text(text)
+        let color = MarkdownBlock.planColor(text)
+        return Text(text)
             .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(onOwnerTint ? Color.white : color)
             .padding(.horizontal, 7).padding(.vertical, 2)
-            .background(onOwnerTint ? Color.white.opacity(0.22) : Color(.tertiarySystemFill), in: Capsule())
+            .background(onOwnerTint ? Color.white.opacity(0.22) : color.opacity(0.16), in: Capsule())
     }
     private func checkmark(_ checked: Bool) -> some View {
         Group {
