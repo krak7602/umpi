@@ -36,6 +36,8 @@ final class MacApp {
     /// Whether the main window shows the paired layout (sidebar) or the pairing form. It follows `store.isPaired`
     /// only after the window has been resized for the new layout.
     var windowPaired = false
+    /// Counts the times the window came back on screen; the chat is laid out afresh each time.
+    var windowShows = 0
     /// Shortcuts the system refused, such as one another app already uses.
     private(set) var refusedShortcuts: Set<ShortcutSettings.Action> = []
     private(set) var launchAtLogin = SMAppService.mainApp.status == .enabled

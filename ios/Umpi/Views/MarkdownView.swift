@@ -102,10 +102,10 @@ indirect enum MarkdownBlock: Equatable {
             return text.characters.allSatisfy(\.isWhitespace) ? nil : .paragraph(text)
         // Empty items, such as a template's blank "- [ ]", are left out; the note itself keeps them.
         case let list as UnorderedList:
-            let items = Array(list.listItems.map(item)).filter { !$0.blocks.isEmpty }
+            let items = Array(list.listItems.map(item)).filter { !$0.isEmpty }
             return items.isEmpty ? nil : .list(ordered: false, start: 1, items: items)
         case let list as OrderedList:
-            let items = Array(list.listItems.map(item)).filter { !$0.blocks.isEmpty }
+            let items = Array(list.listItems.map(item)).filter { !$0.isEmpty }
             return items.isEmpty ? nil : .list(ordered: true, start: Int(list.startIndex), items: items)
         case let quote as BlockQuote: return callout(quote) ?? .quote(quote.children.compactMap(block))
         case let code as CodeBlock:
@@ -144,8 +144,21 @@ indirect enum MarkdownBlock: Equatable {
     }
 
     private static func item(_ item: ListItem) -> MarkdownListItem {
-        MarkdownListItem(checkbox: item.checkbox.map { $0 == .checked }, blocks: item.children.compactMap(block), line: item.range?.lowerBound.line)
+        var blocks = item.children.compactMap(block)
+        var mark: String?
+        // A plan mark ([target], [tentative], [confirmed]) at the start of a plain item replaces its bullet.
+        if item.checkbox == nil, case .paragraph(let text)? = blocks.first, let first = text.runs.first, first.font == planMarkFont,
+           case let word = String(text[first.range].characters), planMarks.contains(word.lowercased()) {
+            mark = word
+            var rest = AttributedString(text[first.range.upperBound...])
+            while rest.characters.first == " " { rest.characters.removeFirst() }
+            blocks[0] = .paragraph(rest)
+        }
+        return MarkdownListItem(checkbox: item.checkbox.map { $0 == .checked }, blocks: blocks, line: item.range?.lowerBound.line, mark: mark)
     }
+
+    static let planMarks: Set<String> = ["target", "tentative", "confirmed"]
+    private static let planMarkFont = Font.caption.weight(.semibold)
 
     static func inline(_ children: some Sequence<Markup>) -> AttributedString {
         var result = AttributedString()
@@ -185,7 +198,7 @@ indirect enum MarkdownBlock: Equatable {
         var rest = Substring(string)
         if let mark = rest.prefixMatch(of: /\[(target|tentative|confirmed)\][ \t]*/) {
             var tag = AttributedString(String(mark.1).capitalized)
-            tag.font = .caption.weight(.semibold)
+            tag.font = planMarkFont
             tag.foregroundColor = .secondary
             tag.inlinePresentationIntent = .code
             result += tag + AttributedString(" ")
@@ -222,6 +235,15 @@ struct MarkdownListItem: Equatable {
     var blocks: [MarkdownBlock]
     /// The item's first line in the source, from 1, so a checkbox can be ticked in the note it came from.
     var line: Int? = nil
+    /// Umpi's plan mark, such as "Target", shown as a tag in place of the bullet.
+    var mark: String? = nil
+
+    /// Nothing to show: no text, or only a bare checkbox such as a template's blank "- [ ]".
+    var isEmpty: Bool {
+        if blocks.isEmpty { return mark == nil }
+        guard blocks.count == 1, case .paragraph(let text) = blocks[0] else { return false }
+        return String(text.characters).trimmingCharacters(in: .whitespaces).wholeMatch(of: /\[[ xX]?\]/) != nil
+    }
 }
 
 /// Set by a view that can tick checkboxes in its source note, such as Today: (source line from 1, new state).
@@ -243,10 +265,20 @@ private struct MarkdownBlockView: View {
         case .paragraph(let text):
             SwiftUI.Text(markdown: text).lineSpacing(3).fixedSize(horizontal: false, vertical: true).inlineCodePills(onTint: onOwnerTint)
         case .list(let ordered, let start, let items):
+            let marked = !ordered && items.contains { $0.mark != nil }
+            let widest = items.compactMap(\.mark).max { $0.count < $1.count } ?? ""
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        marker(ordered: ordered, number: start + index, checkbox: item.checkbox, line: item.line)
+                        if marked && item.checkbox == nil {
+                            // Plan tags stand in for bullets, each as wide as the list's widest, so the text lines up.
+                            ZStack(alignment: .leading) {
+                                planTag(widest).hidden()
+                                if let mark = item.mark { planTag(mark) } else { Text("•").foregroundStyle(.secondary).frame(minWidth: 10) }
+                            }
+                        } else {
+                            marker(ordered: ordered, number: start + index, checkbox: item.checkbox, line: item.line)
+                        }
                         VStack(alignment: .leading, spacing: 4) {
                             ForEach(Array(item.blocks.enumerated()), id: \.offset) { _, inner in MarkdownBlockView(block: inner, onOwnerTint: onOwnerTint) }
                         }
@@ -296,6 +328,13 @@ private struct MarkdownBlockView: View {
         } else {
             Text("•").foregroundStyle(.secondary).frame(minWidth: 10)
         }
+    }
+    private func planTag(_ text: String) -> some View {
+        Text(text)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 7).padding(.vertical, 2)
+            .background(onOwnerTint ? Color.white.opacity(0.22) : Color(.tertiarySystemFill), in: Capsule())
     }
     private func checkmark(_ checked: Bool) -> some View {
         Group {
@@ -385,10 +424,17 @@ extension SwiftUI.Text {
     /// Text from parsed Markdown, with inline code marked for `inlineCodePills()`.
     init(markdown: AttributedString) {
         var result = SwiftUI.Text(verbatim: "")
-        for run in markdown.runs {
+        let runs = Array(markdown.runs)
+        for (index, run) in runs.enumerated() {
             let piece = SwiftUI.Text(AttributedString(markdown[run.range]))
             let isCode = run.inlinePresentationIntent?.contains(.code) == true
-            result = SwiftUI.Text("\(result)\(isCode ? piece.customAttribute(InlineCodeAttribute()) : piece)")
+            // A thin space on each side keeps the pill, drawn beyond the code's glyphs, clear of the text around it.
+            let gap = SwiftUI.Text(verbatim: "\u{2009}")
+            if isCode {
+                result = SwiftUI.Text("\(result)\(gap)\(piece.customAttribute(InlineCodeAttribute()))\(index < runs.count - 1 ? gap : SwiftUI.Text(verbatim: ""))")
+            } else {
+                result = SwiftUI.Text("\(result)\(piece)")
+            }
         }
         self = result
     }

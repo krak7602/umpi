@@ -17,6 +17,9 @@ final class MainWindowController: NSObject, NSWindowDelegate {
             window = make()
             fit(paired: app.windowPaired)
         }
+        // A chat laid out while the window was off screen can keep stale text sizes (lines clipped inside bubbles), so
+        // it is built afresh whenever the window comes back, as switching sections does.
+        if window?.isVisible != true { MacApp.shared.windowShows += 1 }
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate()
     }
@@ -209,7 +212,7 @@ struct MacRootView: View {
     @ViewBuilder private var detail: some View {
         Group {
             switch app.section {
-            case .chat: NavigationStack { ChatView(chat: app.chat) }.id(ObjectIdentifier(app.chat))
+            case .chat: NavigationStack { ChatView(chat: app.chat) }.id("\(ObjectIdentifier(app.chat).hashValue)-\(app.windowShows)")
             case .today: NavigationStack { TodayView() }
             case .work: NavigationStack { WorkView() }
             case .settings: NavigationStack { MacSettingsView() }
