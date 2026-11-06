@@ -8,6 +8,7 @@ struct VoiceSettingsView: View {
     @State private var voices = VoiceCatalog.voices()
     @State private var personal = AVSpeechSynthesizer.personalVoiceAuthorizationStatus
     @State private var kokoro = KokoroVoice.State.notReady
+    @State private var phonon = PhononTranscriber.State.notReady
     @State private var natural = PCMPlayer()
     @Environment(\.dismiss) private var dismiss
     /// Shown as a sheet over voice mode, with a Done button; pushed from Settings, without one.
@@ -39,11 +40,11 @@ struct VoiceSettingsView: View {
             Section {
                 ForEach(KokoroVoice.voices, id: \.id) { voice in
                     Button { chooseNatural(voice.id) } label: {
-                        row(name: voice.name, detail: naturalDetail(voice.detail), selected: settings.kokoroVoice == voice.id)
+                        row(name: voice.name, detail: naturalDetail(voice.detail), selected: settings.kokoroVoice == voice.id, progress: Self.progress(kokoro))
                     }
                     .tint(.primary)
                     .shapedButton()
-                    .disabled(kokoro == .preparing)
+                    .allowsHitTesting(!Self.busy(kokoro))
                 }
                 if KokoroVoice.downloaded {
                     Button("Remove the natural voice from this \(ThisDevice.noun)", role: .destructive) {
@@ -82,13 +83,34 @@ struct VoiceSettingsView: View {
             } footer: { Text("Set up a Personal Voice in \(Self.settingsApp) › Accessibility › Personal Voice, then allow Umpi to use it.") }
 
             Section {
+                Button { settings.usesPhonon = false } label: {
+                    row(name: "Apple", detail: "Built in", selected: !settings.usesPhonon)
+                }
+                .tint(.primary)
+                .shapedButton()
+                Button { choosePhonon() } label: {
+                    row(name: "Phonon-2", detail: phononDetail, selected: settings.usesPhonon, progress: Self.progress(phonon))
+                }
+                .tint(.primary)
+                .shapedButton()
+                .allowsHitTesting(!Self.busy(phonon))
+                if PhononTranscriber.downloaded {
+                    Button("Remove Phonon-2 from this \(ThisDevice.noun)", role: .destructive) {
+                        Task { await PhononTranscriber.shared.remove(); phonon = .notReady; settings.usesPhonon = false }
+                    }
+                }
+            } header: { Text("Recognition") } footer: {
+                Text("Phonon-2 is an open speech model that writes out what you said far more accurately, on this \(ThisDevice.noun); nothing is sent anywhere. English only. Its files download once, and the first start prepares it for a few minutes; until then, Apple's recognizer is used.")
+            }
+
+            Section {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack { Text("Wait before replying"); Spacer(); Text(String(format: "%.1f s", settings.pause)).monospacedDigit().foregroundStyle(.secondary) }
-                    Slider(value: $settings.pause, in: 0.4...1.6, step: 0.1) { Text("Wait before replying") }
+                    Slider(value: $settings.pause, in: 0.6...2.5, step: 0.1) { Text("Wait before replying") }
                 }
                 Toggle("Cut in by talking", isOn: $settings.cutIn)
             } header: { Text("Conversation") } footer: {
-                Text("How long you can pause before Umpi takes your turn as finished. With cutting in on, talking over Umpi stops it.")
+                Text("How long you can pause before Umpi takes your turn as finished. When your words trail off (\u{201C}and…\u{201D}, \u{201C}so…\u{201D}), it waits longer, at least 2.5 s. With cutting in on, talking over Umpi stops it.")
             }
         }
         #if os(macOS)
@@ -101,7 +123,15 @@ struct VoiceSettingsView: View {
         // A voice downloaded in Settings appears without reopening this screen.
         .onReceive(NotificationCenter.default.publisher(for: AVSpeechSynthesizer.availableVoicesDidChangeNotification)) { _ in voices = VoiceCatalog.voices() }
         .onAppear { voices = VoiceCatalog.voices() }
-        .task { kokoro = await KokoroVoice.shared.state }
+        .task { kokoro = await KokoroVoice.shared.state; phonon = await PhononTranscriber.shared.state }
+        // While a model downloads or prepares, its row follows along.
+        .task(id: Self.busy(kokoro) || Self.busy(phonon)) {
+            while Self.busy(kokoro) || Self.busy(phonon) {
+                try? await Task.sleep(for: .milliseconds(250))
+                kokoro = await KokoroVoice.shared.state
+                phonon = await PhononTranscriber.shared.state
+            }
+        }
         .onDisappear {
             sample.stopSpeaking(at: .immediate)
             natural.stop()
@@ -118,23 +148,56 @@ struct VoiceSettingsView: View {
     #endif
     static let sampleText = "Hi, I'm Umpi. This is how I'll sound when we talk."
 
-    private func row(name: String, detail: String, selected: Bool) -> some View {
+    /// A choice; while its model downloads, a ring fills in place of the checkmark (`progress` nil is not loading, a
+    /// fraction is downloading, and 1.5 is preparing the files already on the device).
+    private func row(name: String, detail: String, selected: Bool, progress: Double? = nil) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(name).foregroundStyle(.primary)
-                Text(detail).font(.caption).foregroundStyle(.secondary)
+                Text(detail).font(.caption).foregroundStyle(.secondary).monospacedDigit().contentTransition(.numericText())
             }
             Spacer()
-            if selected { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
+            if let progress { DownloadRing(fraction: progress > 1 ? nil : progress) }
+            else if selected { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
         }
         .contentShape(Rectangle())
     }
 
+    private static func progress(_ state: KokoroVoice.State) -> Double? {
+        switch state { case .downloading(let fraction): fraction; case .preparing: 1.5; default: nil }
+    }
+    private static func progress(_ state: PhononTranscriber.State) -> Double? {
+        switch state { case .downloading(let fraction): fraction; case .preparing: 1.5; default: nil }
+    }
+    private static func busy(_ state: KokoroVoice.State) -> Bool { progress(state) != nil }
+    private static func busy(_ state: PhononTranscriber.State) -> Bool { progress(state) != nil }
+    private static func percent(_ fraction: Double) -> String { "\(Int((fraction * 100).rounded(.down)))%" }
+
     private func naturalDetail(_ detail: String) -> String {
         switch kokoro {
-        case .preparing: return KokoroVoice.downloaded ? "Getting ready…" : "Downloading…"
+        case .downloading(let fraction): return "Downloading… \(Self.percent(fraction))"
+        case .preparing: return "Getting ready…"
         case .failed(let message): return "Could not load: \(message)"
         default: return KokoroVoice.downloaded ? detail : "\(detail) · tap to download"
+        }
+    }
+
+    private var phononDetail: String {
+        switch phonon {
+        case .downloading(let fraction): return "Downloading… \(Self.percent(fraction)) of about 360 MB"
+        case .preparing: return "Preparing… a few minutes the first time"
+        case .failed(let message): return "Could not load: \(message)"
+        default: return PhononTranscriber.downloaded ? "More accurate · English" : "More accurate · English · tap to download (about 360 MB)"
+        }
+    }
+
+    /// Uses Phonon-2: downloads and prepares it the first time.
+    private func choosePhonon() {
+        settings.usesPhonon = true
+        Task {
+            phonon = PhononTranscriber.downloaded ? .preparing : .downloading(0)
+            do { try await PhononTranscriber.shared.prepare() } catch {}
+            phonon = await PhononTranscriber.shared.state
         }
     }
 
@@ -142,7 +205,7 @@ struct VoiceSettingsView: View {
     private func chooseNatural(_ id: String) {
         settings.voiceIdentifier = KokoroVoice.prefix + id
         Task {
-            kokoro = .preparing
+            kokoro = KokoroVoice.downloaded ? .preparing : .downloading(0)
             do { try await KokoroVoice.shared.prepare() } catch {}
             kokoro = await KokoroVoice.shared.state
             if kokoro == .ready { play() }
@@ -198,4 +261,41 @@ final class PCMPlayer {
     }
 
     func stop() { player.stop() }
+}
+
+/// A download's progress: a blue ring whose inside fills clockwise as a pie, up to the ring. Without a fraction
+/// (preparing files already downloaded), the full pie breathes.
+struct DownloadRing: View {
+    var fraction: Double?
+    @State private var breathing = false
+
+    var body: some View {
+        ZStack {
+            // A solid ring, and the pie filling right up to it.
+            Pie(fraction: fraction ?? 1).fill(Color.accentColor)
+                .opacity(fraction == nil && breathing ? 0.35 : 1)
+            Circle().strokeBorder(Color.accentColor, lineWidth: 1.5)
+        }
+        .frame(width: 20, height: 20)
+        .animation(.linear(duration: 0.25), value: fraction)
+        .animation(fraction == nil ? .easeInOut(duration: 0.9).repeatForever() : .default, value: breathing)
+        .onAppear { breathing = true }
+        .accessibilityElement()
+        .accessibilityLabel(fraction.map { "Downloading, \(Int($0 * 100)) percent" } ?? "Preparing")
+    }
+
+    private struct Pie: Shape {
+        var fraction: Double
+        var animatableData: Double { get { fraction } set { fraction = newValue } }
+        func path(in rect: CGRect) -> Path {
+            var path = Path()
+            guard fraction > 0 else { return path }
+            let center = CGPoint(x: rect.midX, y: rect.midY)
+            path.move(to: center)
+            path.addArc(center: center, radius: min(rect.width, rect.height) / 2, startAngle: .degrees(-90),
+                        endAngle: .degrees(-90 + 360 * min(1, fraction)), clockwise: false)
+            path.closeSubpath()
+            return path
+        }
+    }
 }

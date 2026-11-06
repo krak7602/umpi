@@ -3,6 +3,17 @@ import XCTest
 @testable import Umpi
 
 final class VoiceTests: XCTestCase {
+    func testTurnWaitsLongerWhenWordsTrailOff() {
+        XCTAssertEqual(VoiceAudio.quietNeeded(after: "Remind me at six.", pause: 1.2), 1.2)
+        XCTAssertEqual(VoiceAudio.quietNeeded(after: "What time is it?", pause: 1.2), 1.2)
+        XCTAssertEqual(VoiceAudio.quietNeeded(after: "Add buy milk to my list", pause: 1.2), 1.2)
+        XCTAssertEqual(VoiceAudio.quietNeeded(after: "Add buy milk and", pause: 1.2), 2.5)
+        XCTAssertEqual(VoiceAudio.quietNeeded(after: "I was thinking, um", pause: 1.2), 2.5)
+        XCTAssertEqual(VoiceAudio.quietNeeded(after: "So the thing is,", pause: 1.2), 2.5)
+        XCTAssertEqual(VoiceAudio.quietNeeded(after: "Because", pause: 1.6), 3.2, "twice the pause when that is longer")
+        XCTAssertEqual(VoiceAudio.quietNeeded(after: "", pause: 1.2), 1.2)
+    }
+
     func testSpeaksWholeSentencesAndKeepsTheRest() {
         let (first, rest) = VoiceConversation.sentences("It's sunny. Take a jacket for tonight, though. It might", all: false)
         XCTAssertEqual(first, ["It's sunny.", "Take a jacket for tonight, though."])
