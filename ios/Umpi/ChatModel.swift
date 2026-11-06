@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 
 /// One entry of the owner's shared conversation, as the coordinator's chat log returns it.
 struct ChatEntry: Codable, Equatable, Identifiable, Sendable {
@@ -171,6 +172,19 @@ final class ChatModel {
             task.resume()
             isLive = true
             await refresh(store)
+            // A connection can die without closing (the Mac sleeps, the network changes), leaving the socket waiting
+            // for ever: a ping that gets no answer closes it, and the loop connects again and reads what was missed.
+            let heartbeat = Task { [weak task] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(25))
+                    guard let task, !Task.isCancelled else { return }
+                    if await !ChatModel.ping(task, within: 10) {
+                        ChatModel.log.notice("chat socket: no answer to a ping; connecting again")
+                        task.cancel(with: .goingAway, reason: nil)
+                        return
+                    }
+                }
+            }
             do {
                 while !Task.isCancelled {
                     let message = try await task.receive()
@@ -183,7 +197,9 @@ final class ChatModel {
                 }
             } catch {
                 // Closed, offline, or revoked: wait and reconnect while the chat is open.
+                ChatModel.log.notice("chat socket closed (\(error.localizedDescription, privacy: .public)); connecting again in \(delay) s")
             }
+            heartbeat.cancel()
             isLive = false
             task.cancel(with: .goingAway, reason: nil)
             try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
@@ -196,6 +212,24 @@ final class ChatModel {
         isOffline = false
     }
     private struct Change: Decodable { var type: String; var latest: Int }
+
+    private static let log = Logger(subsystem: "umpi.chat", category: "socket")
+
+    /// Closes the socket so that a new one opens and reads what was missed, such as after the Mac wakes.
+    func reconnect() { socket?.cancel(with: .goingAway, reason: nil) }
+
+    /// Whether the coordinator answers a ping within `seconds`.
+    nonisolated private static func ping(_ task: URLSessionWebSocketTask, within seconds: Double) async -> Bool {
+        let answered = OSAllocatedUnfairLock(initialState: false)
+        return await withCheckedContinuation { continuation in
+            // Whichever comes first, the answer or the time limit, resumes it.
+            let finish: @Sendable (Bool) -> Void = { ok in
+                if answered.withLock({ done in defer { done = true }; return !done }) { continuation.resume(returning: ok) }
+            }
+            task.sendPing { error in finish(error == nil) }
+            DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { finish(false) }
+        }
+    }
 
     private func settleOffline() {
         offlineTimer?.cancel()

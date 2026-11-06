@@ -20,6 +20,8 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         // A chat laid out while the window was off screen can keep stale text sizes (lines clipped inside bubbles), so
         // it is built afresh whenever the window comes back, as switching sections does.
         if window?.isVisible != true { MacApp.shared.windowShows += 1 }
+        // Reads anything new, in case the socket missed it.
+        Task { await MacApp.shared.chat.refresh(MacApp.shared.store) }
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate()
     }
