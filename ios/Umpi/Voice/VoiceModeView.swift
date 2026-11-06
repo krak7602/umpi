@@ -10,6 +10,8 @@ struct VoiceModeView: View {
     @State private var showSettings = false
     /// Ends voice mode where it is not presented over the chat, such as in the Mac's floating panel.
     var onEnd: (() -> Void)? = nil
+    /// The settings button goes in the window's toolbar, beside its title, rather than in a row of its own.
+    var settingsInToolbar = false
     #if os(macOS)
     /// Keeps the display awake while voice mode shows.
     @State private var awake: NSObjectProtocol?
@@ -20,14 +22,16 @@ struct VoiceModeView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Spacer()
-                Button { showSettings = true } label: { Image(systemName: "slider.horizontal.3").font(.system(size: 17, weight: .semibold)).frame(width: 44, height: 44) }
-                    .shapedButton()
-                    .accessibilityLabel("Voice settings")
+            if !settingsInToolbar {
+                HStack {
+                    Spacer()
+                    Button { showSettings = true } label: { Image(systemName: "slider.horizontal.3").font(.system(size: 17, weight: .semibold)).frame(width: 44, height: 44) }
+                        .shapedButton()
+                        .accessibilityLabel("Voice settings")
+                }
+                .tint(.primary)
+                .padding(.horizontal, 8)
             }
-            .tint(.primary)
-            .padding(.horizontal, 8)
 
             Spacer(minLength: 12)
             VoiceOrb(phase: conversation.phase, level: { [conversation] in conversation.level })
@@ -82,6 +86,14 @@ struct VoiceModeView: View {
             .padding(.bottom, 24)
         }
         .background(Color(.systemBackground).ignoresSafeArea())
+        .toolbar {
+            if settingsInToolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { showSettings = true } label: { Label("Voice settings", systemImage: "slider.horizontal.3") }
+                        .help("Voice settings")
+                }
+            }
+        }
         .task { await conversation.start(store) }
         #if os(iOS)
         .onAppear { UIApplication.shared.isIdleTimerDisabled = true }

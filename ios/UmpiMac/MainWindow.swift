@@ -239,7 +239,7 @@ struct MacRootView: View {
             case .chat:
                 if app.mainTalking {
                     // Voice mode in place of the chat; ending it shows the chat again, with the conversation in it.
-                    NavigationStack { VoiceModeView(onEnd: { app.mainTalking = false }) }
+                    NavigationStack { VoiceModeView(onEnd: { app.mainTalking = false }, settingsInToolbar: true) }
                 } else {
                     NavigationStack { ChatView(chat: app.chat) }.id("\(ObjectIdentifier(app.chat).hashValue)-\(app.windowShows)")
                 }
