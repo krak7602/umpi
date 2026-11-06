@@ -68,7 +68,12 @@ enum VoiceModelWarmup {
             Task {
                 let kokoroStart = Date()
                 var phononStart: Date?
+                var lastConditions = ""
                 while !Task.isCancelled {
+                    #if os(iOS)
+                    let now = conditions().replacingOccurrences(of: #" \d+%$"#, with: "", options: .regularExpression)
+                    if now != lastConditions { if !lastConditions.isEmpty { voiceLog("voice models: now \(now)") }; lastConditions = now }
+                    #endif
                     let status = VoiceModelStatus.shared
                     if phonon, phononStart == nil, status.phonon == .preparing { phononStart = Date() }
                     let (fraction, detail) = progress(kokoro: kokoro ? status.kokoro : nil, phonon: phonon ? status.phonon : nil,
@@ -129,6 +134,18 @@ enum VoiceModelWarmup {
     }
 
     #if os(iOS)
+    /// What can make iOS stop background work, for the log: whether the app is in front, the phone locked, its heat,
+    /// Low Power Mode, and the battery.
+    static func conditions() -> String {
+        let application = UIApplication.shared, device = UIDevice.current
+        device.isBatteryMonitoringEnabled = true
+        let state = switch application.applicationState { case .active: "in front"; case .inactive: "inactive"; default: "in background" }
+        let heat = switch ProcessInfo.processInfo.thermalState { case .nominal: "cool"; case .fair: "warm"; case .serious: "hot"; default: "critical heat" }
+        let battery = switch device.batteryState { case .charging: "charging"; case .full: "full"; case .unplugged: "on battery"; default: "battery unknown" }
+        return "\(state), \(application.isProtectedDataAvailable ? "unlocked" : "locked"), \(heat), "
+            + "\(ProcessInfo.processInfo.isLowPowerModeEnabled ? "Low Power Mode" : "normal power"), \(battery) \(Int(device.batteryLevel * 100))%"
+    }
+
     /// Starts the work as a continued processing task, which iOS keeps running in the background with its progress
     /// shown; false when iOS will not start one now.
     @available(iOS 26.0, *)
@@ -152,14 +169,19 @@ enum VoiceModelWarmup {
                 }
                 // iOS can stop it (low power, the owner swipes it away). The compile itself carries on in the system,
                 // and what is left runs again the next time the app opens.
+                let started = Date()
                 task.expirationHandler = {
-                    voiceLog(String(format: "voice models: iOS stopped the background preparation at %.0f%%; it continues the next time Umpi opens",
-                                    task.progress.fractionCompleted * 100))
+                    let fraction = task.progress.fractionCompleted
+                    Task { @MainActor in
+                        voiceLog(String(format: "voice models: iOS stopped the background preparation at %.0f%% after %.0f s (%@); it continues the next time Umpi opens",
+                                        fraction * 100, Date().timeIntervalSince(started), conditions()))
+                    }
                     job.cancel()
                 }
             }
         }
         guard registered else { voiceLog("voice models: background preparation not registered"); return false }
+        voiceLog("voice models: background preparation starting (\(conditions()))")
         let request = BGContinuedProcessingTaskRequest(identifier: identifier, title: "Preparing voice models", subtitle: "So voice mode is ready")
         request.strategy = .fail
         do {
