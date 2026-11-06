@@ -15,6 +15,7 @@
 		0927E3443F49CE401029F23B /* SmartTurn-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 15BD4A17692B2AC51F015959 /* SmartTurn-LICENSE.txt */; };
 		0C1F5213DE603F56F342F856 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 561433B418D0D1EEC60CAB97 /* Assets.xcassets */; };
 		0FC760F9301F88C8B5E37AA0 /* QueuedChangesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FA63C5DF1830458AA277C57 /* QueuedChangesView.swift */; };
+		103321E58FD2B4C4A57731AF /* VoiceModelWarmup.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD66C4CA0F5C9E60B9C5CB81 /* VoiceModelWarmup.swift */; };
 		12DB84CDF70FA9F8789072F7 /* SyntaxHighlighter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B25A76F8A7ED8AD27372684E /* SyntaxHighlighter.swift */; };
 		1476F06FC28AF0E8B76BA88E /* ChatModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6058656C76912D0F8326ADE4 /* ChatModel.swift */; };
 		15C8F301EEBA31B08FC2C3AB /* UmpiWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 079A89E620BD8E3222C7B1F0 /* UmpiWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -95,6 +96,7 @@
 		A2E3A12BB2CF74D756AF8B34 /* knock.caf in Resources */ = {isa = PBXBuildFile; fileRef = C1917C675F6D8B3F143CBDD7 /* knock.caf */; };
 		A5A4E918E6A23F295C1A8B5C /* knock-gentle.caf in Resources */ = {isa = PBXBuildFile; fileRef = 8E0ACFCC605F137407E0B52E /* knock-gentle.caf */; };
 		A6804E4451D7E7F0E05317FD /* SmartTurn-README.md in Resources */ = {isa = PBXBuildFile; fileRef = 40EC6E9C58CE4365CF3DA2EC /* SmartTurn-README.md */; };
+		A7F570597D962381F81B9D55 /* VoiceModelWarmup.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD66C4CA0F5C9E60B9C5CB81 /* VoiceModelWarmup.swift */; };
 		AADBFD087ABA7D7FB3208299 /* TalkToUmpiIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7BC0C8D4261BF82D4BA521C /* TalkToUmpiIntent.swift */; };
 		B05FAA6AC872A533BBFC6B60 /* CompanionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A14AEACCCD7F5BCD8694CBB0 /* CompanionClient.swift */; };
 		B15E6E983C3A2B7EB65CB29A /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1279E4B7032997728B14B81D /* Models.swift */; };
@@ -256,6 +258,7 @@
 		ECB4651A6C4489AD6CB74177 /* Platform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Platform.swift; sourceTree = "<group>"; };
 		F4815AEE2D6CCF4BB3E0F694 /* TurnDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnDetector.swift; sourceTree = "<group>"; };
 		F829182872D62A76A0600218 /* PhononTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhononTranscriber.swift; sourceTree = "<group>"; };
+		FD66C4CA0F5C9E60B9C5CB81 /* VoiceModelWarmup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceModelWarmup.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -403,6 +406,7 @@
 				C672D512910D09D5145DD72D /* VoiceAudio.swift */,
 				7BEF7DD0A6FE7C8669EBED8D /* VoiceConversation.swift */,
 				71C01667C09E6491D57E0728 /* VoiceLog.swift */,
+				FD66C4CA0F5C9E60B9C5CB81 /* VoiceModelWarmup.swift */,
 				E8E065F52FC8005FCF057C38 /* VoiceModeView.swift */,
 				9BB224BE93A28D067E6D6D52 /* VoiceSettings.swift */,
 				D77B7C4FF46AACEE528B86E3 /* VoiceSettingsView.swift */,
@@ -779,6 +783,7 @@
 				2193C73629817C31712BF65C /* VoiceConversation.swift in Sources */,
 				3210D4BCD838A9D3B49CB6C1 /* VoiceLog.swift in Sources */,
 				F9914674CEDF327166DB77E1 /* VoiceModeView.swift in Sources */,
+				A7F570597D962381F81B9D55 /* VoiceModelWarmup.swift in Sources */,
 				CE8E5C1D5E891209F354AAF2 /* VoiceSettings.swift in Sources */,
 				ED5C767B2137F1A4F30C93A9 /* VoiceSettingsView.swift in Sources */,
 				89FEB775A5C1AA792AB7C906 /* VoiceSpeaker.swift in Sources */,
@@ -838,6 +843,7 @@
 				0477A64AE016CD37290B90E4 /* VoiceConversation.swift in Sources */,
 				719726320CBA2467168990DB /* VoiceLog.swift in Sources */,
 				E550BCFC4F6CEB55B67A8FAE /* VoiceModeView.swift in Sources */,
+				103321E58FD2B4C4A57731AF /* VoiceModelWarmup.swift in Sources */,
 				E2C50BB1C9D27E8A7473CC6E /* VoiceSettings.swift in Sources */,
 				9281883974B3C83B1051F978 /* VoiceSettingsView.swift in Sources */,
 				1B445DA480E99A110A3192B1 /* VoiceSpeaker.swift in Sources */,

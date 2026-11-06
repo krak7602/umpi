@@ -74,6 +74,13 @@ actor KokoroVoice {
         return result.samples
     }
 
+    /// Frees the loaded model, keeping its files; it loads again in seconds, as Core ML keeps the compiled result.
+    func unload() {
+        guard preparing == nil, manager != nil else { return }
+        manager = nil
+        state = .notReady
+    }
+
     /// Removes the downloaded files.
     func remove() {
         manager = nil

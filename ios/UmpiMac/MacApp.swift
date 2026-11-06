@@ -78,6 +78,8 @@ final class MacApp {
     func start(showWindow: Bool) {
         guard !started else { return }
         started = true
+        // After an install or update, voice models are compiled again; start now rather than in voice mode.
+        VoiceModelWarmup.run()
         // Umpi starts with the Mac unless the owner turned that off: on by default, once, from an installed copy.
         if !UserDefaults.standard.bool(forKey: "mac.launchAtLoginDefaulted"), Bundle.main.bundlePath.hasPrefix("/Applications/") {
             UserDefaults.standard.set(true, forKey: "mac.launchAtLoginDefaulted")
