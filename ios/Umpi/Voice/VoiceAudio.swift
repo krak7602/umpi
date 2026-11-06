@@ -38,16 +38,22 @@ final class VoiceAudio: @unchecked Sendable {
     private var _pause = 1.2
     var pause: Double { get { lock.withLock { _pause } } set { lock.withLock { _pause = newValue } } }
 
-    /// The quiet that ends a turn: the set pause after words that sound finished, and longer after words that trail off
-    /// ("…and", "…so I", "…um"), where people usually pause to think and carry on.
-    static func quietNeeded(after words: String, pause: Double) -> Double {
+    /// The quiet that ends a turn. `finished` is the turn detector's view of this pause: when the owner sounds finished, a
+    /// short pause; when they sound mid-thought, up to 5 s (three times the set pause, if longer). Without it, the set
+    /// pause. Words that trail off ("…and", "…so I", "…um") always wait at least 2.5 s, as people pause to think there.
+    static func quietNeeded(after words: String, pause: Double, finished: Bool? = nil) -> Double {
+        if finished == false { return max(5, pause * 3) }
+        if trails(words) { return max(pause * 2, 2.5) }
+        return finished == true ? max(0.6, pause * 0.6) : pause
+    }
+
+    static func trails(_ words: String) -> Bool {
         let trimmed = words.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let last = trimmed.last else { return pause }
-        let longer = max(pause * 2, 2.5)
-        if last == "," || last == "-" || last == "…" { return longer }
-        if ".?!".contains(last) { return pause }
+        guard let last = trimmed.last else { return false }
+        if last == "," || last == "-" || last == "…" { return true }
+        if ".?!".contains(last) { return false }
         let word = trimmed.split(whereSeparator: { $0 == " " }).last.map { $0.lowercased().trimmingCharacters(in: .punctuationCharacters) } ?? ""
-        return trailingWords.contains(word) ? longer : pause
+        return trailingWords.contains(word)
     }
     private static let trailingWords: Set<String> = [
         "and", "but", "or", "so", "because", "cause", "like", "um", "uh", "er", "erm", "hmm", "the", "a", "an", "to", "of",
@@ -79,6 +85,10 @@ final class VoiceAudio: @unchecked Sendable {
     /// The turn's audio from just before the owner started, for the transcriber; at most about a minute.
     private var turnAudio: [AVAudioPCMBuffer] = []
     private var turnAudioFrames = 0
+    /// The turn detector was asked about the current pause; its answer, for that pause only, is `_finished`.
+    private var pauseChecked = false
+    private var pauseNumber = 0
+    private var _finished: Bool?
     private var probeStarted: Date?
     private var levelTick = 0
     private var inputRate = 48_000.0
@@ -104,6 +114,7 @@ final class VoiceAudio: @unchecked Sendable {
     }
 
     func start() throws {
+        TurnDetector.shared.prepare()
         try configure()
         running = true
         let center = NotificationCenter.default
@@ -230,9 +241,27 @@ final class VoiceAudio: @unchecked Sendable {
             keep(buffer)
             heardFrames += frames
             // A buffer is speech only with several voiced moments, so a click or a short noise does not hold the turn open.
-            silentFrames = voicedFrames >= max(2, frames / 4) ? 0 : silentFrames + frames
+            let speaking = voicedFrames >= max(2, frames / 4)
+            silentFrames = speaking ? 0 : silentFrames + frames
+            if speaking, pauseChecked {
+                // Talking again: the next pause gets its own answer.
+                pauseChecked = false
+                lock.withLock { pauseNumber += 1; _finished = nil }
+            } else if !speaking, !pauseChecked, Double(silentFrames) * 0.02 >= 0.3, let audio = TurnAudio(lastSeconds(8.2)) {
+                pauseChecked = true
+                let pause = lock.withLock { pauseNumber }
+                TurnDetector.shared.check(audio) { [weak self] probability, took in
+                    guard let self, let probability else { return }
+                    let current = self.lock.withLock { () -> Bool in
+                        guard self.pauseNumber == pause else { return false }
+                        self._finished = probability >= 0.5
+                        return true
+                    }
+                    voiceLog(String(format: "turn detector: %.2f finished (%@) in %.0f ms", probability, current ? "used" : "too late", took * 1000))
+                }
+            }
             let (quiet, wordsSettled, noWords) = lock.withLock { () -> (Double, Bool, Bool) in
-                let quiet = Self.quietNeeded(after: lastWords, pause: _pause)
+                let quiet = Self.quietNeeded(after: lastWords, pause: _pause, finished: _finished)
                 guard let changed = lastWordsChange else { return (quiet, false, true) }
                 return (quiet, Date().timeIntervalSince(changed) >= quiet + 0.6, false)
             }
@@ -242,7 +271,8 @@ final class VoiceAudio: @unchecked Sendable {
             }
             // Ends on quiet, on words that stopped changing, after 55 s, or after 8 s of sound with no words at all.
             if Double(silentFrames) * 0.02 >= quiet || wordsSettled || Double(heardFrames) * 0.02 >= 55 || (noWords && Double(heardFrames) * 0.02 >= 8) {
-                voiceLog("turn ended: \(Double(silentFrames) * 0.02 >= quiet ? "quiet" : wordsSettled ? "words settled" : noWords ? "no words" : "too long") after waiting \(quiet) s")
+                let finished = lock.withLock { _finished }
+                voiceLog("turn ended: \(Double(silentFrames) * 0.02 >= quiet ? "quiet" : wordsSettled ? "words settled" : noWords ? "no words" : "too long") after waiting \(quiet) s (sounded \(finished.map { $0 ? "finished" : "mid-thought" } ?? "unknown"))")
                 self.mode = .replying
                 request?.endAudio()
                 let audio = TurnAudio(turnAudio)
@@ -290,6 +320,8 @@ final class VoiceAudio: @unchecked Sendable {
         let turn = self.turn
         lock.withLock { lastWords = ""; lastWordsChange = nil }
         turnAudio = []; turnAudioFrames = 0
+        pauseChecked = false
+        lock.withLock { pauseNumber += 1; _finished = nil }
         for buffer in preroll { request.append(buffer); keep(buffer) }
         self.request = request
         task = recognizer.recognitionTask(with: request) { [weak self] result, error in
@@ -309,6 +341,17 @@ final class VoiceAudio: @unchecked Sendable {
                 self.onEvent?(.words("", final: true, turn: turn))
             }
         }
+    }
+
+    /// The turn's last `seconds` of audio, for the turn detector.
+    private func lastSeconds(_ seconds: Double) -> [AVAudioPCMBuffer] {
+        var frames = 0, pieces: [AVAudioPCMBuffer] = []
+        for buffer in turnAudio.reversed() {
+            pieces.append(buffer)
+            frames += Int(buffer.frameLength)
+            if Double(frames) >= inputRate * seconds { break }
+        }
+        return pieces.reversed()
     }
 
     /// Keeps a copy of the turn's audio for the transcriber, up to about a minute.

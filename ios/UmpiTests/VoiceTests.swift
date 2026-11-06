@@ -12,6 +12,35 @@ final class VoiceTests: XCTestCase {
         XCTAssertEqual(VoiceAudio.quietNeeded(after: "So the thing is,", pause: 1.2), 2.5)
         XCTAssertEqual(VoiceAudio.quietNeeded(after: "Because", pause: 1.6), 3.2, "twice the pause when that is longer")
         XCTAssertEqual(VoiceAudio.quietNeeded(after: "", pause: 1.2), 1.2)
+        // With the turn detector's view of the pause.
+        XCTAssertEqual(VoiceAudio.quietNeeded(after: "Remind me at six.", pause: 1.2, finished: true), 0.72, accuracy: 0.001)
+        XCTAssertEqual(VoiceAudio.quietNeeded(after: "Remind me at six.", pause: 1.2, finished: false), 5)
+        XCTAssertEqual(VoiceAudio.quietNeeded(after: "Add milk and", pause: 1.2, finished: true), 2.5, "trailing words still wait")
+        XCTAssertEqual(VoiceAudio.quietNeeded(after: "Okay", pause: 2.0, finished: false), 6)
+    }
+
+    /// The turn detector's input matches Whisper's feature extractor, and its output the original model, for a fixed
+    /// signal (reference values from transformers 5.22 and onnxruntime 1.31 with `smart-turn-v3.2-gpu.onnx`).
+    func testTurnDetectorMatchesTheReference() throws {
+        let rate = 16_000.0
+        let signal: [Float] = (0..<(3 * 16_000)).map { i in
+            let t = Double(i) / rate, fade = 1 - Double(i) / Double(3 * 16_000 - 1)
+            return Float(0.3 * sin(2 * .pi * 220 * t) + 0.1 * sin(2 * .pi * 1375 * t + 0.5) * fade)
+        }
+        let detector = TurnDetector.shared
+        let features = detector.features(signal)
+        XCTAssertEqual(features.count, 80 * 800)
+        for (mel, frame, expected) in [(0, 799, Float(0.9353)), (10, 700, 0.54803), (40, 790, -0.2589), (79, 500, -0.09088), (5, 0, -0.2589)] {
+            XCTAssertEqual(features[mel * 800 + frame], expected, accuracy: 0.002, "mel \(mel), frame \(frame)")
+        }
+        let probability = try XCTUnwrap(detector.probability(signal))
+        XCTAssertEqual(probability, 0.1446, accuracy: 0.04)
+    }
+
+    func testJoinedTurnsReadAsOne() {
+        XCTAssertEqual(VoiceConversation.join("I need to plan the week.", "Also the gym."), "I need to plan the week. Also the gym.")
+        XCTAssertEqual(VoiceConversation.join(nil, "Hello"), "Hello")
+        XCTAssertEqual(VoiceConversation.join("", "Hello"), "Hello")
     }
 
     func testSpeaksWholeSentencesAndKeepsTheRest() {

@@ -83,6 +83,11 @@ actor PhononTranscriber {
 struct TurnAudio: @unchecked Sendable {
     let buffer: AVAudioPCMBuffer
 
+    /// Two parts of one turn, the owner having carried on after a pause that ended the first, as one.
+    static func joined(_ first: TurnAudio?, _ second: TurnAudio?) -> TurnAudio? {
+        TurnAudio([first?.buffer, second?.buffer].compactMap { $0 })
+    }
+
     /// One buffer from the turn's pieces, or nil when there is nothing.
     init?(_ pieces: [AVAudioPCMBuffer]) {
         guard let format = pieces.first?.format else { return nil }

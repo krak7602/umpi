@@ -33,7 +33,8 @@ export function cutOffNote(heard: string): string {
   const text = heard.trim();
   return text
     ? `The owner talked over your previous spoken reply, so they heard only this much of it: «${text.length > 2_000 ? `…${text.slice(-2_000)}` : text}». Anything after that was not heard.`
-    : "The owner talked over your previous spoken reply before hearing any of it.";
+    // Nothing heard yet: the owner had paused to think, Umpi took the turn as finished, and they carried on.
+    : "The owner carried on talking before any of your spoken reply was heard, so this continues their previous message: answer the two together as one request, and do not mention being interrupted.";
 }
 
 /** Text Umpi keeps for a spoken reply the owner cut off by talking. */
