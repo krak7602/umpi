@@ -61,6 +61,24 @@ final class ChatTests: XCTestCase {
         XCTAssertEqual(ChatView.rows(entries: earlier, sent: [], pending: [(message, true)], now: now).last?.status, .failed)
     }
 
+    func testTheAppWorksOutItsMessagesOperationAsTheWorkerDoes() {
+        // From Node: "message:telegram:app:" + sha256(JSON.stringify(["device-1","local-1"])).
+        XCTAssertEqual(CompanionStore.appOperation(device: "device-1", message: "local-1"),
+                       "message:telegram:app:fc60f0d526b50212876669004e7a45c598a2e803651dafe37bf84b62245da6be")
+        XCTAssertNil(CompanionStore.appOperation(device: "", message: "local-1"))
+    }
+
+    func testAnEntryThatArrivesWhileSendingTakesTheMessagesRow() throws {
+        let message = MessageRequest(id: "local-1", text: "Hello", sentAt: "2026-11-07T10:00:00Z")
+        let operation = try XCTUnwrap(CompanionStore.appOperation(device: "device-1", message: "local-1"))
+        // The coordinator logged it and the socket brought it, but the send has not returned yet.
+        let rows = ChatView.rows(entries: [entry(1, role: "umpi"), entry(2, role: "owner", operation: operation)], sent: [],
+                                 pending: [(message, false)], device: "device-1")
+        XCTAssertEqual(rows.map(\.id), ["e1", "local-1"], "one row for the message, never two")
+        XCTAssertEqual(rows.last?.status, .logged)
+        XCTAssertEqual(rows.last?.entry.seq, 2)
+    }
+
     func testThinkingUntilTheReplyToTheSameMessageArrives() throws {
         let model = ChatModel()
         let now = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-11-03T10:01:00Z"))
