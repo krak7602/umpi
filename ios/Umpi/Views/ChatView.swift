@@ -553,14 +553,19 @@ private struct ChatBubble: View {
             if !caption.isEmpty { Text(caption).font(.caption2).foregroundStyle(.tertiary).padding(.horizontal, entry.fromOwner ? 14 : 0) }
             if status == .failed {
                 Text("Not sent — see Settings › Queued changes").font(.caption2).foregroundStyle(.red).padding(.horizontal, 14)
-            } else if status == .sending && slow {
+            } else if slow {
                 Text("Sending…").font(.caption2).foregroundStyle(.secondary).padding(.horizontal, 14).transition(.opacity)
             }
         }
+        // Shown and hidden only through `slow`, always animated: hiding it the moment the message was accepted made
+        // the conversation below jump up by its height.
         .task(id: status) {
-            guard status == .sending else { slow = false; return }
+            guard status == .sending else {
+                if slow { withAnimation(.easeOut(duration: 0.25)) { slow = false } }
+                return
+            }
             try? await Task.sleep(for: .seconds(1.5))
-            withAnimation { slow = !Task.isCancelled }
+            if !Task.isCancelled { withAnimation(.easeOut(duration: 0.25)) { slow = true } }
         }
         .frame(maxWidth: .infinity, alignment: entry.fromOwner ? .trailing : .leading)
         .accessibilityElement(children: .contain)
