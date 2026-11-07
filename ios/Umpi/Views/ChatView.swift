@@ -721,9 +721,9 @@ extension View {
         #if os(macOS)
         self.background {
             LinearGradient(stops: [.init(color: Color(nsColor: .windowBackgroundColor).opacity(0), location: 0),
-                                   .init(color: Color(nsColor: .windowBackgroundColor), location: 0.45)],
+                                   .init(color: Color(nsColor: .windowBackgroundColor), location: 0.3)],
                            startPoint: .top, endPoint: .bottom)
-                .padding(.top, -18)
+                .padding(.top, -4)
                 .ignoresSafeArea(edges: .bottom)
                 .allowsHitTesting(false)
         }
