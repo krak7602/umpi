@@ -59,6 +59,7 @@
 		64E770E9CC8D62AB7E8E0AEA /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = E42E23010F57640FCD20CAD4 /* README.md */; };
 		6A8283E7BEBA92921AE890B4 /* MermaidView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24646F2B743B59636E323FED /* MermaidView.swift */; };
 		6E39EDAB10F668DDCD9CE1C1 /* QueuedChangesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FA63C5DF1830458AA277C57 /* QueuedChangesView.swift */; };
+		6EB3E6F69CBE4086B7FD7DAD /* ThinkingIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10DCC8CC44DDDBF76CE3E32 /* ThinkingIndicator.swift */; };
 		6FDDBE6072EDC8E14B89FEEC /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECB4651A6C4489AD6CB74177 /* Platform.swift */; };
 		705651224DFC9C5AA3802B3D /* OpenUmpiAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E9AB65F56609B7A65947DF5 /* OpenUmpiAction.swift */; };
 		715E0B8446FFE00D85D0B5D9 /* MacDeviceCapabilities.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F258E936EE793077E9F6C05 /* MacDeviceCapabilities.swift */; };
@@ -99,6 +100,7 @@
 		A6804E4451D7E7F0E05317FD /* SmartTurn-README.md in Resources */ = {isa = PBXBuildFile; fileRef = 40EC6E9C58CE4365CF3DA2EC /* SmartTurn-README.md */; };
 		A7F570597D962381F81B9D55 /* VoiceModelWarmup.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD66C4CA0F5C9E60B9C5CB81 /* VoiceModelWarmup.swift */; };
 		AADBFD087ABA7D7FB3208299 /* TalkToUmpiIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7BC0C8D4261BF82D4BA521C /* TalkToUmpiIntent.swift */; };
+		AC2C127426F5BE0840A67FED /* ThinkingIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10DCC8CC44DDDBF76CE3E32 /* ThinkingIndicator.swift */; };
 		B05FAA6AC872A533BBFC6B60 /* CompanionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A14AEACCCD7F5BCD8694CBB0 /* CompanionClient.swift */; };
 		B15E6E983C3A2B7EB65CB29A /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1279E4B7032997728B14B81D /* Models.swift */; };
 		B3B9928429BCFE036BBD33F7 /* SmartTurn-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 15BD4A17692B2AC51F015959 /* SmartTurn-LICENSE.txt */; };
@@ -232,6 +234,7 @@
 		9BB224BE93A28D067E6D6D52 /* VoiceSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceSettings.swift; sourceTree = "<group>"; };
 		9D128E06C67FB90B4E3E771A /* ChatNotifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatNotifier.swift; sourceTree = "<group>"; };
 		9E017C621BB16B83A098F0B0 /* T3Code.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = T3Code.swift; sourceTree = "<group>"; };
+		A10DCC8CC44DDDBF76CE3E32 /* ThinkingIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThinkingIndicator.swift; sourceTree = "<group>"; };
 		A14AEACCCD7F5BCD8694CBB0 /* CompanionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionClient.swift; sourceTree = "<group>"; };
 		A1EAB9A47CBFD4B231E2F243 /* Umpi.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Umpi.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A3BD3523F049B9E124DCDA19 /* WidgetShared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetShared.swift; sourceTree = "<group>"; };
@@ -392,6 +395,7 @@
 				5130E3C64EA03895D3F8EA5A /* SettingsView.swift */,
 				B25A76F8A7ED8AD27372684E /* SyntaxHighlighter.swift */,
 				607C5CFA6908E25794744FC8 /* T3CodeViews.swift */,
+				A10DCC8CC44DDDBF76CE3E32 /* ThinkingIndicator.swift */,
 				2401FEA779E0BCFCCAF2EC1D /* TodayView.swift */,
 				01688E9D5D74AA1EB9A37D45 /* WorkflowViews.swift */,
 				7D40AE38FC399EC2723210EB /* WorkView.swift */,
@@ -780,6 +784,7 @@
 				267E97B5C43F5C2E3109207B /* T3Code.swift in Sources */,
 				460C080CDAD140CED9D2C28D /* T3CodeViews.swift in Sources */,
 				AADBFD087ABA7D7FB3208299 /* TalkToUmpiIntent.swift in Sources */,
+				6EB3E6F69CBE4086B7FD7DAD /* ThinkingIndicator.swift in Sources */,
 				01DE9A648B8AC1C1AE3445A8 /* TodayView.swift in Sources */,
 				D3C88EAE79F64ADB15DAC898 /* TurnDetector.swift in Sources */,
 				E25B389469FF910F97F90DB4 /* UmpiMacApp.swift in Sources */,
@@ -841,6 +846,7 @@
 				D5FD75B433F47A46B318D445 /* T3CodeViews.swift in Sources */,
 				9115234EA31C0C493622ABF4 /* TalkToUmpiIntent.swift in Sources */,
 				FE57803808D9A0F6E9042BE6 /* TaskActivityAttributes.swift in Sources */,
+				AC2C127426F5BE0840A67FED /* ThinkingIndicator.swift in Sources */,
 				CA2572DDF10CA82A8543FF15 /* TodayView.swift in Sources */,
 				D77B343A625B3418E3335BD9 /* TurnDetector.swift in Sources */,
 				FCE345FBCA4731BC372CBFFE /* UmpiApp.swift in Sources */,
