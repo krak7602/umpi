@@ -71,11 +71,8 @@ struct ChatView: View {
                             .transition(entry.fromOwner ? .scale(scale: 0.4, anchor: .bottomTrailing).combined(with: .opacity) : .opacity)
                     }
                     if chat.isThinking(pending: waiting) {
-                        HStack(spacing: 6) {
-                            ProgressView().controlSize(.small)
-                            Text("Umpi is thinking…").font(.footnote).foregroundStyle(.secondary)
-                        }
-                        .transition(.opacity)
+                        ThinkingIndicator()
+                            .transition(.opacity)
                         .accessibilityIdentifier("chat.thinking")
                     }
                     Color.clear.frame(height: 1).id("bottom")
