@@ -700,7 +700,7 @@ extension View {
         #if os(macOS)
         // A Mac window's toolbar is not floating glass: messages stop cleanly under it instead of showing through.
         // At the bottom they fade out under the glass message field, as on the phone.
-        self.scrollEdgeEffectStyle(.hard, for: .top).scrollEdgeEffectStyle(.soft, for: .bottom)
+        self.scrollEdgeEffectStyle(.soft, for: .bottom).scrollEdgeEffectStyle(.hard, for: .top)
         #else
         if #available(iOS 26.0, *) { self.scrollEdgeEffectStyle(.soft, for: .all) } else { self }
         #endif
@@ -715,9 +715,21 @@ extension View {
         self.glassEffect(.regular.interactive(), in: shape)
         #endif
     }
-    /// On iOS 26 the composer floats over the softly faded content; earlier systems get the bar material.
+    /// On iOS 26 the composer floats over the softly faded content; earlier systems get the bar material. The Mac's own
+    /// soft edge only dims text under the bar, so messages fade into the chat's background behind the field instead.
     @ViewBuilder func composerBackground() -> some View {
+        #if os(macOS)
+        self.background {
+            LinearGradient(stops: [.init(color: Color(nsColor: .windowBackgroundColor).opacity(0), location: 0),
+                                   .init(color: Color(nsColor: .windowBackgroundColor), location: 0.45)],
+                           startPoint: .top, endPoint: .bottom)
+                .padding(.top, -18)
+                .ignoresSafeArea(edges: .bottom)
+                .allowsHitTesting(false)
+        }
+        #else
         if #available(iOS 26.0, *) { self } else { self.background(.bar) }
+        #endif
     }
 }
 
