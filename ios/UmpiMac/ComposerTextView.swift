@@ -41,6 +41,7 @@ struct ComposerTextView: NSViewRepresentable {
         textView.textContainer?.widthTracksTextView = true
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
         textView.autoresizingMask = [.width]
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
@@ -56,7 +57,8 @@ struct ComposerTextView: NSViewRepresentable {
         scroll.borderType = .noBorder
         scroll.translatesAutoresizingMaskIntoConstraints = false
 
-        let container = NSView()
+        let container = ComposerContainer()
+        container.textView = textView
         container.addSubview(scroll)
         NSLayoutConstraint.activate([
             scroll.leadingAnchor.constraint(equalTo: container.leadingAnchor),
@@ -80,15 +82,24 @@ struct ComposerTextView: NSViewRepresentable {
         if !focused, isFirst, let window = textView.window { DispatchQueue.main.async { window.makeFirstResponder(nil) } }
     }
 
-    /// One line up to eight, then it scrolls.
+    /// One line up to eight, then it scrolls. Measured with a layout of its own: SwiftUI also asks about widths it
+    /// will not use (none, or almost none), and sizing the field's own text container for those left the text wrapped
+    /// at one character a line, or on one long line.
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSView, context: Context) -> CGSize? {
-        let width = proposal.width ?? 300
-        guard let textView = context.coordinator.textView, let layout = textView.layoutManager, let container = textView.textContainer else { return nil }
+        guard let textView = context.coordinator.textView else { return nil }
+        let current = nsView.bounds.width > 0 ? nsView.bounds.width : 300
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? current
+        let font = textView.font ?? .preferredFont(forTextStyle: .body)
         let inset = textView.textContainerInset
-        container.size = NSSize(width: max(1, width - Self.trailingRoom - inset.width * 2), height: .greatestFiniteMagnitude)
+        let storage = NSTextStorage(string: textView.string, attributes: [.font: font])
+        let layout = NSLayoutManager()
+        storage.addLayoutManager(layout)
+        let container = NSTextContainer(size: NSSize(width: max(1, width - Self.trailingRoom - inset.width * 2), height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        layout.addTextContainer(container)
         layout.ensureLayout(for: container)
         let used = layout.usedRect(for: container).height
-        let line = layout.defaultLineHeight(for: textView.font ?? .preferredFont(forTextStyle: .body))
+        let line = layout.defaultLineHeight(for: font)
         let fitting = max(used, line) + inset.height * 2
         let maximum = line * 8 + inset.height * 2
         return CGSize(width: width, height: max(ChatView.fieldHeight, min(fitting, maximum)))
@@ -120,6 +131,18 @@ struct ComposerTextView: NSViewRepresentable {
             onReturn()
             return true
         }
+    }
+}
+
+/// Holds the field's scroll view and keeps the text view as wide as it, so the text wraps at the field's width.
+final class ComposerContainer: NSView {
+    weak var textView: NSTextView?
+
+    override func layout() {
+        super.layout()
+        guard let textView, let scroll = textView.enclosingScrollView else { return }
+        let width = scroll.contentSize.width
+        if width > 0, abs(textView.frame.width - width) > 0.5 { textView.setFrameSize(NSSize(width: width, height: textView.frame.height)) }
     }
 }
 
