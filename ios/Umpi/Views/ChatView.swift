@@ -39,7 +39,7 @@ struct ChatView: View {
     }
 
     var body: some View {
-        let rows = ChatView.rows(entries: chat.entries, sent: store.sentMessages, pending: store.pendingMessages)
+        let rows = ChatView.rows(entries: chat.entries, sent: store.sentMessages, pending: store.pendingMessages, device: store.deviceID)
         let waiting = rows.filter { $0.status == .sending || $0.status == .delivered }.count
         ScrollViewReader { proxy in
             ScrollView {
@@ -661,8 +661,11 @@ extension ChatView {
     /// The conversation as shown: the log's entries, then messages the coordinator accepted that the log does not
     /// show yet (for two minutes at most), then those still in the outbox.
     static func rows(entries: [ChatEntry], sent: [CompanionStore.SentMessage], pending: [(message: MessageRequest, failed: Bool)],
-                     now: Date = Date()) -> [ChatRow] {
-        let local = Dictionary(sent.map { ($0.operationID, $0.message.id) }, uniquingKeysWith: { $1 })
+                     device: String = "", now: Date = Date()) -> [ChatRow] {
+        // Each message's operation: from the coordinator's answer once sent, and worked out beforehand while sending,
+        // as its entry can arrive first.
+        let expected = pending.compactMap { item in CompanionStore.appOperation(device: device, message: item.message.id).map { ($0, item.message.id) } }
+        let local = Dictionary(sent.map { ($0.operationID, $0.message.id) } + expected, uniquingKeysWith: { $1 })
         // An approval's outcome note is for Telegram; here the card itself shows what became of it.
         let shown = entries.filter { !($0.id.hasPrefix("umpi:t3-request:") && $0.id.hasSuffix(":outcome")) }
         var rows = shown.map { entry in
@@ -672,7 +675,7 @@ extension ChatView {
         for sent in sent where !logged.contains(sent.operationID) && now.timeIntervalSince(sent.at) < 120 {
             rows.append(ChatRow(id: sent.message.id, entry: ownEntry(sent.message, operation: sent.operationID), status: .delivered))
         }
-        for (message, failed) in pending {
+        for (message, failed) in pending where !logged.contains(CompanionStore.appOperation(device: device, message: message.id) ?? "") {
             rows.append(ChatRow(id: message.id, entry: ownEntry(message, operation: message.id), status: failed ? .failed : .sending))
         }
         return rows

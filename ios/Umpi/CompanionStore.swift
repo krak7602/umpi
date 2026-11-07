@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Observation
 
@@ -91,6 +92,16 @@ final class CompanionStore {
             if case .message(let message) = entry.payload { return (message, entry.status != "queued") }
             return nil
         }
+    }
+    /// The operation the coordinator gives an app message, known before it answers. The chat entry can arrive over
+    /// the socket while the send is still in flight, since the coordinator answers only once Umpi's turn has started;
+    /// knowing it lets the chat show that entry in the message's place rather than beside it. Mirrors `admitApp` in
+    /// the Worker: `message:telegram:app:` and the SHA-256 of `["<device>","<message>"]`.
+    nonisolated static func appOperation(device: String, message: String) -> String? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .withoutEscapingSlashes
+        guard !device.isEmpty, let json = try? encoder.encode([device, message]) else { return nil }
+        return "message:telegram:app:" + SHA256.hash(data: json).map { String(format: "%02x", $0) }.joined()
     }
     /// A message the coordinator accepted, with the operation its chat entry will carry.
     struct SentMessage: Equatable {
