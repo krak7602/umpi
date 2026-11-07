@@ -132,7 +132,12 @@ struct ChatView: View {
             }
             #endif
         }
+        #if os(macOS)
+        // A bar, not just an inset: the messages fade out under it instead of running through the field.
+        .safeAreaBar(edge: .bottom) { composer }
+        #else
         .safeAreaInset(edge: .bottom) { composer }
+        #endif
         #if os(macOS)
         // Files and images dropped anywhere on the chat attach as if pasted.
         .onDrop(of: [.fileURL, .image, .movie], isTargeted: $dropTargeted) { providers in drop(providers) }
@@ -694,19 +699,20 @@ extension View {
     @ViewBuilder func softScrollEdges() -> some View {
         #if os(macOS)
         // A Mac window's toolbar is not floating glass: messages stop cleanly under it instead of showing through.
-        self.scrollEdgeEffectStyle(.hard, for: .top)
+        // At the bottom they fade out under the glass message field, as on the phone.
+        self.scrollEdgeEffectStyle(.hard, for: .top).scrollEdgeEffectStyle(.soft, for: .bottom)
         #else
         if #available(iOS 26.0, *) { self.scrollEdgeEffectStyle(.soft, for: .all) } else { self }
         #endif
     }
-    /// The system's Liquid Glass on iOS 26, like Messages' composer; a filled shape on earlier systems.
+    /// The system's Liquid Glass on iOS 26 and the Mac, like Messages' composer; a filled shape on earlier systems.
     @ViewBuilder func glassOrFill<S: Shape>(in shape: S) -> some View {
         #if os(iOS)
         if #available(iOS 26.0, *) { self.glassEffect(.regular.interactive(), in: shape) }
         else { self.background(Color(.secondarySystemBackground), in: shape) }
         #else
-        // The Mac draws the field and the attach button as quiet fills, as Messages does.
-        self.background(Color(.secondarySystemBackground), in: shape)
+        // Glass, not the faint fill the Mac had: messages scrolled under the field showed straight through that.
+        self.glassEffect(.regular.interactive(), in: shape)
         #endif
     }
     /// On iOS 26 the composer floats over the softly faded content; earlier systems get the bar material.
