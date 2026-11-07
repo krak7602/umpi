@@ -6,12 +6,18 @@ import SwiftUI
 struct ThinkingIndicator: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var since = Date()
+    /// Smaller on the Mac, where the chat's text is smaller too.
+    #if os(macOS)
+    static let side: CGFloat = 20
+    #else
+    static let side: CGFloat = 30
+    #endif
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 60, paused: reduceMotion)) { timeline in
             ThreadKnot(time: (reduceMotion ? 0 : max(0, timeline.date.timeIntervalSince(since))) + 5)
         }
-        .frame(width: 30, height: 30)
+        .frame(width: Self.side, height: Self.side)
         .accessibilityElement()
         .accessibilityLabel("Umpi is thinking")
     }
