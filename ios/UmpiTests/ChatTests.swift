@@ -32,6 +32,35 @@ final class ChatTests: XCTestCase {
         XCTAssertEqual(merged.map(\.seq), [1, 2, 3])
     }
 
+    func testASentMessageKeepsItsRowFromSendingToTheLog() {
+        let message = MessageRequest(id: "local-1", text: "Hello", sentAt: "2026-11-07T10:00:00Z")
+        let earlier = [entry(1, role: "umpi")]
+        let now = Date()
+
+        let sending = ChatView.rows(entries: earlier, sent: [], pending: [(message, false)], now: now)
+        XCTAssertEqual(sending.map(\.id), ["e1", "local-1"])
+        XCTAssertEqual(sending.last?.status, .sending)
+        XCTAssertEqual(sending.last?.entry.text, "Hello")
+        XCTAssertTrue(sending.last?.entry.fromOwner ?? false)
+
+        // Accepted, but the chat has not read it back yet: still shown, under the same identity.
+        let sent = CompanionStore.SentMessage(message: message, operationID: "op-1", at: now)
+        let delivered = ChatView.rows(entries: earlier, sent: [sent], pending: [], now: now)
+        XCTAssertEqual(delivered.map(\.id), ["e1", "local-1"])
+        XCTAssertEqual(delivered.last?.status, .delivered)
+
+        // Its entry arrives and takes the same row.
+        let logged = ChatView.rows(entries: earlier + [entry(2, role: "owner", operation: "op-1")], sent: [sent], pending: [], now: now)
+        XCTAssertEqual(logged.map(\.id), ["e1", "local-1"])
+        XCTAssertEqual(logged.last?.status, .logged)
+        XCTAssertEqual(logged.last?.entry.seq, 2)
+
+        // One the log never shows (such as a command) stops being shown after two minutes.
+        XCTAssertEqual(ChatView.rows(entries: earlier, sent: [sent], pending: [], now: now.addingTimeInterval(121)).map(\.id), ["e1"])
+        // A failed one stays, marked.
+        XCTAssertEqual(ChatView.rows(entries: earlier, sent: [], pending: [(message, true)], now: now).last?.status, .failed)
+    }
+
     func testThinkingUntilTheReplyToTheSameMessageArrives() throws {
         let model = ChatModel()
         let now = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-11-03T10:01:00Z"))

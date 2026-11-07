@@ -24,6 +24,10 @@ struct ChatView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var onScreen = false
     @State private var showVoice = false
+    /// Counts sends, so the list scrolls to a new message in the same motion that brings it in.
+    @State private var sends = 0
+    /// While a sent message animates in, content growth does not jump the list to the end under it.
+    @State private var sendSettling = false
     #if os(macOS)
     @State private var dropTargeted = false
     #endif
@@ -35,7 +39,8 @@ struct ChatView: View {
     }
 
     var body: some View {
-        let pending = store.pendingMessages
+        let rows = ChatView.rows(entries: chat.entries, sent: store.sentMessages, pending: store.pendingMessages)
+        let waiting = rows.filter { $0.status == .sending || $0.status == .delivered }.count
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
@@ -44,33 +49,33 @@ struct ChatView: View {
                             .font(.footnote).frame(maxWidth: .infinity)
                             .borderlessOnMac()
                     }
-                    if chat.entries.isEmpty && pending.isEmpty && !chat.isLoading {
+                    if rows.isEmpty && !chat.isLoading {
                         ContentUnavailableView("No messages yet", systemImage: "bubble.left.and.bubble.right",
                             description: Text("Messages from Telegram and this app appear here as one conversation."))
                             .padding(.top, 60)
                     }
-                    // An approval's outcome note is for Telegram; here the card itself shows what became of it.
-                    let shown = chat.entries.filter { !($0.id.hasPrefix("umpi:t3-request:") && $0.id.hasSuffix(":outcome")) }
-                    ForEach(Array(shown.enumerated()), id: \.element.id) { index, entry in
-                        let previous = index > 0 ? shown[index - 1] : nil
+                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                        let entry = row.entry
+                        let previous = index > 0 ? rows[index - 1].entry : nil
                         // WhatsApp-style: a centred time starts each new stretch of conversation; consecutive messages
                         // from Umpi without one are parted by a thin line.
                         if let header = ChatView.timeHeader(entry, after: previous) {
                             Text(header).font(.caption.weight(.medium)).foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity).padding(.top, index == 0 ? 0 : 6)
+                                .transition(.opacity)
                         } else if let previous, !previous.fromOwner, !entry.fromOwner {
                             Divider().padding(.horizontal, 40).opacity(0.6)
                         }
-                        ChatBubble(entry: entry) { data in Task { await chat.press(store, seq: entry.seq, data: data) } }.id(entry.seq)
+                        ChatBubble(entry: entry, status: row.status) { data in Task { await chat.press(store, seq: entry.seq, data: data) } }
+                            // A sent message grows out of the corner nearest the field, as in Messages and Telegram.
+                            .transition(entry.fromOwner ? .scale(scale: 0.4, anchor: .bottomTrailing).combined(with: .opacity) : .opacity)
                     }
-                    ForEach(pending, id: \.id) { message in
-                        PendingBubble(text: message.text, failed: message.failed)
-                    }
-                    if chat.isThinking(pending: pending.filter { !$0.failed }.count) {
+                    if chat.isThinking(pending: waiting) {
                         HStack(spacing: 6) {
                             ProgressView().controlSize(.small)
                             Text("Umpi is thinking…").font(.footnote).foregroundStyle(.secondary)
                         }
+                        .transition(.opacity)
                         .accessibilityIdentifier("chat.thinking")
                     }
                     Color.clear.frame(height: 1).id("bottom")
@@ -92,7 +97,7 @@ struct ChatView: View {
             // Pinned to the newest message while content grows (history loading, a diagram drawing, a reply), until the
             // owner scrolls up; scrolling back near the end pins it again.
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { old, new in
-                if pinned && new > old { Task { @MainActor in proxy.scrollTo("bottom", anchor: .bottom) } }
+                if pinned && new > old && !sendSettling { Task { @MainActor in proxy.scrollTo("bottom", anchor: .bottom) } }
             }
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height - 120
@@ -114,7 +119,11 @@ struct ChatView: View {
                 } }
                 else { withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
             }
-            .onChange(of: pending.count) { _, _ in withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
+            // The list moves up with the same spring that brings the sent message in.
+            .onChange(of: sends) { _, _ in
+                pinned = true
+                withAnimation(ChatView.sendAnimation) { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
             #if os(macOS)
             // The Mac's chat is already loaded when it shows, so the first load above has passed: it opens on the newest
             // message, and settles there again once diagrams and photos have sized themselves.
@@ -338,15 +347,27 @@ struct ChatView: View {
         if let openVoiceMode { openVoiceMode() } else { showVoice = true }
     }
 
+    static let sendAnimation = Animation.spring(duration: 0.35, bounce: 0.15)
+
+    /// The message joins the conversation at once, animated, and then goes out; one that cannot be queued stays in
+    /// the field.
     private func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let sending = attachment
-        let previous = draft
+        let queued = withAnimation(Self.sendAnimation) {
+            store.queueChat(text: text, attachment: sending?.value, context: sending?.context, media: sending?.media, previews: sending?.previews)
+        }
+        guard queued else { return }
         draft = ""; attachment = nil
+        sendSettling = true
+        sends += 1
         Task {
-            if await store.sendChat(text: text, attachment: sending?.value, context: sending?.context, media: sending?.media, previews: sending?.previews) {
-                await chat.refresh(store)
-            } else { draft = previous; attachment = sending }
+            try? await Task.sleep(for: .milliseconds(450))
+            sendSettling = false
+        }
+        Task {
+            await store.deliverQueued()
+            await chat.refresh(store)
         }
     }
     #if os(macOS)
@@ -512,7 +533,10 @@ private struct ChatBubble: View {
     @Environment(CompanionStore.self) private var store
     @Environment(T3CodeModel.self) private var t3
     let entry: ChatEntry
+    var status: ChatRow.Status = .logged
     let press: (String) -> Void
+    /// "Sending…" shows only when sending takes a while, so a quick send changes nothing under the bubble.
+    @State private var slow = false
 
     /// A T3 Code action Umpi asks about, drawn as its card once the app has the request.
     private var approval: T3Request? {
@@ -530,6 +554,16 @@ private struct ChatBubble: View {
             }
             // Under a bubble, lined up with the bubble's text rather than its rounded edge.
             if !caption.isEmpty { Text(caption).font(.caption2).foregroundStyle(.tertiary).padding(.horizontal, entry.fromOwner ? 14 : 0) }
+            if status == .failed {
+                Text("Not sent — see Settings › Queued changes").font(.caption2).foregroundStyle(.red).padding(.horizontal, 14)
+            } else if status == .sending && slow {
+                Text("Sending…").font(.caption2).foregroundStyle(.secondary).padding(.horizontal, 14).transition(.opacity)
+            }
+        }
+        .task(id: status) {
+            guard status == .sending else { slow = false; return }
+            try? await Task.sleep(for: .seconds(1.5))
+            withAnimation { slow = !Task.isCancelled }
         }
         .frame(maxWidth: .infinity, alignment: entry.fromOwner ? .trailing : .leading)
         .accessibilityElement(children: .contain)
@@ -612,21 +646,41 @@ private struct ChatBubble: View {
     }
 }
 
-private struct PendingBubble: View {
-    let text: String
-    let failed: Bool
+/// One row of the conversation: an entry of the chat log, or one of the owner's messages not in it yet. A message
+/// keeps its row's identity from the moment it is sent, so its entry later takes its place without a redraw.
+struct ChatRow: Identifiable {
+    enum Status { case logged, delivered, sending, failed }
+    var id: String
+    var entry: ChatEntry
+    var status: Status = .logged
+}
 
-    var body: some View {
-        VStack(alignment: .trailing, spacing: 4) {
-            MarkdownView(text, onOwnerTint: true)
-                .padding(.horizontal, 14).padding(.vertical, 9)
-                .foregroundStyle(.white)
-                .background(Color.accentColor.opacity(0.6), in: RoundedRectangle(cornerRadius: 18))
-            Text(failed ? "Not sent — see Settings › Queued changes" : "Sending…").font(.caption2).foregroundStyle(failed ? .red : .secondary)
-                .padding(.trailing, 14)
+extension ChatView {
+    /// The conversation as shown: the log's entries, then messages the coordinator accepted that the log does not
+    /// show yet (for two minutes at most), then those still in the outbox.
+    static func rows(entries: [ChatEntry], sent: [CompanionStore.SentMessage], pending: [(message: MessageRequest, failed: Bool)],
+                     now: Date = Date()) -> [ChatRow] {
+        let local = Dictionary(sent.map { ($0.operationID, $0.message.id) }, uniquingKeysWith: { $1 })
+        // An approval's outcome note is for Telegram; here the card itself shows what became of it.
+        let shown = entries.filter { !($0.id.hasPrefix("umpi:t3-request:") && $0.id.hasSuffix(":outcome")) }
+        var rows = shown.map { entry in
+            ChatRow(id: entry.fromOwner ? entry.operationId.flatMap { local[$0] } ?? entry.id : entry.id, entry: entry)
         }
-        .frame(maxWidth: .infinity, alignment: .trailing)
-        .padding(.leading, 40)
+        let logged = Set(shown.compactMap(\.operationId))
+        for sent in sent where !logged.contains(sent.operationID) && now.timeIntervalSince(sent.at) < 120 {
+            rows.append(ChatRow(id: sent.message.id, entry: ownEntry(sent.message, operation: sent.operationID), status: .delivered))
+        }
+        for (message, failed) in pending {
+            rows.append(ChatRow(id: message.id, entry: ownEntry(message, operation: message.id), status: failed ? .failed : .sending))
+        }
+        return rows
+    }
+
+    /// An owner's message drawn as the log will have it. Its attachment's preview is kept under the operation's ID once
+    /// sent, and under the message's before.
+    static func ownEntry(_ message: MessageRequest, operation: String) -> ChatEntry {
+        ChatEntry(seq: -1, id: message.id, at: message.sentAt ?? Date().formatted(.iso8601), role: "owner", surface: "app",
+                  kind: message.voice == true ? "voice" : "text", text: message.text, media: message.media, operationId: operation)
     }
 }
 

@@ -86,12 +86,22 @@ final class CompanionStore {
     }
 
     /// App messages still waiting in the durable outbox, oldest first, for the chat to show as sending.
-    var pendingMessages: [(id: String, text: String, failed: Bool)] {
+    var pendingMessages: [(message: MessageRequest, failed: Bool)] {
         state.outbox.compactMap { entry in
-            if case .message(let message) = entry.payload { return (message.id, message.text.isEmpty ? "[Attachment]" : message.text, entry.status != "queued") }
+            if case .message(let message) = entry.payload { return (message, entry.status != "queued") }
             return nil
         }
     }
+    /// A message the coordinator accepted, with the operation its chat entry will carry.
+    struct SentMessage: Equatable {
+        var message: MessageRequest
+        var operationID: String
+        var at: Date
+    }
+    /// Messages accepted in this session, newest last. The chat shows each until its entry arrives, under the same
+    /// identity, so a sent message does not disappear between leaving the outbox and the chat's next read, and its
+    /// entry takes its place without a redraw.
+    private(set) var sentMessages: [SentMessage] = []
     /// The paired transport, for reading chat history.
     var chatTransport: (any CompanionTransport)? { isPaired ? client : nil }
     /// The WebSocket request for live chat changes, with this device's credential.
@@ -245,6 +255,14 @@ final class CompanionStore {
     /// Sends a chat message with an optional voice transcript flag or attachment, through the durable outbox.
     @discardableResult func sendChat(text: String, voice: Bool = false, attachment: OutgoingAttachment? = nil, context: String? = nil,
                                      media: MediaInfo? = nil, previews: LocalMedia? = nil) async -> Bool {
+        guard queueChat(text: text, voice: voice, attachment: attachment, context: context, media: media, previews: previews) else { return false }
+        await flushOutbox()
+        return true
+    }
+    /// Puts a chat message in the durable outbox at once, so the chat can show it in the same moment (and animate it);
+    /// `deliverQueued` then sends it. False, with the reason reported, when it cannot be sent.
+    func queueChat(text: String, voice: Bool = false, attachment: OutgoingAttachment? = nil, context: String? = nil,
+                   media: MediaInfo? = nil, previews: LocalMedia? = nil) -> Bool {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || attachment != nil || context != nil else { return false }
         guard text.isEmpty || DeviceActionValidation.text(text, limit: 16_384) else {
@@ -258,9 +276,10 @@ final class CompanionStore {
         let message = MessageRequest(id: id, text: text, sentAt: ISO8601DateFormatter().string(from: Date()),
                                      voice: voice ? true : nil, hasAttachment: attachment == nil ? nil : true, context: context, media: media)
         guard enqueue(OutboxEntry(id: message.id, payload: .message(message))) else { AttachmentFiles.remove(id); return false }
-        await flushOutbox()
         return true
     }
+    /// Sends what is queued.
+    func deliverQueued() async { await flushOutbox() }
     @discardableResult func approveJob(id: String, version: Int) async -> Bool { await decideJob(id: id, version: version, decision: "approve") }
     @discardableResult func cancelJob(id: String, version: Int) async -> Bool { await decideJob(id: id, version: version, decision: "cancel") }
     private func decideJob(id: String, version: Int, decision: String) async -> Bool {
@@ -662,6 +681,8 @@ final class CompanionStore {
                     let operation = try decoder.decode(Operation.self, from: data)
                     // The preview now belongs to the conversation entry of this operation.
                     LocalMedia.rename(from: message.id, to: operation.id)
+                    sentMessages.append(SentMessage(message: message, operationID: operation.id, at: Date()))
+                    if sentMessages.count > 30 { sentMessages.removeFirst(sentMessages.count - 30) }
                     state.snapshot?.operations.removeAll { $0.id == operation.id }
                     state.snapshot?.operations.append(operation)
                     stateEpoch += 1
