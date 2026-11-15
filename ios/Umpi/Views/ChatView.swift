@@ -10,7 +10,8 @@ struct ChatView: View {
     @State private var chat: ChatModel
     /// The chat keeps its own live connection; false when the app keeps one for every chat it shows (the Mac).
     private let ownsConnection: Bool
-    @State private var draft = ""
+    /// What is typed. Only the composer reads it while drawing, so a keystroke redraws the field, not the conversation.
+    @State private var draft = ChatDraft()
     @State private var composing = false
     @State private var attachment: PreparedAttachment?
     @State private var preparing: String?
@@ -203,7 +204,7 @@ struct ChatView: View {
         .onChange(of: requests.draft, initial: true) { _, text in
             guard let text else { return }
             requests.draft = nil
-            if draft.isEmpty { draft = text }
+            if draft.text.isEmpty { draft.text = text }
             composing = true
         }
         .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: MediaPrep.maxImages, matching: .any(of: [.images, .videos]))
@@ -219,23 +220,27 @@ struct ChatView: View {
         .refreshable { await chat.refresh(store) }
     }
 
+    /// Drawn in a body of its own: the draft it reads then redraws only the composer. Read in the chat's body, each
+    /// keystroke rebuilt every message and parsed its Markdown again, and typing lagged in a long conversation.
     private var composer: some View {
-        composerRow
-            .padding(.horizontal).padding(.vertical, 8)
-            #if os(macOS)
-            // Lined up with the messages above it.
-            .frame(maxWidth: 760)
-            .frame(maxWidth: .infinity)
-            #endif
-            .composerBackground()
+        SeparatelyDrawn {
+            composerRow
+                .padding(.horizontal).padding(.vertical, 8)
+                #if os(macOS)
+                // Lined up with the messages above it.
+                .frame(maxWidth: 760)
+                .frame(maxWidth: .infinity)
+                #endif
+                .composerBackground()
+        }
     }
 
     /// Inserts Markdown the owner would otherwise type by hand; the text stays plain Markdown.
     @ViewBuilder private var formatButtons: some View {
-        Button { draft += draft.isEmpty || draft.hasSuffix(" ") || draft.hasSuffix("\n") ? "****" : " ****" } label: { Label("Bold", systemImage: "bold") }
-        Button { draft += draft.isEmpty || draft.hasSuffix("\n") ? "- " : "\n- " } label: { Label("List item", systemImage: "list.bullet") }
-        Button { draft += draft.isEmpty || draft.hasSuffix("\n") ? "- [ ] " : "\n- [ ] " } label: { Label("Checklist item", systemImage: "checklist") }
-        Button { draft += draft.isEmpty || draft.hasSuffix("\n") ? "```\n\n```" : "\n```\n\n```" } label: { Label("Code block", systemImage: "chevron.left.forwardslash.chevron.right") }
+        Button { draft.text += draft.text.isEmpty || draft.text.hasSuffix(" ") || draft.text.hasSuffix("\n") ? "****" : " ****" } label: { Label("Bold", systemImage: "bold") }
+        Button { draft.text += draft.text.isEmpty || draft.text.hasSuffix("\n") ? "- " : "\n- " } label: { Label("List item", systemImage: "list.bullet") }
+        Button { draft.text += draft.text.isEmpty || draft.text.hasSuffix("\n") ? "- [ ] " : "\n- [ ] " } label: { Label("Checklist item", systemImage: "checklist") }
+        Button { draft.text += draft.text.isEmpty || draft.text.hasSuffix("\n") ? "```\n\n```" : "\n```\n\n```" } label: { Label("Code block", systemImage: "chevron.left.forwardslash.chevron.right") }
     }
 
     /// A centred time before a message that starts a new stretch: the first one, a new day, or 10 minutes after the last.
@@ -255,13 +260,13 @@ struct ChatView: View {
     /// typed, since the Mac's field is usually focused and its attach button should stay a +.
     private var formatting: Bool {
         #if os(macOS)
-        !draft.isEmpty
+        !draft.text.isEmpty
         #else
-        composing || !draft.isEmpty
+        composing || !draft.text.isEmpty
         #endif
     }
 
-    private var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || attachment != nil }
+    private var canSend: Bool { !draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || attachment != nil }
 
     private var composerRow: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -311,11 +316,11 @@ struct ChatView: View {
                 // measured centring: a little more space above the text, and one line as tall as the + button.
                 #if os(macOS)
                 // The Mac's field: Return sends, Shift-Return starts a new line.
-                ComposerTextView(text: $draft, focused: $composing, placeholder: "Message Umpi", onReturn: { if canSend, preparing == nil { send() } }) { providers in
+                ComposerTextView(text: Bindable(draft).text, focused: $composing, placeholder: "Message Umpi", onReturn: { if canSend, preparing == nil { send() } }) { providers in
                     prepare("Adding what you pasted…") { try await PreparedAttachment.pasted(providers) }
                 }
                 #else
-                ComposerTextView(text: $draft, focused: $composing, placeholder: "Message Umpi") { providers in
+                ComposerTextView(text: Bindable(draft).text, focused: $composing, placeholder: "Message Umpi") { providers in
                     prepare("Adding what you pasted…") { try await PreparedAttachment.pasted(providers) }
                 }
                 #endif
@@ -354,13 +359,13 @@ struct ChatView: View {
     /// The message joins the conversation at once, animated, and then goes out; one that cannot be queued stays in
     /// the field.
     private func send() {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         let sending = attachment
         let queued = withAnimation(Self.sendAnimation) {
             store.queueChat(text: text, attachment: sending?.value, context: sending?.context, media: sending?.media, previews: sending?.previews)
         }
         guard queued else { return }
-        draft = ""; attachment = nil
+        draft.text = ""; attachment = nil
         sendSettling = true
         sends += 1
         Task {
@@ -405,6 +410,18 @@ struct ChatView: View {
             do { attachment = try await work() } catch { chat.show((error as? LocalizedError)?.errorDescription ?? "The attachment could not be read.") }
         }
     }
+}
+
+/// The chat's message field text, observed on its own so typing does not redraw the conversation.
+@MainActor @Observable final class ChatDraft {
+    var text = ""
+}
+
+/// Builds its content in its own body, so observed values the content reads redraw this view alone, not the view
+/// that made it.
+private struct SeparatelyDrawn<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+    var body: some View { content() }
 }
 
 /// An attachment ready to send: how the composer shows it, what it uploads, text for Umpi only, and its preview.
