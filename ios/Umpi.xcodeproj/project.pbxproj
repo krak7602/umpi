@@ -35,6 +35,7 @@
 		2A80D4501ED133942D250560 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 291D095684CD265DA26B6933 /* Assets.xcassets */; };
 		2F152EA618696BA0A761CE98 /* WidgetShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3BD3523F049B9E124DCDA19 /* WidgetShared.swift */; };
 		3210D4BCD838A9D3B49CB6C1 /* VoiceLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71C01667C09E6491D57E0728 /* VoiceLog.swift */; };
+		323E63BA3C0867A7D61231FC /* SpeechWords.swift in Sources */ = {isa = PBXBuildFile; fileRef = C90B20BBA2A003A2C660A0EC /* SpeechWords.swift */; };
 		3431D1D839E0D5CBED583675 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5130E3C64EA03895D3F8EA5A /* SettingsView.swift */; };
 		368EF059F400818AF783A890 /* HotKeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17422457EDC72BD663AB064 /* HotKeys.swift */; };
 		39FA14005F9953715C52D2C2 /* CompanionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A14AEACCCD7F5BCD8694CBB0 /* CompanionClient.swift */; };
@@ -136,6 +137,7 @@
 		F12A0C1F25530247B442FD27 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09F78D13F600AC1683D4AF01 /* AppDelegate.swift */; };
 		F244816EC2A664635DA7A039 /* VoiceModelStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50748873E3C95507B282A26E /* VoiceModelStatus.swift */; };
 		F2EAB6990EF080A0AC071D51 /* VoiceAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = C672D512910D09D5145DD72D /* VoiceAudio.swift */; };
+		F8209F826A30B6C2CD196566 /* SpeechWords.swift in Sources */ = {isa = PBXBuildFile; fileRef = C90B20BBA2A003A2C660A0EC /* SpeechWords.swift */; };
 		F9914674CEDF327166DB77E1 /* VoiceModeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8E065F52FC8005FCF057C38 /* VoiceModeView.swift */; };
 		FCE345FBCA4731BC372CBFFE /* UmpiApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 691633D0AABEF045AC98D419 /* UmpiApp.swift */; };
 		FE57803808D9A0F6E9042BE6 /* TaskActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4C30AA88504D79B39CFAED6 /* TaskActivityAttributes.swift */; };
@@ -251,6 +253,7 @@
 		C3680B141D008686A56C0E4A /* MainWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindow.swift; sourceTree = "<group>"; };
 		C672D512910D09D5145DD72D /* VoiceAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceAudio.swift; sourceTree = "<group>"; };
 		C89BF2E15E70A77ECE98E0C9 /* EffectTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EffectTests.swift; sourceTree = "<group>"; };
+		C90B20BBA2A003A2C660A0EC /* SpeechWords.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechWords.swift; sourceTree = "<group>"; };
 		D010600AC2FC6C41ED03558F /* MarkdownView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownView.swift; sourceTree = "<group>"; };
 		D1797F107F6BCB434192F1FB /* ComposerTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerTextView.swift; sourceTree = "<group>"; };
 		D67BDF4B4A305A1FFFCF7299 /* UmpiUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = UmpiUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -408,6 +411,7 @@
 			children = (
 				BC2A99DA94A36C2C4D650AC2 /* KokoroVoice.swift */,
 				F829182872D62A76A0600218 /* PhononTranscriber.swift */,
+				C90B20BBA2A003A2C660A0EC /* SpeechWords.swift */,
 				D7BC0C8D4261BF82D4BA521C /* TalkToUmpiIntent.swift */,
 				F4815AEE2D6CCF4BB3E0F694 /* TurnDetector.swift */,
 				C672D512910D09D5145DD72D /* VoiceAudio.swift */,
@@ -780,6 +784,7 @@
 				7911117A8913FCA548287D96 /* SettingsView.swift in Sources */,
 				3ABE225F7DD07A3C638E6FF4 /* Shortcut.swift in Sources */,
 				CE0B93137C254F9652C0EFF0 /* SmartTurn.mlpackage in Sources */,
+				323E63BA3C0867A7D61231FC /* SpeechWords.swift in Sources */,
 				12DB84CDF70FA9F8789072F7 /* SyntaxHighlighter.swift in Sources */,
 				267E97B5C43F5C2E3109207B /* T3Code.swift in Sources */,
 				460C080CDAD140CED9D2C28D /* T3CodeViews.swift in Sources */,
@@ -841,6 +846,7 @@
 				49744912F7986A50CA9EAF63 /* SecureStorage.swift in Sources */,
 				3431D1D839E0D5CBED583675 /* SettingsView.swift in Sources */,
 				8094A10EC372DCFB6ACFABCD /* SmartTurn.mlpackage in Sources */,
+				F8209F826A30B6C2CD196566 /* SpeechWords.swift in Sources */,
 				D1DFB04CA4BA75EB463E2F69 /* SyntaxHighlighter.swift in Sources */,
 				2013FB37B381418F406CDF21 /* T3Code.swift in Sources */,
 				D5FD75B433F47A46B318D445 /* T3CodeViews.swift in Sources */,

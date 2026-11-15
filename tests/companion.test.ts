@@ -11,6 +11,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ToolExecutionApi, ToolExecutionResult } from "@earendil-works/pi-durable";
 import { parseDefinition, parseMutation, parseCapabilities, parseRegistration, type Workflow, type Capability, type WorkflowDefinition } from "../src/shared/companion.js";
 import { InputError, record } from "../src/shared/protocol.js";
+import { SpeechWordStore } from "../src/worker/speech-words.js";
 import { ChatLog } from "../src/worker/chat.js";
 import { Store, StateError, type Database } from "../src/worker/store.js";
 import { CompanionStore, CompanionConflict, companionHash } from "../src/worker/companion-store.js";
@@ -42,7 +43,7 @@ function fixture(t: TestContext) {
   const companion = new CompanionStore(owner);
   t.after(() => { sqlite.close(); rmSync(directory, { recursive: true, force: true }); });
   const chat = new ChatLog(db); owner.chat = chat;
-  const context: CompanionHttpContext = { companion, config, chat, t3: new T3CodeStore(db), t3Requests: () => [], async t3Act() { return {}; }, async decideT3() { return { text: "" }; }, async cloud() { return {}; }, async wake() {}, async requireModel() {}, async interrupt() { return undefined; },
+  const context: CompanionHttpContext = { companion, config, chat, speechWords: new SpeechWordStore(db), t3: new T3CodeStore(db), t3Requests: () => [], async t3Act() { return {}; }, async decideT3() { return { text: "" }; }, async cloud() { return {}; }, async wake() {}, async requireModel() {}, async interrupt() { return undefined; },
     async admitApp(id, deviceId, message) {
       companion.requireDevice(deviceId);
       return owner.admit(id, message.text || "[attachment]", "telegram", "2", { kind: message.images ? "app-image" : message.document ? "app-file" : "app-text",

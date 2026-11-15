@@ -25,10 +25,11 @@ async function withAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
 }
 
 /** Keeps one audio buffer; Workers' fixed-length stream and Node's header preserve the upload length. */
-function multipart(audio: TelegramVoiceAudio, boundary: string): { body: ReadableStream<Uint8Array>; byteLength: number } {
+function multipart(audio: TelegramVoiceAudio, boundary: string, prompt?: string): { body: ReadableStream<Uint8Array>; byteLength: number } {
   const encoder = new TextEncoder();
   const prefix = encoder.encode(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${audio.filename}"\r\nContent-Type: ${audio.mimeType}\r\n\r\n`);
-  const suffix = encoder.encode(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\n${SUBSCRIPTION_TRANSCRIPTION_MODEL}\r\n--${boundary}--\r\n`);
+  const hint = prompt ? `\r\n--${boundary}\r\nContent-Disposition: form-data; name="prompt"\r\n\r\n${prompt}` : "";
+  const suffix = encoder.encode(`${hint}\r\n--${boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\n${SUBSCRIPTION_TRANSCRIPTION_MODEL}\r\n--${boundary}--\r\n`);
   const byteLength = prefix.byteLength + audio.bytes.byteLength + suffix.byteLength;
   let part = 0;
   const stream = new ReadableStream<Uint8Array>({
@@ -73,9 +74,12 @@ async function responseText(response: Response, signal: AbortSignal): Promise<st
   }
 }
 
-/** Subscription-only, single dispatch. Remote errors and credentials never leave this boundary. */
+/**
+ * Subscription-only, single dispatch. Remote errors and credentials never leave this boundary. `prompt` names words
+ * the owner uses that the model may not know (the speech words).
+ */
 export async function transcribeSubscriptionAudio(
-  audio: TelegramVoiceAudio, auth: () => Promise<SubscriptionTranscriptionAuth>, signal: AbortSignal,
+  audio: TelegramVoiceAudio, auth: () => Promise<SubscriptionTranscriptionAuth>, signal: AbortSignal, prompt?: string,
 ): Promise<string> {
   if (!(audio.bytes instanceof Uint8Array) || audio.bytes.byteLength === 0) throw new VoiceNoteError("download_failed");
   if (audio.bytes.byteLength > MAX_VOICE_NOTE_BYTES) throw new VoiceNoteError("too_large");
@@ -98,7 +102,7 @@ export async function transcribeSubscriptionAudio(
     if (!authorization || !credential(authorization.access)) throw new VoiceNoteError("authorization_missing");
     controller.signal.throwIfAborted();
     const boundary = `umpi-${crypto.randomUUID()}`;
-    const upload = multipart(audio, boundary);
+    const upload = multipart(audio, boundary, prompt);
     response = await withAbort(fetch(ENDPOINT, {
       method: "POST", redirect: "manual", signal: controller.signal,
       headers: {

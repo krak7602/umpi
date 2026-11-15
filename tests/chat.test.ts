@@ -5,6 +5,7 @@ import { generateKeyPairSync, randomBytes } from "node:crypto";
 import type { Capability } from "../src/shared/companion.js";
 import { record } from "../src/shared/protocol.js";
 import { ChatLog, type ChatEntry } from "../src/worker/chat.js";
+import { SpeechWordStore } from "../src/worker/speech-words.js";
 import { SPOKEN_TURN_NOTE, cutOffNote, interruptedReply } from "../src/worker/speech-relay.js";
 import { Store, type Database } from "../src/worker/store.js";
 import { CompanionStore } from "../src/worker/companion-store.js";
@@ -33,7 +34,7 @@ function fixture(t: TestContext) {
   const appended: ChatEntry[] = []; chat.appended = entry => { appended.push(entry); };
   const companion = new CompanionStore(owner);
   const interrupted: [string, boolean][] = [];
-  const context: CompanionHttpContext = { companion, config, chat, t3: new T3CodeStore(db), t3Requests: () => [], async t3Act() { return {}; }, async decideT3() { return { text: "" }; }, async cloud() { return {}; }, async wake() {}, async requireModel() {},
+  const context: CompanionHttpContext = { companion, config, chat, speechWords: new SpeechWordStore(db), t3: new T3CodeStore(db), t3Requests: () => [], async t3Act() { return {}; }, async decideT3() { return { text: "" }; }, async cloud() { return {}; }, async wake() {}, async requireModel() {},
     async interrupt(operationId, heard) {
       interrupted.push([operationId, owner.interrupt(operationId, interruptedReply, heard)]);
       return owner.operation(operationId)?.ownerSource?.spoken ? cutOffNote(heard ?? "") : undefined;
@@ -124,6 +125,12 @@ test("the app reads history in pages, changes the notification setting, and send
   await assert.rejects(page("?before=x"));
   const settings = await companionRequest(request("/api/device/chat/settings", token, { expectedVersion: 1, notify: "app" }, "PUT"), f.context);
   assert.equal(record(await settings!.json()).notify, "app");
+  const words = async (body?: unknown) => companionRequest(request("/api/device/speech-words", token, body, body === undefined ? "GET" : "PUT"), f.context);
+  assert.deepEqual(await (await words())!.json(), { words: [], version: 1 }, "the list starts empty");
+  assert.deepEqual(await (await words({ expectedVersion: 1, words: [" Home  Assistant ", "Figma", "figma"] }))!.json(), { words: ["Home Assistant", "Figma"], version: 2 });
+  await assert.rejects(words({ expectedVersion: 1, words: ["Kubernetes"] }), /expected version 2/, "an edit of an older list is refused");
+  await assert.rejects(words({ expectedVersion: 2, words: ["a\u0007b"] }), /control characters/);
+  assert.deepEqual(record(await (await words())!.json()).words, ["Home Assistant", "Figma"]);
 
   const sent = await companionRequest(request("/api/device/messages", token, { id: "m1", text: "Hi from the phone" }), f.context);
   assert.equal(sent!.status, 202);

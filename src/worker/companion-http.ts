@@ -1,6 +1,7 @@
 import { InputError, boundedText, identifier, record, timestamp } from "../shared/protocol.js";
 import { MAX_IMAGES_PER_MESSAGE, VoiceNoteError, type TelegramDocument, type TelegramImage } from "../shared/voice-note.js";
 import type { ChatLog } from "./chat.js";
+import type { SpeechWordStore } from "./speech-words.js";
 import { KNOCK_SNOOZE_MINUTES } from "../shared/knock.js";
 import { exactKeys, parsePairClaim } from "../shared/companion.js";
 import { CompanionStore, companionHash } from "./companion-store.js";
@@ -16,6 +17,8 @@ export interface CompanionHttpContext {
   wake(): Promise<void>;
   requireModel(): Promise<void>;
   chat: ChatLog;
+  /** The owner's speech words, for the apps' recognizers. */
+  speechWords: SpeechWordStore;
   /** Admits an app message to the owner's shared conversation; the reply stays in the app. */
   admitApp(id: string, deviceId: string, message: AppMessage): Promise<Operation>;
   /**
@@ -163,6 +166,7 @@ export async function companionRequest(request: Request, context: CompanionHttpC
   if (t3Machine && request.method === "DELETE") { await context.wake(); companion.requireDevice(device.id); return Response.json(context.t3.remove(t3Machine[1]!)); }
   if (path === "/api/device/chat/socket") throw new StateError(426, "Open the chat socket as a WebSocket");
   if (path === "/api/device/chat/settings" && request.method === "GET") return Response.json(context.chat.settings());
+  if (path === "/api/device/speech-words" && request.method === "GET") return Response.json(context.speechWords.read());
   if (path === "/api/device/session") {
     await context.wake(); companion.requireDevice(device.id); companion.revoke(device.id);
     return Response.json({ ok: true });
@@ -172,6 +176,7 @@ export async function companionRequest(request: Request, context: CompanionHttpC
   await context.wake();
   companion.requireDevice(device.id);
   if (path === "/api/device/chat/settings") return Response.json(context.chat.configure(body));
+  if (path === "/api/device/speech-words") return Response.json(context.speechWords.replace(body));
   if (path === "/api/device/widget/actions") return Response.json(await context.setWidgetActions(record(body).actions));
   if (path === "/api/device/chat/test-alert") { const entry = context.chat.testAlert(); await context.wake(); return Response.json({ seq: entry.seq }); }
   if (path === "/api/device/chat/press") {

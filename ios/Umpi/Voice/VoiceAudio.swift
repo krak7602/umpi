@@ -11,8 +11,9 @@ final class VoiceAudio: @unchecked Sendable {
         case started(cutIn: Bool)
         /// Words so far, and the final text once the recognizer has it.
         case words(String, final: Bool, turn: Int)
-        /// The owner stopped talking for the set pause, with the turn's audio for a better transcription.
-        case ended(turn: Int, audio: TurnAudio?)
+        /// The owner stopped talking for the set pause, with the turn's audio for a better transcription. `cut` when it
+        /// ended only because it reached the recognizer's time limit, so the owner is likely still talking.
+        case ended(turn: Int, audio: TurnAudio?, cut: Bool)
         /// Loud enough to be the owner over Umpi's voice: lower Umpi while words are checked.
         case maybeCutIn
         /// It was not words after all.
@@ -282,12 +283,13 @@ final class VoiceAudio: @unchecked Sendable {
             // Ends on quiet, on words that stopped changing, after 55 s, or after 8 s of sound with no words at all.
             if Double(silentFrames) * 0.02 >= quiet || wordsSettled || Double(heardFrames) * 0.02 >= 55 || (noWords && Double(heardFrames) * 0.02 >= 8) {
                 let finished = lock.withLock { _finished }
+                let cut = Double(silentFrames) * 0.02 < quiet && !wordsSettled && !noWords
                 voiceLog("turn ended: \(Double(silentFrames) * 0.02 >= quiet ? "quiet" : wordsSettled ? "words settled" : noWords ? "no words" : "too long") after waiting \(quiet) s (sounded \(finished.map { $0 ? "finished" : "mid-thought" } ?? "unknown"))")
                 self.mode = .replying
                 request?.endAudio()
                 let audio = TurnAudio(turnAudio)
                 turnAudio = []; turnAudioFrames = 0
-                onEvent?(.ended(turn: turn, audio: audio))
+                onEvent?(.ended(turn: turn, audio: audio, cut: cut))
             }
         case .replying:
             guard cutIn, recent.filter({ $0 }).count >= 10 else { break }
@@ -327,6 +329,8 @@ final class VoiceAudio: @unchecked Sendable {
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
         request.addsPunctuation = true
+        // The owner's speech words: names and terms it would otherwise write as something that sounds like them.
+        request.contextualStrings = SpeechWords.cached
         request.taskHint = .dictation
         // On the phone's own model when it has one.
         if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }

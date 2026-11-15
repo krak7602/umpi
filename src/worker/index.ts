@@ -89,6 +89,7 @@ import { FILE_WITHOUT_CAPTION, IMAGE_WITHOUT_CAPTION, TelegramInbox } from "./te
 import { downloadTelegramImage, downloadTelegramVoice } from "./telegram-voice.js";
 import { documentFromBytes, readTelegramFile, type DocumentConverter } from "./telegram-files.js";
 import { ChatLog, type ChatEntry } from "./chat.js";
+import { SpeechWordStore, speechWordTools, speechWordsPrompt } from "./speech-words.js";
 import { ChatSocket } from "./chat-socket.js";
 import { T3CodeStore, T3_CALLBACK_PATH, t3CallbackPage, t3CodeTools } from "./t3-code.js";
 import { T3ActionRequests, t3ActionTools } from "./t3-actions.js";
@@ -333,6 +334,7 @@ export class Assistant extends Agent<Env> {
   readonly contextHealth: ContextHealth;
   readonly knocks: KnockStore;
   readonly chat: ChatLog;
+  readonly speechWords: SpeechWordStore;
   readonly widgets: WidgetStore;
   readonly knockPushes: KnockPushStore;
   readonly t3: T3CodeStore;
@@ -403,6 +405,7 @@ export class Assistant extends Agent<Env> {
     this.contextHealth = new ContextHealth(this.store.db);
     this.knocks = new KnockStore(this.store.db);
     this.chat = new ChatLog(this.store.db);
+    this.speechWords = new SpeechWordStore(this.store.db);
     this.chat.telegramOff = !telegramEnabled(this.config);
     this.widgets = new WidgetStore(this.store.db);
     this.knockPushes = new KnockPushStore(this.store.db);
@@ -494,7 +497,7 @@ export class Assistant extends Agent<Env> {
       track: work => this.lifecycle.trackAlarmWork(work),
     });
     const browserProfile = browserExtension(this.browserRuntime);
-    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...activityTools(this.store, this.activity, this.timezone, () => this.notifyExecutor()), ...journalTools(this.journal, id => this.store.isBackgroundSession(id)), ...widgetTools(this.widgets, () => this.coordinator.wake()), ...t3CodeTools(this.t3, () => this.t3Watch.recent()), ...t3ActionTools(this.t3, this.t3Requests, this.t3Watch), ...t3WatchTools(this.t3, this.t3Watch), ...cloudMachineTools(this.cloud, this.t3Watch), ...web, ...decision, ...historyTools(this.dream, this.history, id => this.store.isBackgroundSession(id)), ...contextTools(this.contextHealth, id => !this.store.isBackgroundSession(id)), ...delegation.tools ?? []];
+    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...speechWordTools(this.speechWords, id => this.store.isBackgroundSession(id)), ...activityTools(this.store, this.activity, this.timezone, () => this.notifyExecutor()), ...journalTools(this.journal, id => this.store.isBackgroundSession(id)), ...widgetTools(this.widgets, () => this.coordinator.wake()), ...t3CodeTools(this.t3, () => this.t3Watch.recent()), ...t3ActionTools(this.t3, this.t3Requests, this.t3Watch), ...t3WatchTools(this.t3, this.t3Watch), ...cloudMachineTools(this.cloud, this.t3Watch), ...web, ...decision, ...historyTools(this.dream, this.history, id => this.store.isBackgroundSession(id)), ...contextTools(this.contextHealth, id => !this.store.isBackgroundSession(id)), ...delegation.tools ?? []];
     const guardedProactiveTools = guardDreamReviewTools(guardBriefReviewTools(guardMailReviewTools(guardPlanningReviewTools(proactiveTools(this.proactive, () => this.coordinator.wake()), this.planningRuntime), this.mailRuntime), this.brief), this.dream);
     const briefSources = { brief: this.brief, situation: this.situation, mail: this.mail, planning: this.planningRuntime, calendarCredentials: () => this.config.UMPI_CALENDAR_CREDENTIALS, activity: this.activity, dream: this.dream };
     const ownerSessions = () => (["telegram", "control"] as const).flatMap(channel => { const session = this.store.session(channel); return session ? [{ channel, session }] : []; });
@@ -538,7 +541,7 @@ export class Assistant extends Agent<Env> {
         const current = await this.credentials.read("openai-codex");
         if (!resolved?.auth.apiKey || current?.type !== "oauth" || current.access !== resolved.auth.apiKey) throw new VoiceNoteError("authorization_missing");
         return { access: resolved.auth.apiKey };
-      }, signal),
+      }, signal, speechWordsPrompt(this.speechWords.read().words)),
       deliver: input => this.deliverTelegramInput(input),
       notify: (id, text) => { this.store.enqueue(id, "telegram", text); },
       foreground: () => { this.proactive.deferForForeground(); },
@@ -1011,7 +1014,7 @@ export class Assistant extends Agent<Env> {
         return await cloudModelRequest(request, { models: this.models, machineFor: token => this.cloud.machineFor(token), used: id => this.cloud.used(id) });
       }
       const companion = await companionRequest(request, {
-        companion: this.companion, config: this.config, wake: () => this.coordinator.wake(), chat: this.chat,
+        companion: this.companion, config: this.config, wake: () => this.coordinator.wake(), chat: this.chat, speechWords: this.speechWords,
         admitApp: (id, deviceId, message) => this.admitApp(id, deviceId, message),
         interrupt: (operationId, heard) => this.interruptSpoken(operationId, heard),
         press: (seq, data) => this.pressChatButton(seq, data),

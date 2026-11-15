@@ -108,6 +108,8 @@ struct VoiceSettingsView: View {
                 Text("Phonon-2 is an open speech model that writes out what you said far more accurately, on this \(ThisDevice.noun); nothing is sent anywhere. English only. Its files download once, and the first start prepares it for a few minutes; until then, Apple's recognizer is used.")
             }
 
+            SpeechWordsSection()
+
             Section {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack { Text("Wait before replying"); Spacer(); Text(String(format: "%.1f s", settings.pause)).monospacedDigit().foregroundStyle(.secondary) }
@@ -287,5 +289,49 @@ struct DownloadRing: View {
             path.closeSubpath()
             return path
         }
+    }
+}
+
+/// The speech words, one per row, with new ones typed in below.
+private struct SpeechWordsSection: View {
+    @Environment(CompanionStore.self) private var store
+    private let list = SpeechWords.shared
+    @State private var newWord = ""
+
+    var body: some View {
+        Section {
+            ForEach(list.words, id: \.self) { word in
+                HStack {
+                    Text(word)
+                    #if os(macOS)
+                    Spacer()
+                    Button { Task { await list.remove(word, store) } } label: { Image(systemName: "minus.circle") }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Remove \(word)")
+                    #endif
+                }
+            }
+            .onDelete { offsets in
+                let gone = offsets.map { list.words[$0] }
+                Task { for word in gone { await list.remove(word, store) } }
+            }
+            HStack {
+                TextField("Add a name or term", text: $newWord)
+                    .autocorrectionDisabled()
+                    .onSubmit(add)
+                    .accessibilityIdentifier("voice.speechWord")
+                Button("Add", action: add)
+                    .disabled(SpeechWords.clean(newWord).isEmpty)
+            }
+            if let problem = list.problem { Text(problem).font(.footnote).foregroundStyle(.red) }
+        } header: { Text("Words to recognize") } footer: {
+            Text("Names and terms that come out wrong, written the way you spell them: products, people, places. Voice mode on all your devices and Telegram voice notes correct towards them, and Umpi adds one when you correct a misheard word. Keep the list short: long lists make recognition hear these words where they were not said. With Phonon-2, a small extra model (about 100 MB) downloads for them.")
+        }
+        .task { await list.refresh(store) }
+    }
+
+    private func add() {
+        let word = newWord
+        Task { if await list.add(word, store) { newWord = "" } }
     }
 }

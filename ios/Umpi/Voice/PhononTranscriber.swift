@@ -18,6 +18,12 @@ actor PhononTranscriber {
     private var published = 0
     private var manager: AsrManager?
     private var preparing: Task<Void, Error>?
+    /// The owner's speech words, and FluidAudio's word spotter (Parakeet CTC 110M, about 100 MB, downloaded once when
+    /// there are words), which checks Phonon-2's text against the turn's audio and puts in the words it hears.
+    private var words: [String] = []
+    private var spotterModels: CtcModels?
+    private var boosting: (words: [String], session: VocabularyBoostingSession)?
+    private var spotting: Task<Void, Never>?
 
     /// The files are on the device: a later start loads them without the network.
     nonisolated static var downloaded: Bool { UserDefaults.standard.bool(forKey: "phonon.downloaded") }
@@ -50,6 +56,9 @@ actor PhononTranscriber {
             let manager = AsrManager(config: .default)
             try await manager.loadModels(models)
             self.manager = manager
+            // Loaded before voice mode has fetched the words (such as by the warm-up after an update): the saved copy.
+            if words.isEmpty { words = SpeechWords.cached }
+            prepareSpotter()
             let took = Date().timeIntervalSince(started)
             voiceLog(String(format: "phonon ready in %.1f s%@", took, complete ? "" : " (15 s encoder only; the shorter ones compile next)"))
             // How long a compile takes on this device, to show progress next time.
@@ -139,41 +148,112 @@ actor PhononTranscriber {
         }
     }
 
+    /// The speech words to correct towards. With words and Phonon-2 loaded, the word spotter loads in the background
+    /// (downloading it the first time); until it is ready, turns are written out without it.
+    func use(words: [String]) {
+        guard words != self.words else { return }
+        self.words = words
+        if words.isEmpty { boosting = nil; return }
+        prepareSpotter()
+    }
+
+    private func prepareSpotter() {
+        guard spotting == nil, manager != nil, !words.isEmpty, boosting?.words != words else { return }
+        let wanted = words, loaded = spotterModels
+        spotting = Task {
+            do {
+                let models: CtcModels
+                if let loaded { models = loaded } else {
+                    voiceLog(CtcModels.modelsExist(at: Self.spotterDirectory) ? "word spotter loading" : "word spotter downloading (about 100 MB)")
+                    models = try await CtcModels.downloadAndLoad(variant: .ctc110m)
+                    var url = Self.spotterDirectory
+                    var values = URLResourceValues(); values.isExcludedFromBackup = true
+                    try? url.setResourceValues(values)
+                }
+                spotterModels = models
+                let vocabulary = CustomVocabularyContext(terms: wanted.map { CustomVocabularyTerm(text: $0) })
+                boosting = (wanted, try await VocabularyBoostingSession(vocabulary: vocabulary, ctcModels: models))
+                voiceLog("word spotter ready for \(wanted.count) speech words")
+            } catch {
+                voiceLog("word spotter could not load: \(error.localizedDescription)")
+            }
+            spotting = nil
+            // The words changed while it loaded.
+            if boosting?.words != words, !words.isEmpty, spotterModels != nil { prepareSpotter() }
+        }
+    }
+
+    nonisolated static var spotterDirectory: URL { CtcModels.defaultCacheDirectory(for: .ctc110m) }
+
     /// The words in `audio` (mono, any sample rate), or nil when the model is not loaded yet or fails.
     func transcribe(_ audio: TurnAudio) async -> String? {
         guard let manager else { voiceLog("phonon not ready yet (\(state)); sending the recognizer's words"); return nil }
         let started = Date()
         do {
+            let samples = try AudioConverter().resampleBuffer(audio.buffer)
             var decoder = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
-            let result = try await manager.transcribe(audio.buffer, decoderState: &decoder)
-            let seconds = Double(audio.buffer.frameLength) / audio.buffer.format.sampleRate
-            voiceLog(String(format: "phonon wrote %d words from %.1f s of speech in %.2f s", result.text.split(separator: " ").count, seconds, Date().timeIntervalSince(started)))
-            return result.text
+            let result = try await manager.transcribe(samples, decoderState: &decoder)
+            voiceLog(String(format: "phonon wrote %d words from %.1f s of speech in %.2f s", result.text.split(separator: " ").count, audio.seconds, Date().timeIntervalSince(started)))
+            guard let session = boosting?.session, let timings = result.tokenTimings, !timings.isEmpty, !result.text.isEmpty else { return result.text }
+            return await Self.corrected(result.text, timings: timings, samples: samples, session: session)
         } catch {
             voiceLog("phonon failed: \(error.localizedDescription)")
             return nil
         }
     }
 
-    /// Frees the loaded model, keeping its files; it loads again in seconds, as Core ML keeps the compiled result.
+    /// Phonon-2's text with the speech words the spotter heard put in. At most 2 s: past that the text goes as written,
+    /// and the spotter finishes on its own.
+    private static func corrected(_ text: String, timings: [TokenTiming], samples: [Float], session: VocabularyBoostingSession) async -> String {
+        let started = Date()
+        let output = await firstOf(seconds: 2) { await session.rescore(text: text, tokenTimings: timings, audioSamples: samples) }
+        guard let output else { voiceLog("word spotter took over 2 s; sending phonon's words as written"); return text }
+        guard let result = output, result.wasModified else { return text }
+        voiceLog(String(format: "word spotter put in %d speech words in %.2f s", result.replacements.count, Date().timeIntervalSince(started)))
+        return result.text
+    }
+
+    /// `work`'s result, or nil (outer) when it takes longer than `seconds`; it is not waited for after that.
+    private static func firstOf<T: Sendable>(seconds: Double, _ work: @escaping @Sendable () async -> T) async -> T? {
+        let once = Once()
+        return await withCheckedContinuation { (done: CheckedContinuation<T?, Never>) in
+            Task { let value = await work(); if once.claim() { done.resume(returning: .some(value)) } }
+            Task { try? await Task.sleep(for: .seconds(seconds)); if once.claim() { done.resume(returning: .none) } }
+        }
+    }
+
+    private final class Once: @unchecked Sendable {
+        private let lock = NSLock()
+        private var claimed = false
+        func claim() -> Bool { lock.withLock { defer { claimed = true }; return !claimed } }
+    }
+
+    /// Frees the loaded models, keeping their files; they load again in seconds, as Core ML keeps the compiled result.
     func unload() {
-        guard preparing == nil, manager != nil else { return }
+        guard preparing == nil, spotting == nil, manager != nil else { return }
         manager = nil
+        spotterModels = nil
+        boosting = nil
         state = .notReady
     }
 
-    /// Removes the downloaded files.
+    /// Removes the downloaded files, the word spotter's too.
     func remove() {
         manager = nil
+        spotterModels = nil
+        boosting = nil
         state = .notReady
         UserDefaults.standard.set(false, forKey: "phonon.downloaded")
         try? FileManager.default.removeItem(at: Self.directory)
+        try? FileManager.default.removeItem(at: Self.spotterDirectory)
     }
 }
 
 /// A turn's audio, handed from the audio thread to the transcriber once the turn has ended and nothing writes to it.
 struct TurnAudio: @unchecked Sendable {
     let buffer: AVAudioPCMBuffer
+
+    var seconds: Double { Double(buffer.frameLength) / buffer.format.sampleRate }
 
     /// Two parts of one turn, the owner having carried on after a pause that ended the first, as one.
     static func joined(_ first: TurnAudio?, _ second: TurnAudio?) -> TurnAudio? {

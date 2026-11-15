@@ -49,6 +49,12 @@ final class VoiceConversation {
     private var turnAudio: TurnAudio?
     /// A turn that ended but was not sent yet when the owner carried on talking: the next turn continues it.
     private var carried: (words: String, audio: TurnAudio?)?
+    /// Parts of the current turn that reached the recognizer's time limit, each carried into the next.
+    private var limitParts = 0
+    /// Sends a part that reached the time limit when the owner does not go on talking.
+    private var carryWait: Task<Void, Never>?
+    /// Long turns join up to this many parts (about four minutes), then go out.
+    private static let maxLimitParts = 3
     /// The reply the owner just talked over, sent with the next message.
     private var interrupted: (id: String, heard: String)?
     private var started = false
@@ -110,6 +116,8 @@ final class VoiceConversation {
         #endif
         if let problem = await VoiceAudio.permissions() { phase = .failed(problem); return }
         applySettings()
+        // The speech words may have changed elsewhere (Umpi adds them when corrected); the saved copy is used until then.
+        Task { await SpeechWords.shared.refresh(store) }
         do { try audio.start() } catch { phase = .failed("The microphone could not start: \(error.localizedDescription)"); return }
         socketTask = Task { await stayConnected() }
         listen()
@@ -138,8 +146,8 @@ final class VoiceConversation {
     /// sent is answered on the coordinator as usual.
     func leaving() async {
         guard started else { return }
-        if phase == .hearing || finalWaiter != nil {
-            finalWaiter?.cancel(); finalWaiter = nil; transcribing = false
+        if phase == .hearing || finalWaiter != nil || carried != nil {
+            finalWaiter?.cancel(); finalWaiter = nil; transcribing = false; carryWait?.cancel()
             // Still taking the recognizer's words for this turn.
             phase = .hearing
             let turn = self.turn
@@ -189,6 +197,8 @@ final class VoiceConversation {
 
     private func listen() {
         carried = nil
+        limitParts = 0
+        carryWait?.cancel()
         words = ""
         caption = ""
         audio.mode = .waiting
@@ -217,7 +227,7 @@ final class VoiceConversation {
                 carried = (Self.join(carried?.words, words), turnAudio)
                 voiceLog("carried on talking before the turn was sent; joining the two")
             }
-            finalWaiter?.cancel(); transcribing = false
+            finalWaiter?.cancel(); transcribing = false; carryWait?.cancel()
             words = ""
             caption = carried?.words ?? ""
             captionIsOwner = true
@@ -230,9 +240,9 @@ final class VoiceConversation {
             if final { finalTurn = turn }
             if final, self.turn == turn, finalWaiter != nil, !transcribing { finalWaiter?.cancel(); finalWaiter = nil; send() }
             self.turn = turn
-        case .ended(let turn, let audio):
+        case .ended(let turn, let audio, let cut):
             self.turn = turn
-            finishTurn(audio: audio)
+            if cut, limitParts < Self.maxLimitParts { carryOn(audio: audio) } else { finishTurn(audio: audio) }
         case .maybeCutIn, .notCutIn:
             // Umpi keeps talking at full volume until words confirm the owner is cutting in.
             break
@@ -276,14 +286,45 @@ final class VoiceConversation {
         }
     }
 
+    /// The turn reached the recognizer's time limit while the owner was still talking. It is kept, and voice mode
+    /// listens on: what follows joins it as one message, instead of a new one that starts mid-sentence and is written
+    /// out without the words before it. When the owner does not go on, the part goes out on its own.
+    private func carryOn(audio ended: TurnAudio?) {
+        carried = Self.joined(carried, words: words, audio: ended)
+        limitParts += 1
+        voiceLog("turn reached the time limit mid-speech; listening on to join the rest (part \(limitParts))")
+        words = ""
+        caption = carried?.words ?? ""
+        audio.mode = .waiting
+        phase = .listening
+        carryWait?.cancel()
+        carryWait = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard let self, !Task.isCancelled, self.started, self.phase == .listening, self.carried != nil else { return }
+            voiceLog("nothing more after the time limit; sending the part")
+            self.finishTurn(audio: nil)
+        }
+    }
+
+    /// A carried part with what followed it. Phonon-2 writes out both only when it has the audio of both; when nothing
+    /// was said since, the carried audio covers it all.
+    private static func joined(_ carried: (words: String, audio: TurnAudio?)?, words: String, audio ended: TurnAudio?) -> (words: String, audio: TurnAudio?) {
+        guard let carried else { return (words, ended) }
+        let nothingSince = words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && ended == nil
+        let audio = nothingSince ? carried.audio : carried.audio != nil && ended != nil ? TurnAudio.joined(carried.audio, ended) : nil
+        return (join(carried.words, words), audio)
+    }
+
     /// The owner stopped talking. With Phonon-2 ready, its transcript of the turn's audio is sent (Apple's words if it
-    /// fails or takes over 4 s); otherwise the recognizer's final words, waited for briefly.
+    /// fails or takes too long); otherwise the recognizer's final words, waited for briefly.
     private func finishTurn(audio ended: TurnAudio?) {
+        carryWait?.cancel()
+        limitParts = 0
         var turnAudio = ended
-        if let carried {
-            words = Self.join(carried.words, words)
-            // Phonon-2 writes out both parts only when it has the audio of both.
-            turnAudio = carried.audio != nil && ended != nil ? TurnAudio.joined(carried.audio, ended) : nil
+        if carried != nil {
+            let whole = Self.joined(carried, words: words, audio: ended)
+            words = whole.words
+            turnAudio = whole.audio
             self.carried = nil
         }
         self.turnAudio = turnAudio
@@ -297,7 +338,8 @@ final class VoiceConversation {
             finalWaiter = Task { [weak self] in
                 let text = await withTaskGroup(of: String?.self) { group in
                     group.addTask { await PhononTranscriber.shared.transcribe(turnAudio) }
-                    group.addTask { try? await Task.sleep(for: .seconds(4)); return nil }
+                    // Long turns take longer to write out: about 1.3 s for a minute on an iPhone 13.
+                    group.addTask { try? await Task.sleep(for: .seconds(4 + turnAudio.seconds * 0.05)); return nil }
                     let first = await group.next() ?? nil
                     group.cancelAll()
                     return first
@@ -306,7 +348,7 @@ final class VoiceConversation {
                 self.transcribing = false
                 self.finalWaiter = nil
                 if let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty { self.words = text; self.caption = text }
-                else { voiceLog("phonon gave no words within 4 s; sending the recognizer's words") }
+                else { voiceLog("phonon gave no words in time; sending the recognizer's words") }
                 self.send()
             }
             return
