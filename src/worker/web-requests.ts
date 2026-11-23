@@ -28,6 +28,8 @@ export interface WebRequest {
   why?: string; watch?: WatchInput;
   status: "pending" | "approved" | "declined" | "expired" | "failed";
   createdAt: string; decidedAt?: string; outcome?: string;
+  /** The card's buttons were removed because it can no longer be answered. */
+  buttonsCleared?: true;
 }
 
 const PREFIX = "wr:";
@@ -39,6 +41,8 @@ export interface WebRequestOptions {
   seen: WebSeenStore;
   /** Starts a turn in the asking conversation with this text as a result. */
   admit(id: string, text: string, channel: Channel, sessionId: string): void;
+  /** Removes the buttons of the message in this group, where the owner sees it. */
+  clearButtons?(group: string): void;
   now?(): number;
 }
 
@@ -154,6 +158,27 @@ export class WebRequests {
     this.save(request);
     this.owner.enqueue(`${group}:outcome`, "telegram", text, undefined, undefined, undefined, { quiet: true });
     return { text: text.split("\n")[0]!, replyMarkup: empty };
+  }
+
+  /**
+   * Ends cards that can no longer be answered and removes their buttons, so a void card cannot be pressed: a card
+   * past its 24 hours, and a card whose delivered text no longer equals the card of its stored request (the card's
+   * layout changed in a later version). Returns how many cards it cleared.
+   */
+  sweep(): number {
+    let cleared = 0;
+    for (const row of this.db.all<{ data: string }>("SELECT data FROM umpi_web_requests")) {
+      const request = this.expire(JSON.parse(row.data) as WebRequest);
+      if (request.status === "pending" && !this.shown(request)) {
+        request.status = "failed"; request.decidedAt = this.iso(); request.outcome = "The card no longer matched its request."; this.save(request);
+      }
+      if ((request.status === "expired" || request.status === "failed") && !request.buttonsCleared) {
+        this.options.clearButtons?.(this.group(request.id));
+        request.buttonsCleared = true; this.save(request);
+        cleared++;
+      }
+    }
+    return cleared;
   }
 
   status(): object {

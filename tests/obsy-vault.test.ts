@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { VaultAgent } from "@obsy/agent";
 import { initVault, webEnvironment } from "@obsy/core";
 import { R2Storage, type R2BucketLike } from "@obsy/storage-r2";
-import { ObsyVaultClient } from "../src/worker/obsy-vault.js";
+import { ObsyVaultClient, withFreshReader } from "../src/worker/obsy-vault.js";
 import { editNoteLine } from "../src/shared/note-edit.js";
 import { DEFAULT_VAULT_SCOPE, parseVaultApply, vaultNoteRevision } from "../src/shared/vault-planning.js";
 
@@ -149,4 +149,18 @@ test("an owner-requested line edit rewrites only that line, by what it says, and
   assert.deepEqual(missing, { status: "synced", result: { status: "not_found" } });
   assert.equal((await device.read(PATH))!.text, final, "an edit that finds no line writes nothing");
   assert.deepEqual(await client.editDay("2026-10-22", "edit-5", text => editNoteLine(text, { line: "Anything", action: "remove" })), { status: "missing" });
+});
+
+test("a reader out of step with the log is replaced once; other errors and a second failure are thrown", async () => {
+  class ProtocolError extends Error {}
+  let made = 0, resets = 0;
+  const get = () => ({ id: ++made });
+  const reset = () => { resets++; };
+  // The first reader fails as the vault library does; the new one reads.
+  assert.equal(await withFreshReader(get, reset, async reader => { if (reader.id === 1) throw new ProtocolError("log entry 7 is missing"); return `read by ${reader.id}`; }), "read by 2");
+  assert.equal(resets, 1);
+  await assert.rejects(withFreshReader(get, reset, async () => { throw new Error("The daily note is not readable text"); }), /not readable text/);
+  assert.equal(resets, 1, "an ordinary error keeps the reader");
+  await assert.rejects(withFreshReader(get, reset, async () => { throw new ProtocolError("still missing"); }), /still missing/);
+  assert.equal(resets, 2, "one retry, then the error is the caller's");
 });

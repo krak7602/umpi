@@ -33,7 +33,8 @@ function setup(t: TestContext, world: { page: string; failed?: boolean } = { pag
     return Response.json(world.failed ? { results: [], errors: [{ url: urls[0], error_type: "fetch_error", http_status_code: 404 }] }
       : { results: urls.map(url => ({ url, title: "Harbour Screens", excerpts: [world.page], full_content: world.page, acquired_at: "2026-11-02T00:00:00Z" })), errors: [] });
   }) as typeof fetch }, { notice: () => undefined, now: () => now });
-  const requests = new WebRequests(db, owner, watcher, { seen, admit: (id, text, channel, sessionId) => { admitted.push({ id, text, channel, sessionId }); }, now: () => now });
+  const cleared: string[] = [];
+  const requests = new WebRequests(db, owner, watcher, { seen, admit: (id, text, channel, sessionId) => { admitted.push({ id, text, channel, sessionId }); }, clearButtons: group => { cleared.push(group); }, now: () => now });
   const tools = webRequestTools(requests, watcher, { foreground: webForeground(id => id === "review"), known: (url, id) => seen.has(id, url) });
   const run = async (name: string, input: object, conversationId = "owner") => {
     const output = await (tools.find(tool => tool.name === name) as ToolRegistration).execute(input as never, { conversationId } as unknown as ToolExecutionApi, {} as never);
@@ -42,7 +43,7 @@ function setup(t: TestContext, world: { page: string; failed?: boolean } = { pag
   };
   const card = (id: string) => owner.deliveries(`web-request:${id}`)[0]!;
   const buttons = (id: string) => card(id).replyMarkup!.inline_keyboard[0]!.map(button => button.callback_data);
-  return { world, owner, seen, watcher, requests, read, admitted, run, card, buttons, advance: (hours: number) => { now += hours * 3_600_000; } };
+  return { world, owner, seen, watcher, requests, read, admitted, cleared, run, card, buttons, advance: (hours: number) => { now += hours * 3_600_000; } };
 }
 
 test("a links card shows each address Umpi wrote; Approve makes them readable and continues the conversation", async t => {
@@ -123,4 +124,22 @@ test("the card is written from the stored request, so a changed request is not r
   s.owner.db.all("UPDATE umpi_web_requests SET data=? WHERE id=?", JSON.stringify({ ...stored, urls: ["https://elsewhere.example/?d=private"], composed: ["https://elsewhere.example/?d=private"] }), asked.id);
   assert.match((await s.requests.press(s.buttons(asked.id)[0]!, undefined, `web-request:${asked.id}`))!.text, /no longer matches the card you were shown/);
   assert.equal(await s.seen.has("owner", "https://elsewhere.example/?d=private"), false); assert.equal(s.admitted.length, 0);
+});
+
+test("the sweep removes the buttons of an expired card and of a card that no longer matches its request, once", async t => {
+  const s = setup(t);
+  const live = JSON.parse((await s.run("request_web_links", { urls: [DATED], why: "The dated page" })).value) as { id: string };
+  const old = JSON.parse((await s.run("request_web_links", { urls: [`${DATED}?screen=2`], why: "Another page" })).value) as { id: string };
+  assert.equal(s.requests.sweep(), 0, "a card that can still be answered keeps its buttons");
+  // A later version draws this request's card another way, so the card the owner has is void.
+  const stored = s.requests.request(old.id)!;
+  s.owner.db.all("UPDATE umpi_web_requests SET data=? WHERE id=?", JSON.stringify({ ...stored, why: "Worded another way" }), old.id);
+  assert.equal(s.requests.sweep(), 1);
+  assert.deepEqual(s.cleared, [`web-request:${old.id}`]);
+  assert.equal(s.requests.request(old.id)!.status, "failed");
+  assert.equal(s.requests.request(live.id)!.status, "pending");
+  s.advance(25);
+  assert.equal(s.requests.sweep(), 1, "the other card is past its 24 hours");
+  assert.deepEqual(s.cleared, [`web-request:${old.id}`, `web-request:${live.id}`]);
+  assert.equal(s.requests.sweep(), 0, "each card is cleared once");
 });

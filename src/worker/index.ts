@@ -191,7 +191,7 @@ class Coordinator extends LifecycleCapability {
       { name: "coding", run: () => a.codingRuntime.drive(), due: () => a.codingRuntime.nextDue() },
       { name: "t3-watch", run: () => a.t3Watch.kick(work => this.lifecycle.trackAlarmWork(work), () => this.wake()), due: () => a.t3Watch.nextDue() },
       { name: "cloud", run: () => a.cloud.drive(), due: () => a.cloud.nextDue() },
-      { name: "web-watch", run: () => a.webWatch.kick(work => this.lifecycle.trackAlarmWork(work), () => this.wake()), due: () => a.webWatch.nextDue() },
+      { name: "web-watch", run: () => { a.webRequests.sweep(); a.webWatch.kick(work => this.lifecycle.trackAlarmWork(work), () => this.wake()); }, due: () => a.webWatch.nextDue() },
       { name: "browser", run: () => a.browserRuntime.drive(), due: () => a.browserRuntime.nextDue() },
       // A running turn's wait brings its result and renews itself; this stage attaches the waits and checks them every 30 seconds (turns.ts).
       { name: "operations", run: () => a.turns.drive(), due: () => a.turns.nextDue() },
@@ -407,7 +407,8 @@ export class Assistant extends Agent<Env> {
     });
     this.webRequests = new WebRequests(this.store.db, this.store, this.webWatch, { seen: new WebSeenStore(this.store.db),
       // An approved card continues the conversation that asked, as a result turn.
-      admit: (id, text, channel, sessionId) => { this.proactive.deferForForeground(); this.store.admitResult(id, text, channel, sessionId); } });
+      admit: (id, text, channel, sessionId) => { this.proactive.deferForForeground(); this.store.admitResult(id, text, channel, sessionId); },
+      clearButtons: group => { const seq = this.chat.seqOf(group); if (seq !== undefined) this.chat.setButtons(seq, { inline_keyboard: [] }); } });
     this.history = new HistoryIndex(this.store.db, this.decisions);
     this.dream.index = this.history;
     this.dream.backfillIndex();

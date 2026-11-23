@@ -12,6 +12,22 @@ import type { VaultPlanningClient } from "./planning-runtime.js";
 const MAX_INPUT_BYTES = 1024 * 1024;
 export const OBSY_ACTOR = "umpi";
 
+/** The vault library's own error for state that does not fit together. The class is matched by name: the packages may each carry a copy. */
+const outOfStep = (error: unknown) => error instanceof Error && error.constructor.name === "ProtocolError";
+
+/**
+ * Runs `run` with the reader `get` returns. If the reader is out of step with the log, `reset` drops it and `run` goes
+ * once more with the reader `get` then returns. Any other error, and a second failure, are thrown.
+ */
+export async function withFreshReader<Reader, T>(get: () => Reader, reset: () => void, run: (reader: Reader) => Promise<T>): Promise<T> {
+  try { return await run(get()); }
+  catch (error) {
+    if (!outOfStep(error)) throw error;
+    reset();
+    return run(get());
+  }
+}
+
 /**
  * Daily-note reads and writes on an obsy vault through an R2 binding. The bucket's log orders every change,
  * so a write is a compare-and-swap against the revision that planning read. Devices merge umpi's commit
@@ -33,10 +49,21 @@ export class ObsyVaultClient implements VaultPlanningClient {
    */
   #reader?: VaultAgent;
   private reading(): VaultAgent { return this.#reader ??= this.agent(); }
+  /**
+   * Runs a read with the kept reader. When the vault library reports that the reader is out of step with the log (a
+   * `ProtocolError`, such as a log entry it expects and does not find while another device commits or after the log
+   * was checkpointed), the reader is dropped and the read runs once more with a new one, which rebuilds from the
+   * latest checkpoint. A second failure is thrown.
+   */
+  private read<T>(run: (agent: VaultAgent) => Promise<T>): Promise<T> {
+    return withFreshReader(() => this.reading(), () => { this.#reader = undefined; }, run);
+  }
 
   async getSnapshot(day: string): Promise<VaultPlanningSnapshot> {
     shiftPlanningDay(day, 0);
-    const agent = this.reading();
+    return this.read(agent => this.snapshot(agent, day));
+  }
+  private async snapshot(agent: VaultAgent, day: string): Promise<VaultPlanningSnapshot> {
     let total = 0;
     const readNote = async (path: string): Promise<string | null> => {
       const file = await agent.read(path);
@@ -70,7 +97,7 @@ export class ObsyVaultClient implements VaultPlanningClient {
   /** The day's note for the app's Today view, or null when it does not exist yet. */
   async readDay(day: string): Promise<{ day: string; text: string | null; revision: string }> {
     shiftPlanningDay(day, 0);
-    const file = await this.reading().read(vaultDayPath(this.scope, day));
+    const file = await this.read(agent => agent.read(vaultDayPath(this.scope, day)));
     if (file && (file.text === null || file.size > MAX_NOTE_BYTES)) throw new Error("The daily note is not readable text");
     const text = file?.text ?? null;
     return { day, text, revision: vaultNoteRevision(text) };
