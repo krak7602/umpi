@@ -1,9 +1,9 @@
 {
   "about": "Characters of instruction sections plus tool definitions (name, description, parameters) per profile, without the owner's core context. tests/profiles.test.ts fails when a total grows by more than 5% over the number here. To accept a change: UPDATE_MANIFEST=1 npm test.",
   "owner": {
-    "instructions": 23366,
+    "instructions": 23680,
     "tools": 81126,
-    "total": 104492
+    "total": 104806
   },
   "background": {
     "instructions": 13019,

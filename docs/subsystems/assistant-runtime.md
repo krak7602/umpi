@@ -1,7 +1,7 @@
 ---
 title: Persistent assistant runtime
 aliases: [coordinator, Telegram adapter, reminders, mail follow-through, situation record, morning brief, nightly run, dream, control API]
-updated: 2026-11-23
+updated: 2026-11-24
 ---
 
 # Persistent assistant runtime
@@ -241,6 +241,7 @@ Protected status reports request kinds and states under `webRequests`, without a
 - **Checked before it is kept.** An unknown component or property, a missing required property, or a value outside its range is refused with the place and the fix, so Umpi corrects the block in the same turn. A checked block is kept for the running turn and written into the reply's chat entry as `ui` when the reply is written.
 - **What a block cannot do.** It runs no code on the coordinator. A `send` button sends its own label as the owner's next message, so the owner sends exactly the words they see. A `link` or an `open` button takes only an address that passes the [URL provenance](#web-search) check. Approve and Decline exist only on cards that code writes from a stored request ([web approval cards](#web-approval-cards), T3 Code, memory); the instructions tell Umpi not to draw a look-alike, and a drawn one could only send its label as a message.
 - **Text stands alone.** Voice, notifications, widgets, and Telegram show the reply text only, so the instructions require the conclusion in the text and the detail in the block.
+- **Layout is the renderer's work.** Content is not known in advance, so a component adapts instead of a block being designed for one screen: a horizontal stack of buttons, badges, links, or icons wraps as whole items; a grid uses fewer columns when a cell would be narrower than 104 points; a label and a value stack when they do not fit on one line; table cells stay on one line and a wide table scrolls inside its block; a block is at most 560 points wide in a wide window.
 - **Where.** The owner's own conversation only; background reviews and subagents do not have the tool. An app build that does not know a component, a property, or a tone leaves it out.
 
 ### Decision models

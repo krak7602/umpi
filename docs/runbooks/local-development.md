@@ -1,7 +1,7 @@
 ---
 title: Development and operation
 aliases: [setup, startup, local assistant, executor recovery, hosted deployment, Gmail follow-through]
-updated: 2026-11-23
+updated: 2026-11-24
 ---
 
 # Development and operation

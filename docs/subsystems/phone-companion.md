@@ -1,7 +1,7 @@
 ---
 title: Phone companion and device acknowledgment
 aliases: [iPhone companion, personal Umpi app, SwiftUI, AlarmKit, device alarms, Mac app, floating chat]
-updated: 2026-11-23
+updated: 2026-11-24
 ---
 
 # Phone companion and device acknowledgment
