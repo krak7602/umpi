@@ -176,7 +176,7 @@ indirect enum MarkdownBlock: Equatable {
 
     private static func inlineRun(_ markup: Markup) -> AttributedString {
         switch markup {
-        case let text as Markdown.Text: return obsidianText(text.string)
+        case let text as Markdown.Text: return linkingAddresses(obsidianText(text.string))
         case is SoftBreak: return AttributedString(" ")
         case is LineBreak: return AttributedString("\n")
         case let code as InlineCode:
@@ -226,6 +226,26 @@ indirect enum MarkdownBlock: Equatable {
             rest = rest[match.range.upperBound...]
         }
         result += AttributedString(String(rest))
+        return result
+    }
+
+    /// Web addresses written out in plain text become links, as Telegram shows them. The parser itself links only
+    /// `<address>` and `[text](address)`. Punctuation that ends the sentence, and a closing bracket the address did
+    /// not open, stay outside the link.
+    static func linkingAddresses(_ text: AttributedString) -> AttributedString {
+        let plain = String(text.characters)
+        guard plain.contains("http") else { return text }
+        var result = text
+        for match in plain.matches(of: /https?:\/\/[^\s<>"'`\\^{}|\[\]]+/) {
+            var token = plain[match.range]
+            while let last = token.last, ".,;:!?*_~".contains(last) || (last == ")" && token.filter({ $0 == "(" }).count < token.filter({ $0 == ")" }).count) {
+                token = token.dropLast()
+            }
+            guard let url = URL(string: String(token)), url.host != nil else { continue }
+            let lower = result.characters.index(result.startIndex, offsetBy: plain.distance(from: plain.startIndex, to: token.startIndex))
+            let upper = result.characters.index(lower, offsetBy: token.count)
+            result[lower..<upper].link = url
+        }
         return result
     }
 

@@ -42,16 +42,23 @@ export interface WebRequestOptions {
   now?(): number;
 }
 
-/** The card of a request, written only from what is stored, so the stored request and its card cannot differ. */
+/**
+ * The card of a request, written only from what is stored, so the stored request and its card cannot differ. The apps
+ * draw it as Markdown, where a single line break is a space, and Telegram shows it as plain text: blank lines and
+ * "- " items read well in both.
+ */
 export function webRequestCard(request: Pick<WebRequest, "kind" | "urls" | "composed" | "why" | "watch">): string {
   const own = new Set(request.composed);
-  const pages = request.urls.map(url => own.has(url) && request.kind === "watch" ? `${url}\n(Umpi wrote this address)` : url).join("\n");
+  const pages = request.urls.map(url => `- ${url}${own.has(url) && request.kind === "watch" ? " (Umpi wrote this address)" : ""}`).join("\n");
   const check = "Check each address Umpi wrote before you approve: a link can carry text to the site it names.";
-  if (request.kind === "links") return `Open these links?\n\nUmpi worked out these addresses itself. No search result or message of yours had them.${request.why ? `\nWhy: ${request.why}` : ""}\n\n${pages}\n\n${check}`;
+  if (request.kind === "links") return `Open these links?\n\nUmpi worked out these addresses itself. No search result or message of yours had them.${request.why ? `\n\nWhy: ${request.why}` : ""}\n\n${pages}\n\n${check}`;
   const watch = request.watch!;
-  const number = watch.number ? `\nNumber: ${watch.number.what}, ${watch.number.below !== undefined ? `below ${watch.number.below}` : `above ${watch.number.above}`}` : "";
-  const requires = watch.requires?.length ? `\nMust mention: ${watch.requires.map(phrase => `"${phrase}"`).join(", ")}` : "";
-  return `Set up this web watch?\n\n${watch.title}\nTells you when: ${watch.condition}${number}${requires}\nChecks every ${watch.everyMinutes} minutes for ${watch.days} ${watch.days === 1 ? "day" : "days"}.${request.why ? `\nWhy: ${request.why}` : ""}\n\nPages:\n${pages}${request.composed.length ? `\n\n${check}` : ""}`;
+  const lines = [`Tells you when: ${watch.condition}`,
+    ...(watch.number ? [`Number: ${watch.number.what}, ${watch.number.below !== undefined ? `below ${watch.number.below}` : `above ${watch.number.above}`}`] : []),
+    ...(watch.requires?.length ? [`Must mention: ${watch.requires.map(phrase => `"${phrase}"`).join(", ")}`] : []),
+    `Checks every ${watch.everyMinutes} minutes for ${watch.days} ${watch.days === 1 ? "day" : "days"}.`,
+    ...(request.why ? [`Why: ${request.why}`] : [])];
+  return `Set up this web watch?\n\n${watch.title}\n\n${lines.map(line => `- ${line}`).join("\n")}\n\nPages:\n\n${pages}${request.composed.length ? `\n\n${check}` : ""}`;
 }
 
 export class WebRequests {
@@ -137,7 +144,7 @@ export class WebRequests {
       } else {
         request.outcome = "already true";
         const quote = made.alreadyTrue.excerpt ? `\n\nFrom the page:\n> ${made.alreadyTrue.excerpt}` : "";
-        text = `Already true: ${request.watch!.title}\n\n${made.alreadyTrue.why}.${quote}\n\n${request.urls.join("\n")}\n\nNo watch was set up.`;
+        text = `Already true: ${request.watch!.title}\n\n${made.alreadyTrue.why}.${quote}\n\n${request.urls.join("\n\n")}\n\nNo watch was set up.`;
       }
     } catch (error) {
       request.status = "failed";

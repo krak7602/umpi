@@ -140,6 +140,28 @@ final class MarkdownTests: XCTestCase {
     }
 }
 
+final class MarkdownAddressTests: XCTestCase {
+    func testPlainWebAddressesBecomeLinks() {
+        let blocks = MarkdownBlock.parse("""
+        Pages:
+
+        - https://tickets.example/harbour-screens/2026-12-18 (Umpi wrote this address)
+
+        See https://example.org/guide_(draft), then [the list](https://example.org/list). No link in example.org alone.
+        """)
+        guard blocks.count == 3, case .list(_, _, let items) = blocks[1], case .paragraph(let text) = blocks[2] else { return XCTFail("got \(blocks)") }
+        func links(_ text: AttributedString) -> [String: String] {
+            Dictionary(text.runs.compactMap { run in run.link.map { (String(text[run.range].characters), $0.absoluteString) } }, uniquingKeysWith: { first, _ in first })
+        }
+        guard case .paragraph(let item)? = items.first?.blocks.first else { return XCTFail("list item") }
+        XCTAssertEqual(links(item), ["https://tickets.example/harbour-screens/2026-12-18": "https://tickets.example/harbour-screens/2026-12-18"], "the note after the address is not part of the link")
+        XCTAssertEqual(links(text), [
+            "https://example.org/guide_(draft)": "https://example.org/guide_(draft)",
+            "the list": "https://example.org/list",
+        ], "a bracket the address opened belongs to it; the comma after it does not")
+    }
+}
+
 final class ObsidianMarkdownTests: XCTestCase {
     func testCalloutsMermaidHighlightsAndWikiLinks() {
         let blocks = MarkdownBlock.parse("""

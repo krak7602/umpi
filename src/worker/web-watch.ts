@@ -198,7 +198,8 @@ export class WebWatcher {
     return next;
   }
 
-  private link(watch: WebWatch): string { return watch.urls.join("\n"); }
+  /** The watched addresses, one paragraph each: the apps draw messages as Markdown, where a single line break is a space. */
+  private link(watch: WebWatch): string { return watch.urls.join("\n\n"); }
   /** Records one check of an active watch and tells the owner what changed, if anything did. */
   private apply(watch: WebWatch, check: WatchCheck): WebWatch {
     const now = this.now(), base = { ...watch, checks: watch.checks + 1, last: check };
@@ -207,7 +208,7 @@ export class WebWatcher {
       const next = { ...base, status: "met" as const, unknownStreak: 0, endedAt: this.iso(now) };
       this.db.transaction(() => {
         this.write(next, now);
-        this.options.notice(`${GROUP}${watch.id}:met`, `Watch: ${watch.title}\n\n${check.why}.\nWatched for: ${watch.condition}${quote}\n\n${this.link(watch)}\n\nThis watch is now finished.`);
+        this.options.notice(`${GROUP}${watch.id}:met`, `Watch: ${watch.title}\n\n${check.why}.\n\nWatched for: ${watch.condition}${quote}\n\n${this.link(watch)}\n\nThis watch is now finished.`);
       });
       return next;
     }

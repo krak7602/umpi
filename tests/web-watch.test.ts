@@ -95,7 +95,7 @@ test("a scheduled check that finds the condition true messages the owner once an
   assert.equal(met.status, "met"); assert.equal(met.last!.probability, 0.93);
   assert.equal(s.notices.length, 1);
   assert.equal(s.notices[0]!.group, `web-watch:${id}:met`);
-  assert.match(s.notices[0]!.text, /^Watch: Glass Tide at Harbour Screens\n\nThe page text shows the condition is true\.\nWatched for: Glass Tide is listed/);
+  assert.match(s.notices[0]!.text, /^Watch: Glass Tide at Harbour Screens\n\nThe page text shows the condition is true\.\n\nWatched for: Glass Tide is listed/);
   assert.match(s.notices[0]!.text, /From the page:\n> Harbour Screens\. Glass Tide 7:00 PM/);
   assert.ok(s.notices[0]!.text.includes(PAGE));
   assert.equal(s.watcher.nextDue(), undefined);

@@ -51,7 +51,7 @@ test("a links card shows each address Umpi wrote; Approve makes them readable an
   assert.deepEqual(JSON.parse((await s.run("request_web_links", { urls: [VENUE], why: "The venue page" })).value), { requested: false, note: "These addresses are readable already. Call read_web_page with them." });
   const asked = JSON.parse((await s.run("request_web_links", { urls: [VENUE, DATED], why: "The venue's page for 18 December, where the listing will show" })).value) as { requested: boolean; id: string };
   assert.equal(asked.requested, true);
-  assert.equal(s.card(asked.id).text, `Open these links?\n\nUmpi worked out these addresses itself. No search result or message of yours had them.\nWhy: The venue's page for 18 December, where the listing will show\n\n${DATED}\n\nCheck each address Umpi wrote before you approve: a link can carry text to the site it names.`);
+  assert.equal(s.card(asked.id).text, `Open these links?\n\nUmpi worked out these addresses itself. No search result or message of yours had them.\n\nWhy: The venue's page for 18 December, where the listing will show\n\n- ${DATED}\n\nCheck each address Umpi wrote before you approve: a link can carry text to the site it names.`);
   assert.equal(await s.seen.has("owner", DATED), false, "nothing is readable before the owner approves");
   const [approve, decline] = s.buttons(asked.id);
   await assert.rejects(s.requests.press(approve!, undefined, "web-request:other"), /does not belong/);
@@ -85,7 +85,7 @@ test("a watch card shows the whole watch and marks the addresses Umpi wrote; App
   const s = setup(t);
   await s.seen.record("owner", [VENUE]);
   const asked = JSON.parse((await s.run("request_web_watch", { ...WATCH, urls: [VENUE, DATED], everyMinutes: 120, days: 20, why: "The dated page is where the listing appears" })).value) as { id: string };
-  assert.equal(s.card(asked.id).text, `Set up this web watch?\n\nGlass Tide at Harbour Screens\nTells you when: Glass Tide is listed with at least one show time.\nMust mention: "Glass Tide"\nChecks every 120 minutes for 20 days.\nWhy: The dated page is where the listing appears\n\nPages:\n${VENUE}\n${DATED}\n(Umpi wrote this address)\n\nCheck each address Umpi wrote before you approve: a link can carry text to the site it names.`);
+  assert.equal(s.card(asked.id).text, `Set up this web watch?\n\nGlass Tide at Harbour Screens\n\n- Tells you when: Glass Tide is listed with at least one show time.\n- Must mention: "Glass Tide"\n- Checks every 120 minutes for 20 days.\n- Why: The dated page is where the listing appears\n\nPages:\n\n- ${VENUE}\n- ${DATED} (Umpi wrote this address)\n\nCheck each address Umpi wrote before you approve: a link can carry text to the site it names.`);
   assert.equal(s.read.length, 0, "nothing is read before the owner approves");
   const done = await s.requests.press(s.buttons(asked.id)[0]!, undefined, `web-request:${asked.id}`);
   assert.equal(done!.text, "Watching: Glass Tide at Harbour Screens");
