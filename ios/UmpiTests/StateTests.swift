@@ -29,6 +29,11 @@ private actor StateTestServer: CompanionTransport {
     var mutationArrived = false
     var arrival: CheckedContinuation<Void, Never>?
     var heldReply: CheckedContinuation<Void, Never>?
+    /// Every request path, in order, and the size of each answer to a state read.
+    var paths: [String] = []
+    var stateReplyBytes: [Int] = []
+    /// What the coordinator sends as `extra.widget`.
+    var widgetStamp: String?
     let timestamp = "2026-01-01T12:00:00Z"
 
     init(workflow: Workflow) {
@@ -46,6 +51,8 @@ private actor StateTestServer: CompanionTransport {
     func addQuestion() {
         snapshot.choices = [Choice(id: "question", question: "Which approach?", options: ["First", "Second"],
             channel: "control", sessionId: "fixture-session", status: "pending", createdAt: timestamp)]
+        // As on the coordinator: a change to owner state moves the revision.
+        snapshot.revision += 1
     }
     func answerLog() -> [String] { answers }
     func actionLog() -> [DeviceAction] { snapshot.actions }
@@ -61,12 +68,31 @@ private actor StateTestServer: CompanionTransport {
         await withCheckedContinuation { arrival = $0 }
     }
     func releaseMutation() { heldReply?.resume(); heldReply = nil }
+    func requestLog() -> [String] { paths }
+    func stateReplySizes() -> [Int] { stateReplyBytes }
+    /// The coordinator's revision moves with coordinator fields the app does not show.
+    func bumpRevision() { snapshot.revision += 1 }
+    func setWidgetStamp(_ stamp: String) { widgetStamp = stamp; snapshot.revision += 1 }
+    func setCapabilities(_ capabilities: [Capability]) { snapshot.device.capabilities = capabilities }
+    private func stateReply(known: Int?) throws -> Data {
+        var reply = Data("{\"protocolVersion\":1,\"revision\":\(snapshot.revision),\"unchanged\":true}".utf8)
+        if known != snapshot.revision {
+            var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(snapshot)) as? [String: Any])
+            if let widgetStamp { object["extra"] = ["widget": widgetStamp] }
+            reply = try JSONSerialization.data(withJSONObject: object)
+        }
+        stateReplyBytes.append(reply.count)
+        return reply
+    }
 
     func send(path: String, method: String, body: Data?) async throws -> Data {
         if offline { throw URLError(.notConnectedToInternet) }
+        paths.append(path)
         let encoder = JSONEncoder()
         let decoder = JSONDecoder()
-        if path == "/api/device/state" { return try encoder.encode(snapshot) }
+        if path == "/api/device/state" { return try stateReply(known: nil) }
+        let conditional = "/api/device/state?revision="
+        if path.hasPrefix(conditional) { return try stateReply(known: Int(path.dropFirst(conditional.count))) }
         if path == "/api/device/register" {
             let registration = try decoder.decode(DeviceRegistration.self, from: XCTUnwrap(body))
             snapshot.device.capabilities = registration.capabilities
@@ -286,6 +312,173 @@ final class StateTests: XCTestCase {
         let restored = makeStore(server: server, directory: folder, vault: vault)
         XCTAssertEqual(restored.workflows.first?.revision, 2)
         XCTAssertEqual(restored.lastSyncedAt, store.lastSyncedAt, "a change saves the time of the latest read with it")
+    }
+
+    func testAnUnchangedRevisionIsASmallAnswerAndALocalChangeAsksForTheWholeSnapshot() async throws {
+        let folder = try directory()
+        let server = StateTestServer(workflow: fixture())
+        let store = makeStore(server: server, directory: folder, vault: vault())
+        await store.refresh()
+        await store.refresh()
+        await store.refresh()
+        var log = await server.requestLog()
+        XCTAssertEqual(log, ["/api/device/state", "/api/device/state?revision=1", "/api/device/state?revision=1"])
+        var sizes = await server.stateReplySizes()
+        XCTAssertLessThan(sizes[1], 80, "the answer to a current revision is a few bytes")
+        XCTAssertGreaterThan(sizes[0], sizes[1] * 4)
+        XCTAssertEqual(store.statusMessage, "Up to date")
+        XCTAssertEqual(store.workflows.count, 1, "the app keeps the copy it holds")
+
+        // The coordinator's revision moves for a field the app does not show: the snapshot comes once, changes
+        // nothing in the app, and the next read asks about the new revision.
+        let file = folder.appendingPathComponent("companion-snapshot.json")
+        store.flushStorage()
+        let saved = try Data(contentsOf: file)
+        let redraw = Redraw()
+        withObservationTracking { _ = (store.workflows, store.jobs, store.choices) } onChange: { redraw.asked = true }
+        await server.bumpRevision()
+        await store.refresh()
+        await store.refresh()
+        log = await server.requestLog()
+        XCTAssertEqual(Array(log.suffix(2)), ["/api/device/state?revision=1", "/api/device/state?revision=2"])
+        sizes = await server.stateReplySizes()
+        XCTAssertLessThan(sizes[4], 80)
+        XCTAssertFalse(redraw.asked)
+        store.flushStorage()
+        XCTAssertEqual(try Data(contentsOf: file), saved, "the same content is not written again")
+
+        // A message the coordinator accepted is added to the app's copy. The copy is then no longer what a read
+        // returned, so the next read asks for the whole snapshot.
+        let accepted = await store.sendChat(text: "Water the ferns")
+        XCTAssertTrue(accepted)
+        await store.refresh()
+        await store.refresh()
+        log = await server.requestLog()
+        XCTAssertEqual(Array(log.suffix(3)), ["/api/device/messages", "/api/device/state", "/api/device/state?revision=2"])
+        XCTAssertEqual(store.operations.map(\.text), ["Water the ferns"])
+    }
+
+    func testTheWidgetStampComesWithTheSnapshotAndStaysOverAnUnchangedRead() async throws {
+        let server = StateTestServer(workflow: fixture())
+        let store = makeStore(server: server, directory: try directory(), vault: vault())
+        XCTAssertNil(store.widgetStamp)
+        await store.refresh()
+        XCTAssertEqual(store.widgetStamp, "revision:1", "a coordinator without the stamp: every revision counts as a change")
+        await server.setWidgetStamp("stamp-a")
+        await store.refresh()
+        XCTAssertEqual(store.widgetStamp, "stamp-a")
+        await store.refresh()
+        XCTAssertEqual(store.widgetStamp, "stamp-a", "an unchanged read keeps it")
+        await server.setWidgetStamp("stamp-b")
+        await store.refresh()
+        XCTAssertEqual(store.widgetStamp, "stamp-b")
+    }
+
+    func testAnUnchangedRegistrationIsSentOnce() async throws {
+        let server = StateTestServer(workflow: fixture())
+        let store = makeStore(server: server, directory: try directory(), vault: vault())
+        let available = [Capability(id: "notification.schedule", status: "available")]
+        var current = available
+        store.configureEffects(capabilities: { current }, execute: { _ in DeviceEffectOutcome(status: "pending") })
+        let token = String(repeating: "ab", count: 32)
+        func registrations() async -> Int { await server.requestLog().filter { $0 == "/api/device/register" }.count }
+        // One cycle of the phone: its full registration, then the store's own, which repeats the capabilities only.
+        for _ in 0..<3 {
+            await store.register(capabilities: current, apnsToken: token, apnsEnvironment: "sandbox", activityTokens: [], activityJobIds: [])
+            await store.synchronize()
+        }
+        var count = await registrations()
+        XCTAssertEqual(count, 1, "three cycles with nothing new send one registration")
+        current = [Capability(id: "notification.schedule", status: "permission_required", reason: "Allow notifications in system settings")]
+        await store.synchronize()
+        count = await registrations()
+        XCTAssertEqual(count, 2, "a changed capability is sent")
+        await store.register(capabilities: current, apnsToken: String(repeating: "cd", count: 32), apnsEnvironment: "sandbox")
+        await store.register(capabilities: current, apnsToken: String(repeating: "cd", count: 32), apnsEnvironment: "sandbox")
+        count = await registrations()
+        XCTAssertEqual(count, 3, "and a new push token, once")
+
+        // A registration the coordinator did not confirm is sent again.
+        await server.setOffline(true)
+        await store.register(capabilities: available)
+        await server.setOffline(false)
+        await store.register(capabilities: available)
+        count = await registrations()
+        XCTAssertEqual(count, 4)
+    }
+
+    func testTheOutboxAndDraftsAreSavedAtOnceAndApartFromTheSnapshotCopy() async throws {
+        let folder = try directory()
+        let vault = vault()
+        let server = StateTestServer(workflow: fixture())
+        let store = makeStore(server: server, directory: folder, vault: vault)
+        await store.refresh()
+        await server.setOffline(true)
+        XCTAssertTrue(store.queueChat(text: "Order more seed trays"))
+        store.setDraft(workflowID: "fixture-workflow", fieldID: "title", value: .string("Half typed"))
+        let stateFile = folder.appendingPathComponent("companion-state.json")
+        let snapshotFile = folder.appendingPathComponent("companion-snapshot.json")
+        // On disk when the calls return, with no wait for the background write.
+        let durable = try JSONDecoder().decode(CompanionDiskState.self, from: Data(contentsOf: stateFile))
+        XCTAssertEqual(durable.outbox.count, 1)
+        XCTAssertEqual(durable.drafts["fixture-workflow"]?.fields["title"]?.value, .string("Half typed"))
+        XCTAssertNil(durable.snapshot, "the copy of the coordinator's state is not written with every change")
+        store.flushStorage()
+        let copy = try JSONDecoder().decode(SnapshotCopy.self, from: Data(contentsOf: snapshotFile))
+        XCTAssertEqual(copy.snapshot.workflows.map(\.id), ["fixture-workflow"])
+        XCTAssertEqual(copy.deviceID, "fixture-device")
+
+        // A crash before the snapshot copy was written, or a damaged copy: the queued message and the draft are kept,
+        // and the message is sent after the next read.
+        try Data("not json".utf8).write(to: snapshotFile)
+        let restored = makeStore(server: server, directory: folder, vault: vault)
+        XCTAssertEqual(restored.pendingMessages.map(\.message.text), ["Order more seed trays"])
+        XCTAssertEqual(restored.draftValues(for: "fixture-workflow")["title"], .string("Half typed"))
+        XCTAssertTrue(restored.workflows.isEmpty)
+        XCTAssertNil(restored.errorMessage)
+        await server.setOffline(false)
+        await restored.synchronize()
+        let sent = await server.messageLog()
+        XCTAssertEqual(sent.map(\.text), ["Order more seed trays"])
+        XCTAssertEqual(restored.queuedCount, 0)
+        XCTAssertEqual(restored.workflows.count, 1)
+    }
+
+    func testAStateFileFromAnEarlierBuildStillLoadsItsSnapshot() async throws {
+        let folder = try directory()
+        let vault = vault()
+        let server = StateTestServer(workflow: fixture())
+        // The earlier layout: one file with the snapshot inside it.
+        var legacy = CompanionDiskState(deviceID: "fixture-device")
+        legacy.snapshot = await server.snapshot
+        legacy.outbox = [OutboxEntry(id: "queued-earlier", payload: .message(MessageRequest(id: "queued-earlier", text: "Buy potting soil")))]
+        legacy.lastSyncedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        try JSONEncoder().encode(legacy).write(to: folder.appendingPathComponent("companion-state.json"))
+        let store = makeStore(server: server, directory: folder, vault: vault)
+        XCTAssertEqual(store.workflows.map(\.id), ["fixture-workflow"])
+        XCTAssertEqual(store.lastSyncedAt, legacy.lastSyncedAt)
+        XCTAssertEqual(store.pendingMessages.map(\.message.text), ["Buy potting soil"])
+        await store.synchronize()
+        let sent = await server.messageLog()
+        XCTAssertEqual(sent.map(\.text), ["Buy potting soil"])
+        // The first save moves the snapshot to its own file.
+        let restored = makeStore(server: server, directory: folder, vault: vault)
+        XCTAssertEqual(restored.workflows.map(\.id), ["fixture-workflow"])
+        XCTAssertEqual(restored.queuedCount, 0)
+        let durable = try JSONDecoder().decode(CompanionDiskState.self, from: Data(contentsOf: folder.appendingPathComponent("companion-state.json")))
+        XCTAssertNil(durable.snapshot)
+    }
+
+    func testDisconnectRemovesBothFiles() async throws {
+        let folder = try directory()
+        let server = StateTestServer(workflow: fixture())
+        let store = makeStore(server: server, directory: folder, vault: vault())
+        await store.refresh()
+        XCTAssertTrue(store.queueChat(text: "Water the ferns"))
+        await store.disconnect()
+        store.flushStorage()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent("companion-state.json").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent("companion-snapshot.json").path))
     }
 
     func testAChatMessageIsSavedBeforeItIsReportedQueued() async throws {

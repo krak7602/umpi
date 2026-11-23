@@ -15,6 +15,8 @@ struct UmpiApp: App {
                     guard scenePhase == .active else { return }
                     // After an install or update, voice models are compiled again; start now rather than in voice mode.
                     VoiceModelWarmup.run()
+                    // Each cycle asks the coordinator whether the state changed, a small answer when it did not. The
+                    // registration and the widget content are sent or read only when they changed, or at a slow interval.
                     while !Task.isCancelled {
                         await appDelegate.synchronize()
                         do { try await Task.sleep(for: .seconds(12)) }

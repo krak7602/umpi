@@ -139,7 +139,9 @@ final class MacApp {
     // MARK: Staying up to date
 
     /// The phone synchronizes every 12 seconds while it is open. The Mac keeps that pace while Umpi is in front or the
-    /// panel shows, and slows to once a minute otherwise; the chat itself arrives through its socket at once.
+    /// panel shows, and slows to once a minute otherwise; the chat itself arrives through its socket at once. A cycle
+    /// is one small request when nothing changed: the state is asked for by revision, and the registration is sent
+    /// again only when it changed or after `CompanionStore.registrationInterval`.
     private func keepSynchronized() async {
         while !Task.isCancelled {
             await synchronize()

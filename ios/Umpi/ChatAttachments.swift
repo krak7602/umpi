@@ -164,6 +164,31 @@ struct LocalMedia: Codable, Equatable, Sendable {
         guard let url = url(key), let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(LocalMedia.self, from: data)
     }
+    /// The previews kept under `key`, decoded for drawing. They are read from the file once and then kept; a key with
+    /// no file is looked for again next time, because a message's previews move to its operation's key once it is sent.
+    /// It can be called from any thread: the chat prepares the previews of the messages it is about to show off the
+    /// main actor.
+    static func shown(_ key: String) -> ShownMedia? {
+        if let kept = shownMedia[key] { return kept }
+        guard let media = load(key) else { return nil }
+        let onMain = Thread.isMainThread
+        let images = media.thumbnails.compactMap { data -> PlatformImage? in
+            guard let image = PlatformImage(data: data) else { return nil }
+            #if canImport(UIKit)
+            // Decoded here rather than at the first drawing, when this is not the main thread.
+            return onMain ? image : image.preparingForDisplay() ?? image
+            #else
+            return image
+            #endif
+        }
+        let shown = ShownMedia(thumbnails: images, seconds: media.seconds, bytes: media.bytes)
+        shownMedia.set(shown, for: key)
+        return shown
+    }
+    /// Forgets the decoded previews, such as after a disconnect.
+    static func forgetShown() { shownMedia.removeAll() }
+    private static let shownMedia = RecentCache<String, ShownMedia>(limit: 60)
+
     static func rename(from old: String, to new: String) {
         guard let from = url(old), let to = url(new), FileManager.default.fileExists(atPath: from.path) else { return }
         try? FileManager.default.removeItem(at: to)
@@ -175,6 +200,13 @@ struct LocalMedia: Codable, Equatable, Sendable {
         let size = CGSize(width: (image.size.width * factor).rounded(), height: (image.size.height * factor).rounded())
         return image.resized(to: size).jpegData(compressionQuality: 0.7)
     }
+}
+
+/// A message's previews as the chat draws them: images already decoded.
+struct ShownMedia: @unchecked Sendable {
+    var thumbnails: [PlatformImage] = []
+    var seconds: Int? = nil
+    var bytes: Int? = nil
 }
 
 extension MediaPrep {

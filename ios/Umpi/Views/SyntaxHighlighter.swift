@@ -1,4 +1,5 @@
 import JavaScriptCore
+import os
 import SwiftUI
 #if canImport(UIKit)
 import UIKit
@@ -6,39 +7,103 @@ import UIKit
 
 /// Colors code with highlight.js (BSD-3-Clause, bundled) running in JavaScriptCore. The result is native text in an
 /// Xcode-like palette for light and dark mode. A block without a language is detected; unknown or long code stays plain.
-@MainActor
-final class SyntaxHighlighter {
+///
+/// The script runs on a queue of its own, never on the main actor: a view draws its code plain, asks for the colours
+/// with `highlighted`, and reads them from `cached` when it draws again. The last 200 results are kept; the one used
+/// longest ago is dropped first.
+final class SyntaxHighlighter: @unchecked Sendable {
     static let shared = SyntaxHighlighter()
-    private lazy var context: JSContext? = {
-        guard let url = Bundle.main.url(forResource: "highlight.min", withExtension: "js"), let script = try? String(contentsOf: url, encoding: .utf8),
-              let context = JSContext() else { return nil }
-        context.evaluateScript(script)
-        return context.objectForKeyedSubscript("hljs").isUndefined ? nil : context
-    }()
-    private var cache: [String: AttributedString] = [:]
+    /// Longer code stays plain.
+    static let longestCode = 20_000
+    /// A block without a language is detected from its first characters only, up to this many: detection tries every
+    /// language the script has.
+    static let detectionSample = 1_500
 
+    private struct Key: Hashable { var language: String; var code: String }
+    private let cache = RecentCache<Key, AttributedString>(limit: 200)
+    /// Everything below runs on this queue.
+    private let queue = DispatchQueue(label: "umpi.highlight", qos: .userInitiated)
+    private var context: JSContext?
+    private var loaded = false
+
+    /// The colored code, if it has been colored already.
+    func cached(_ code: String, language: String?) -> AttributedString? {
+        cache[Key(language: language ?? "", code: code)]
+    }
+
+    /// The colored code. It waits for the script, so call it off the main actor; a view uses `highlighted`.
     func highlight(_ code: String, language: String?) -> AttributedString {
-        let key = "\(language ?? "")\u{0}\(code)"
+        if let cached = cached(code, language: language) { return cached }
+        return queue.sync { color(code, language: language) }
+    }
+
+    /// The colored code, worked out off the caller's actor.
+    func highlighted(_ code: String, language: String?) async -> AttributedString {
+        if let cached = cached(code, language: language) { return cached }
+        return await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: self.color(code, language: language)) }
+        }
+    }
+
+    /// Colors the code in the background, so a view that shows it later finds the colours ready.
+    func warm(_ code: String, language: String?) {
+        guard cached(code, language: language) == nil else { return }
+        queue.async { _ = self.color(code, language: language) }
+    }
+
+    func removeAll() { cache.removeAll() }
+
+    private func color(_ code: String, language: String?) -> AttributedString {
+        let key = Key(language: language ?? "", code: code)
         if let cached = cache[key] { return cached }
+        let signpost = RenderSignposts.highlight.beginInterval("highlight", "\(code.utf8.count) bytes")
+        defer { RenderSignposts.highlight.endInterval("highlight", signpost) }
         var result = AttributedString(code)
-        if code.count <= 20_000, let html = html(code, language: language) { result = SyntaxHighlighter.attributed(html) }
-        if cache.count > 200 { cache.removeAll() }
-        cache[key] = result
+        if code.count <= Self.longestCode, let html = html(code, language: language) { result = SyntaxHighlighter.attributed(html) }
+        cache.set(result, for: key)
         return result
     }
 
+    private func script() -> JSContext? {
+        if loaded { return context }
+        loaded = true
+        let signpost = RenderSignposts.highlight.beginInterval("load script")
+        defer { RenderSignposts.highlight.endInterval("load script", signpost) }
+        guard let url = Bundle.main.url(forResource: "highlight.min", withExtension: "js"), let script = try? String(contentsOf: url, encoding: .utf8),
+              let context = JSContext() else { return nil }
+        context.evaluateScript(script)
+        self.context = context.objectForKeyedSubscript("hljs").isUndefined ? nil : context
+        return self.context
+    }
+
     private func html(_ code: String, language: String?) -> String? {
-        guard let context, let hljs = context.objectForKeyedSubscript("hljs") else { return nil }
+        guard let context = script(), let hljs = context.objectForKeyedSubscript("hljs") else { return nil }
         let name = language?.lowercased().trimmingCharacters(in: .whitespaces) ?? ""
         if !name.isEmpty, hljs.invokeMethod("getLanguage", withArguments: [name])?.isUndefined == false {
-            let options = JSValue(object: ["language": name, "ignoreIllegals": true], in: context)!
-            return hljs.invokeMethod("highlight", withArguments: [code, options])?.objectForKeyedSubscript("value")?.toString()
+            return html(code, as: name, hljs, context)
         }
         // Detection needs a few lines to be reliable.
         guard name.isEmpty || name == "code", code.split(separator: "\n").count >= 2 else { return nil }
-        let result = hljs.invokeMethod("highlightAuto", withArguments: [code])
+        let sample = Self.sample(code)
+        let result = hljs.invokeMethod("highlightAuto", withArguments: [sample])
         guard let relevance = result?.objectForKeyedSubscript("relevance")?.toInt32(), relevance >= 5 else { return nil }
-        return result?.objectForKeyedSubscript("value")?.toString()
+        if sample.count == code.count { return result?.objectForKeyedSubscript("value")?.toString() }
+        // The language found in the sample colors the whole block.
+        guard let found = result?.objectForKeyedSubscript("language"), found.isString, let detected = found.toString() else { return nil }
+        return html(code, as: detected, hljs, context)
+    }
+
+    private func html(_ code: String, as language: String, _ hljs: JSValue, _ context: JSContext) -> String? {
+        let options = JSValue(object: ["language": language, "ignoreIllegals": true], in: context)!
+        return hljs.invokeMethod("highlight", withArguments: [code, options])?.objectForKeyedSubscript("value")?.toString()
+    }
+
+    /// The start of the code that detection reads: whole lines, up to `detectionSample` characters.
+    static func sample(_ code: String) -> String {
+        guard code.count > detectionSample else { return code }
+        let head = code.prefix(detectionSample)
+        guard let lineEnd = head.lastIndex(of: "\n"), lineEnd > head.startIndex else { return String(head) }
+        return String(head[..<lineEnd])
     }
 
     /// highlight.js HTML (nested spans with `hljs-*` classes and escaped text) to colored text.

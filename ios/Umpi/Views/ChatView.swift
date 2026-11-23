@@ -1,6 +1,7 @@
 #if os(iOS)
 import SafariServices
 #endif
+import os
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -32,6 +33,13 @@ struct ChatView: View {
     @State private var sends = 0
     /// While a sent message animates in, content growth does not jump the list to the end under it.
     @State private var sendSettling = false
+    /// The rows derived from the chat and the outbox, and which of them show. Not observed: it is read and written
+    /// while the chat is drawn.
+    @State private var list = ChatList()
+    /// Counts the times more rows were shown, to draw again with them.
+    @State private var reveals = 0
+    /// Takes a UI block's send button to `post`, the message field's own path.
+    @State private var blockSend = ChatSendRelay()
     #if os(macOS)
     @State private var dropTargeted = false
     #endif
@@ -43,47 +51,60 @@ struct ChatView: View {
     }
 
     var body: some View {
-        let rows = ChatView.rows(entries: chat.entries, sent: store.sentMessages, pending: store.pendingMessages, device: store.deviceID)
-        let waiting = rows.filter { $0.status == .sending || $0.status == .delivered }.count
+        // Derived once for each change of the chat or the outbox, not at each drawing.
+        // A reply that is being written is one row, added when its text begins; its text is read where it is drawn.
+        let conversation = list.derive(entries: chat.entries, revision: chat.revision, sent: store.sentMessages, pending: store.pendingMessages, device: store.deviceID,
+                                       writing: chat.live.writing, began: chat.live.began)
+        let _ = reveals
+        let _ = blockSend.send = { text in post(text, attachment: nil) }
+        // The newest rows only: drawing a row parses, colours, and lays out its message. Older rows join when the owner
+        // scrolls up to them, or asks for them.
+        let rows = list.shown(conversation.rows)
+        let _ = list.noteLayout(of: rows.count)
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    if chat.hasOlder {
-                        Button("Load earlier messages") { Task { await chat.loadOlder(store) } }
+                    if list.window.hidden > 0 || chat.hasOlder {
+                        Button("Load earlier messages") { loadEarlier() }
                             .font(.footnote).frame(maxWidth: .infinity)
                             .borderlessOnMac()
                     }
-                    if rows.isEmpty && !chat.isLoading {
+                    if conversation.rows.isEmpty && !chat.isLoading && chat.hasRestored {
                         ContentUnavailableView("No messages yet", systemImage: "bubble.left.and.bubble.right",
                             description: Text("Messages from Telegram and this app appear here as one conversation."))
                             .padding(.top, 60)
                     }
-                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                    ForEach(rows) { row in
                         let entry = row.entry
-                        let previous = index > 0 ? rows[index - 1].entry : nil
                         // WhatsApp-style: a centred time starts each new stretch of conversation; consecutive messages
                         // from Umpi without one are parted by a thin line.
-                        if let header = ChatView.timeHeader(entry, after: previous) {
+                        if let header = row.header {
                             Text(header).font(.caption.weight(.medium)).foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity).padding(.top, index == 0 ? 0 : 6)
+                                .frame(maxWidth: .infinity).padding(.top, row.isFirst ? 0 : 6)
+                                .id(ChatRowPlace(row: row.id, part: .top))
                                 .transition(.opacity)
-                        } else if let previous, !previous.fromOwner, !entry.fromOwner {
+                        } else if row.divider {
                             Divider().padding(.horizontal, 40).opacity(0.6)
+                                .id(ChatRowPlace(row: row.id, part: .top))
                         }
                         // Drawn again only when its entry or status changes (`ChatBubble` is `Equatable`), not whenever the
-                        // conversation is: each drawing parses the message's Markdown again.
+                        // conversation is.
                         ChatBubble(entry: entry, status: row.status) { [chat, store] data in Task { await chat.press(store, seq: entry.seq, data: data) } }
                             .equatable()
+                            .id(ChatRowPlace(row: row.id, part: .bubble))
                             // A sent message grows out of the corner nearest the field, as in Messages and Telegram.
                             .transition(entry.fromOwner ? .scale(scale: 0.4, anchor: .bottomTrailing).combined(with: .opacity) : .opacity)
                     }
-                    if chat.isThinking(pending: waiting) {
+                    // The knot shows until a reply's first text arrives; the text then grows in its place.
+                    if chat.isThinking(pending: conversation.waiting) && chat.live.writing.isEmpty {
                         ThinkingIndicator()
                             .transition(.opacity)
                         .accessibilityIdentifier("chat.thinking")
                     }
                     Color.clear.frame(height: 1).id("bottom")
                 }
+                .environment(chat.live)
+                .environment(\.uiSend) { [blockSend] text in blockSend.send(text) }
                 .padding(.horizontal)
                 #if os(macOS)
                 // The oldest message starts clear of the toolbar's edge; a wide Mac window keeps lines at a readable
@@ -101,7 +122,22 @@ struct ChatView: View {
             // Pinned to the newest message while content grows (history loading, a diagram drawing, a reply), until the
             // owner scrolls up; scrolling back near the end pins it again.
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { old, new in
-                if pinned && new > old && !sendSettling { Task { @MainActor in proxy.scrollTo("bottom", anchor: .bottom) } }
+                if new > old, let kept = list.takeKeptPlace() {
+                    // Older rows joined above while the owner reads further up: the row that was the oldest stays
+                    // where it was. If the scroll view has moved by about the added height already, it kept the place
+                    // itself.
+                    let grown = new - old
+                    Task { @MainActor in
+                        if list.offset - kept.offset < grown / 2 { proxy.scrollTo(kept.place, anchor: .top) }
+                    }
+                } else if pinned && new > old && !sendSettling {
+                    Task { @MainActor in proxy.scrollTo("bottom", anchor: .bottom) }
+                }
+            }
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, offset in list.offset = offset }
+            // At the top of the rows that show, the next older ones join.
+            .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y <= 24 - $0.contentInsets.top } action: { _, atTop in
+                if atTop { showEarlier(scrolled: userScrolling) }
             }
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height - 120
@@ -116,12 +152,15 @@ struct ChatView: View {
             #endif
             .softScrollEdges()
             .onChange(of: chat.entries.last?.seq) { old, _ in
+                // A finished reply that took the place of the one being written is not a new message: the owner who
+                // went up to read while it was written stays there.
+                let replaced = list.takeReplacedWriting()
                 // The first load jumps to the newest message; later ones scroll there.
                 // Diagrams and photos size themselves after they render, so it settles once more a moment later.
                 if old == nil { Task { @MainActor in
                     for delay in [50, 700] { try? await Task.sleep(for: .milliseconds(delay)); proxy.scrollTo("bottom", anchor: .bottom) }
                 } }
-                else { withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
+                else if pinned || !replaced { withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
             }
             // The list moves up with the same spring that brings the sent message in.
             .onChange(of: sends) { _, _ in
@@ -181,8 +220,8 @@ struct ChatView: View {
             }
         }
         .task { if ownsConnection { await chat.stayLive(store) } }
-        // Approval cards change in place: read the requests again whenever the chat changes and holds one.
-        .task(id: chat.entries.map(\.buttons).description.hashValue) {
+        // Approval cards change in place: read the requests again whenever the chat's buttons change and it holds one.
+        .task(id: chat.buttonsRevision) {
             if chat.entries.contains(where: { $0.id.hasPrefix("umpi:t3-request:") }) { await t3.loadRequests(store) }
             if chat.entries.contains(where: { $0.id.hasPrefix("umpi:memory:review:") }) { await MemoryReviewModel.shared.load(store) }
         }
@@ -252,10 +291,36 @@ struct ChatView: View {
         Button { draft.set(draft.text + (draft.text.isEmpty || draft.text.hasSuffix("\n") ? "```\n\n```" : "\n```\n\n```")) } label: { Label("Code block", systemImage: "chevron.left.forwardslash.chevron.right") }
     }
 
+    /// Shows older rows: first the ones this device has and does not show yet, then a page from the coordinator, all
+    /// of which shows at once.
+    private func loadEarlier() {
+        if list.window.hidden > 0 { showEarlier(scrolled: false); return }
+        list.window.showAll()
+        Task {
+            await chat.loadOlder(store)
+            list.window.loaded()
+            reveals += 1
+        }
+    }
+
+    /// Shows the next older rows this device has. While the owner reads further up, the row that was the oldest keeps
+    /// its place; at the end of the conversation the list stays there, as for any content that grows.
+    private func showEarlier(scrolled: Bool) {
+        guard let former = list.showEarlier() else { return }
+        if scrolled { pinned = false }
+        if !pinned { list.keepPlace(of: former) }
+        reveals += 1
+    }
+
     /// A centred time before a message that starts a new stretch: the first one, a new day, or 10 minutes after the last.
     static func timeHeader(_ entry: ChatEntry, after previous: ChatEntry?) -> String? {
-        guard let date = entry.date else { return nil }
-        if let previous, let before = previous.date, Calendar.current.isDate(before, inSameDayAs: date), date.timeIntervalSince(before) < 600 { return nil }
+        timeHeader(entry.date, after: previous?.date)
+    }
+
+    /// The same from the two dates: `before` is nil when no message came before, or its time is not known.
+    static func timeHeader(_ date: Date?, after before: Date?) -> String? {
+        guard let date else { return nil }
+        if let before, Calendar.current.isDate(before, inSameDayAs: date), date.timeIntervalSince(before) < 600 { return nil }
         let time = date.formatted(date: .omitted, time: .shortened)
         if Calendar.current.isDateInToday(date) { return "Today \(time)" }
         if Calendar.current.isDateInYesterday(date) { return "Yesterday \(time)" }
@@ -373,13 +438,17 @@ struct ChatView: View {
     /// The message joins the conversation at once, animated, and then goes out; one that cannot be queued stays in
     /// the field.
     private func send() {
-        let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let sending = attachment
+        guard post(draft.text.trimmingCharacters(in: .whitespacesAndNewlines), attachment: attachment) else { return }
+        draft.set(""); attachment = nil
+    }
+
+    /// Sends the owner's message: the field's text, or the label of a UI block's send button. One path for both, so a
+    /// button's message shows in the chat, waits in the outbox when offline, and moves the list like any other.
+    @discardableResult private func post(_ text: String, attachment sending: PreparedAttachment?) -> Bool {
         let queued = withAnimation(Self.sendAnimation) {
             store.queueChat(text: text, attachment: sending?.value, context: sending?.context, media: sending?.media, previews: sending?.previews)
         }
-        guard queued else { return }
-        draft.set(""); attachment = nil
+        guard queued else { return false }
         sendSettling = true
         sends += 1
         Task {
@@ -390,6 +459,7 @@ struct ChatView: View {
             await store.deliverQueued()
             await chat.refresh(store)
         }
+        return true
     }
     #if os(macOS)
     /// What was dropped, read the way a paste is: Finder files as files, images without text as photos.
@@ -632,6 +702,15 @@ private struct ChatBubble: View {
                 MemoryReviewCard(review: memoryReview) { approve in Task { await MemoryReviewModel.shared.decide(store, memoryReview.id, approve: approve) } }
             } else {
                 if entry.fromOwner { ownerBubble } else if entry.kind == "message" { messageCard } else { reply }
+                // UI blocks Umpi composed, under the text, in order. Each is as wide as the message; a wide table
+                // scrolls inside its block.
+                if let blocks = entry.ui, !entry.fromOwner {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in UIBlockView(block: block) }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 4)
+                }
                 if let rows = entry.buttons { buttons(rows) }
             }
             // Under a bubble, lined up with the bubble's text rather than its rounded edge.
@@ -659,7 +738,8 @@ private struct ChatBubble: View {
 
     /// The owner's message: a Messages-style tinted bubble on the right; media sits at its top, like Telegram.
     private var ownerBubble: some View {
-        let local = entry.operationId.flatMap(LocalMedia.load)
+        // Previews are looked for only when the message carried media; they are decoded once and kept.
+        let local = entry.showsMedia ? entry.operationId.flatMap(LocalMedia.shown) : nil
         let caption = entry.text == "[Image without a caption]" || entry.text == "[File without a caption]" ? "" : entry.text
         let media = ChatMediaView(entry: entry, local: local)
         return VStack(alignment: .leading, spacing: 0) {
@@ -679,7 +759,7 @@ private struct ChatBubble: View {
     }
     /// Umpi's reply reads like a note: full width, no bubble.
     private var reply: some View {
-        MarkdownView(entry.text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+        ChatReplyText(entry: entry, writing: status == .writing)
     }
     /// A message Umpi started (a reminder, the brief, an alert): full width like a reply, with a small label naming it.
     private var messageCard: some View {
@@ -733,6 +813,33 @@ private struct ChatBubble: View {
     }
 }
 
+/// The text of Umpi's reply. For a reply that is still being written it draws what the socket has brought so far, and
+/// under it what Umpi is doing while a tool runs. The finished entry is drawn by the same view in the same row, so the
+/// blocks that did not change stay as they are and nothing moves.
+private struct ChatReplyText: View {
+    let entry: ChatEntry
+    let writing: Bool
+    @Environment(LiveReplies.self) private var live: LiveReplies?
+
+    var body: some View {
+        // Only a reply that is being written reads the growing text, so only its view is drawn again as text arrives.
+        let growing = writing ? entry.operationId.flatMap { live?.shown[$0] } : nil
+        VStack(alignment: .leading, spacing: 8) {
+            MarkdownView(entry.text, growing: growing?.document).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+            if let status = growing?.status {
+                Text(status).font(.footnote).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("chat.reply.status")
+            }
+        }
+    }
+}
+
+/// Holds the action of a UI block's send button. The environment's closure must be sendable; it reaches the chat's own
+/// send through this object, which the chat sets each time it is drawn.
+@MainActor final class ChatSendRelay {
+    var send: (String) -> Void = { _ in }
+}
+
 /// A bubble shows its entry and status. Its button action differs only by the entry it presses for, so two bubbles
 /// with the same entry and status are the same, and SwiftUI need not draw the second.
 extension ChatBubble: @MainActor Equatable {
@@ -742,20 +849,171 @@ extension ChatBubble: @MainActor Equatable {
 /// One row of the conversation: an entry of the chat log, or one of the owner's messages not in it yet. A message
 /// keeps its row's identity from the moment it is sent, so its entry later takes its place without a redraw.
 struct ChatRow: Identifiable {
-    enum Status { case logged, delivered, sending, failed }
+    /// `writing`: Umpi's reply while it is written; the row has the ID of the entry that will hold the reply.
+    enum Status { case logged, delivered, sending, failed, writing }
     var id: String
     var entry: ChatEntry
     var status: Status = .logged
+    /// The centred time that starts a new stretch of the conversation at this row; set by `ChatView.arranged`.
+    var header: String? = nil
+    /// A thin line parts the row from the one before: both are Umpi's and no time stands between them.
+    var divider = false
+    /// The oldest row of the conversation.
+    var isFirst = false
+}
+
+/// A place in the conversation that the list can scroll to: the top of a row (its time or line), or its bubble.
+struct ChatRowPlace: Hashable {
+    enum Part { case top, bubble }
+    var row: String
+    var part: Part
+}
+
+/// Which rows of the conversation show. The chat starts with the newest and adds older ones as the owner goes up, so
+/// opening it draws a bounded number of messages however long the loaded conversation is. The window holds on to the
+/// oldest row it shows: new messages add to it, and it loses nothing while the chat shows.
+struct ChatRowWindow {
+    /// The rows that show at first.
+    static let first = 30
+    /// The rows that each step up adds.
+    static let more = 30
+
+    /// The oldest row that shows.
+    private(set) var oldest: String?
+    private(set) var count = 0
+    /// The rows older than `oldest`: loaded, not shown.
+    private(set) var hidden = 0
+    /// Every row shows, until the page that was asked for has been drawn.
+    private var showsAll = false
+    private var pageLoaded = false
+
+    /// Where the rows that show start in `rows`.
+    mutating func start(in rows: [ChatRow]) -> Int {
+        guard !rows.isEmpty else { hidden = 0; count = 0; return 0 }
+        var start = max(0, rows.count - max(count, ChatRowWindow.first))
+        if showsAll { start = 0 }
+        else if let oldest, let index = rows.firstIndex(where: { $0.id == oldest }) { start = index }
+        if showsAll, pageLoaded { showsAll = false; pageLoaded = false }
+        oldest = rows[start].id; hidden = start; count = rows.count - start
+        return start
+    }
+
+    /// Adds the next older rows. Returns the row that was the oldest shown, or nil when every row shows already.
+    mutating func showEarlier(in rows: [ChatRow]) -> ChatRow? {
+        let shownFrom = start(in: rows)
+        guard shownFrom > 0 else { return nil }
+        let former = rows[shownFrom]
+        let earlier = max(0, shownFrom - ChatRowWindow.more)
+        oldest = rows[earlier].id; hidden = earlier; count = rows.count - earlier
+        return former
+    }
+
+    /// Every row shows from now on, also rows a page brings; `loaded` ends that once the page is in.
+    mutating func showAll() { showsAll = true; pageLoaded = false }
+    mutating func loaded() { pageLoaded = true }
+}
+
+/// What the chat's body works out from the chat and the outbox, kept between drawings: the rows with their time
+/// headers, which of them show, and where the list is scrolled. A plain object in the view's state, not observed, so
+/// the body can write it while it draws.
+@MainActor final class ChatList {
+    struct Conversation {
+        var rows: [ChatRow] = []
+        /// The owner's messages that wait for the coordinator or for their entry.
+        var waiting = 0
+    }
+    /// A row whose place is kept while older rows join above it.
+    struct KeptPlace { var place: ChatRowPlace; var offset: CGFloat; var at: Date }
+
+    var window = ChatRowWindow()
+    /// The scroll view's content offset, as last reported.
+    var offset: CGFloat = 0
+    /// How often the rows were derived; a drawing with nothing changed derives nothing.
+    private(set) var derivations = 0
+
+    private var conversation = Conversation()
+    private var key: Key?
+    private var expires = Date.distantFuture
+    private var keptPlace: KeptPlace?
+    private var layoutNoted = false
+    private var replacedWriting = false
+
+    /// Whether a finished reply took the row of the one that was being written, since this was last asked.
+    func takeReplacedWriting() -> Bool {
+        defer { replacedWriting = false }
+        return replacedWriting
+    }
+
+    private struct Key: Equatable {
+        var revision: Int
+        var count: Int
+        var sent: [CompanionStore.SentMessage]
+        var pending: [MessageRequest]
+        var failed: [Bool]
+        var device: String
+        var writing: [String]
+        /// The headers say "Today" and "Yesterday".
+        var day: Date
+    }
+
+    /// The conversation's rows. They are derived again only when the entries (`revision`), the outbox, or the day
+    /// changed, or when a sent message's two minutes ran out.
+    func derive(entries: [ChatEntry], revision: Int, sent: [CompanionStore.SentMessage], pending: [(message: MessageRequest, failed: Bool)],
+                device: String, writing: [String] = [], began: [String: Date] = [:], now: Date = Date()) -> Conversation {
+        let key = Key(revision: revision, count: entries.count, sent: sent, pending: pending.map(\.message), failed: pending.map(\.failed),
+                      device: device, writing: writing, day: Calendar.current.startOfDay(for: now))
+        if key == self.key, now < expires { return conversation }
+        self.key = key
+        derivations += 1
+        let wasWriting = Set(conversation.rows.lazy.filter { $0.status == .writing }.map(\.id))
+        let rows = ChatView.rows(entries: entries, sent: sent, pending: pending, device: device, writing: writing, began: began, now: now)
+        conversation = Conversation(rows: ChatView.arranged(rows), waiting: rows.count(where: { $0.status == .sending || $0.status == .delivered }))
+        if !wasWriting.isEmpty, rows.contains(where: { $0.status == .logged && wasWriting.contains($0.id) }) { replacedWriting = true }
+        // A sent message that the log does not show yet leaves the rows two minutes after it was sent.
+        expires = rows.lazy.filter { $0.status == .delivered }.compactMap { row in sent.first { $0.message.id == row.id }?.at.addingTimeInterval(120) }.min() ?? .distantFuture
+        return conversation
+    }
+
+    /// The rows that show: the newest, and the older ones the owner went up to.
+    func shown(_ rows: [ChatRow]) -> ArraySlice<ChatRow> {
+        rows[window.start(in: rows)...]
+    }
+
+    /// Adds the next older rows; see `ChatRowWindow.showEarlier`.
+    func showEarlier() -> ChatRow? { window.showEarlier(in: conversation.rows) }
+
+    /// Remembers where `row` is, to put it back there once the older rows are laid out.
+    func keepPlace(of row: ChatRow) {
+        keptPlace = KeptPlace(place: ChatRowPlace(row: row.id, part: row.header != nil || row.divider ? .top : .bubble), offset: offset, at: Date())
+    }
+    /// The place to keep, once; none when it was asked for more than a second ago.
+    func takeKeptPlace() -> KeptPlace? {
+        defer { keptPlace = nil }
+        guard let keptPlace, Date().timeIntervalSince(keptPlace.at) < 1 else { return nil }
+        return keptPlace
+    }
+
+    /// A signpost interval from the first drawing that has rows to the end of that turn of the run loop, when the
+    /// rows are laid out.
+    func noteLayout(of rows: Int) {
+        guard !layoutNoted, rows > 0 else { return }
+        layoutNoted = true
+        let signpost = RenderSignposts.chat.beginInterval("first layout", "\(rows) rows")
+        Task { @MainActor in RenderSignposts.chat.endInterval("first layout", signpost) }
+    }
 }
 
 extension ChatView {
     /// The conversation as shown: the log's entries, then messages the coordinator accepted that the log does not
     /// show yet (for two minutes at most), then those still in the outbox.
+    /// Last come the replies that are being written (`writing`, by operation), each as a row with the ID its finished
+    /// entry will have, so that entry takes the row over when it arrives.
     static func rows(entries: [ChatEntry], sent: [CompanionStore.SentMessage], pending: [(message: MessageRequest, failed: Bool)],
-                     device: String = "", now: Date = Date()) -> [ChatRow] {
+                     device: String = "", writing: [String] = [], began: [String: Date] = [:], now: Date = Date()) -> [ChatRow] {
         // Each message's operation: from the coordinator's answer once sent, and worked out beforehand while sending,
-        // as its entry can arrive first.
-        let expected = pending.compactMap { item in CompanionStore.appOperation(device: device, message: item.message.id).map { ($0, item.message.id) } }
+        // as its entry can arrive first. Worked out once for each message: it is a SHA-256.
+        let operations = pending.map { CompanionStore.appOperation(device: device, message: $0.message.id) }
+        let expected = zip(operations, pending).compactMap { operation, item in operation.map { ($0, item.message.id) } }
         let local = Dictionary(sent.map { ($0.operationID, $0.message.id) } + expected, uniquingKeysWith: { $1 })
         // An approval's outcome note is for Telegram; here the card itself shows what became of it.
         // A memory review's outcome note is the same: its card shows the outcome.
@@ -767,8 +1025,29 @@ extension ChatView {
         for sent in sent where !logged.contains(sent.operationID) && now.timeIntervalSince(sent.at) < 120 {
             rows.append(ChatRow(id: sent.message.id, entry: ownEntry(sent.message, operation: sent.operationID), status: .delivered))
         }
-        for (message, failed) in pending where !logged.contains(CompanionStore.appOperation(device: device, message: message.id) ?? "") {
+        for (operation, (message, failed)) in zip(operations, pending) where !logged.contains(operation ?? "") {
             rows.append(ChatRow(id: message.id, entry: ownEntry(message, operation: message.id), status: failed ? .failed : .sending))
+        }
+        for operation in writing {
+            let id = ChatEntry.answerID(operation)
+            guard !shown.contains(where: { $0.id == id }) else { continue }
+            let entry = ChatEntry(seq: -1, id: id, at: (began[operation] ?? now).formatted(.iso8601), role: "umpi", surface: "app", kind: "reply", text: "", operationId: operation)
+            rows.append(ChatRow(id: id, entry: entry, status: .writing))
+        }
+        return rows
+    }
+
+    /// The rows with what stands before each: a centred time where a new stretch of the conversation starts, or a
+    /// thin line between two of Umpi's messages. Each entry's time is read once.
+    static func arranged(_ rows: [ChatRow]) -> [ChatRow] {
+        var rows = rows
+        var previous: (fromOwner: Bool, date: Date?)?
+        for index in rows.indices {
+            let entry = rows[index].entry, date = entry.date
+            rows[index].isFirst = index == 0
+            rows[index].header = timeHeader(date, after: previous?.date)
+            rows[index].divider = rows[index].header == nil && previous?.fromOwner == false && !entry.fromOwner
+            previous = (entry.fromOwner, date)
         }
         return rows
     }
@@ -818,17 +1097,12 @@ extension View {
 /// on the phone that sent them; elsewhere a compact label stands in.
 struct ChatMediaView: View {
     let entry: ChatEntry
-    let local: LocalMedia?
+    /// The previews this device keeps of what the message carried, already decoded.
+    let local: ShownMedia?
 
-    private var kind: String {
-        if let kind = entry.media?.kind { return kind }
-        if entry.kind == "voice" { return "voice" }
-        if entry.file != nil { return "file" }
-        if entry.images != nil { return "photos" }
-        return ""
-    }
+    private var kind: String { entry.mediaKind }
     /// A voice note's recording is not kept, so it shows as its transcript only, with the "voice note" tag.
-    var hasContent: Bool { !kind.isEmpty && kind != "voice" }
+    var hasContent: Bool { entry.showsMedia }
     var isVisual: Bool { (kind == "photos" || kind == "video") && !(local?.thumbnails.isEmpty ?? true) }
 
     static func duration(_ seconds: Int) -> String { String(format: "%d:%02d", seconds / 60, seconds % 60) }
@@ -844,7 +1118,7 @@ struct ChatMediaView: View {
     }
 
     @ViewBuilder private var photos: some View {
-        let images = (local?.thumbnails ?? []).compactMap(PlatformImage.init(data:))
+        let images = local?.thumbnails ?? []
         if images.isEmpty {
             chip(entry.images.map { $0 == 1 ? "Photo" : "\($0) photos" } ?? "Photo", symbol: "photo")
         } else if images.count == 1 {
@@ -862,7 +1136,7 @@ struct ChatMediaView: View {
 
     @ViewBuilder private var video: some View {
         let seconds = entry.media?.seconds ?? local?.seconds
-        if let data = local?.thumbnails.first, let image = PlatformImage(data: data) {
+        if let image = local?.thumbnails.first {
             Image(platformImage: image).resizable().scaledToFill().frame(width: 274, height: 200).clipped()
                 .overlay { Image(systemName: "play.fill").font(.title2).foregroundStyle(.white).padding(14).background(.black.opacity(0.45), in: Circle()) }
                 .overlay(alignment: .bottomLeading) {

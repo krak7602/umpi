@@ -54,18 +54,37 @@ final class UmpiAppDelegate: NSObject, UIApplicationDelegate, UNUserNotification
 
     func scheduleBackgroundRefresh() { backgroundSync.schedule() }
 
-    /// Copies what the widgets should show into the App Group and reloads them when it changed.
+    /// The stamp the widget content was last read at, and when.
+    private var widgetRead: (stamp: String?, at: Date)?
+    /// The default widget content also shows today's note, which can change outside the coordinator: without a new
+    /// stamp, the content is read again after this long.
+    private static let widgetInterval: TimeInterval = 5 * 60
+
+    /// Copies what the widgets should show into the App Group and reloads them when it changed. The content is read
+    /// when the state's widget stamp changed, not on every cycle: the default content costs the coordinator a read of
+    /// today's note.
     private func updateWidget() async {
-        guard let transport = store.chatTransport,
-              let data = try? await transport.send(path: "/api/device/widget", method: "GET", body: nil),
+        guard let transport = store.chatTransport else { return }
+        let stamp = store.widgetStamp
+        if let widgetRead, widgetRead.stamp == stamp, Date().timeIntervalSince(widgetRead.at) < Self.widgetInterval { return }
+        guard let data = try? await transport.send(path: "/api/device/widget", method: "GET", body: nil),
               let content = try? JSONDecoder().decode(WidgetContent.self, from: data) else { return }
-        let previous = WidgetContent.load()
-        guard previous != content || previous?.actions != content.actions else { return }
+        widgetRead = (stamp, Date())
+        // The default content is stamped with the time of each read; that alone is no change to show.
+        if let previous = WidgetContent.load() {
+            var compared = previous
+            compared.updatedAt = content.updatedAt
+            if compared == content { return }
+        }
         content.save()
         WidgetCenter.shared.reloadAllTimelines()
     }
 
-    func applicationDidEnterBackground(_ application: UIApplication) { scheduleBackgroundRefresh() }
+    func applicationDidEnterBackground(_ application: UIApplication) {
+        scheduleBackgroundRefresh()
+        // The copy of the coordinator's state is written in the background; it is on disk before the app is suspended.
+        store.flushStorage()
+    }
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         Task { await capabilities.receivePushToken(deviceToken) }

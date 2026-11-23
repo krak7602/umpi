@@ -6,22 +6,59 @@ import UIKit
 
 /// Renders Markdown the way the owner's notes look: Apple Notes for text, checklists, and tables; Obsidian for code,
 /// quotes, callouts (`> [!note]`), highlights (`==text==`), wiki links (`[[Note]]`), and Mermaid diagrams.
+///
+/// A text is parsed once: its blocks come from `MarkdownCache`, which every Markdown view shares. A view that gets a new
+/// long text keeps what it shows while that text is parsed off the main actor. Each block is an `Equatable` view with a
+/// place that does not change, so a block that did not change is not drawn again.
 struct MarkdownView: View {
-    let blocks: [MarkdownBlock]
+    let text: String
+    /// The blocks of a text that is still being written, from `MarkdownDocument.growing`; they are drawn in place of
+    /// `text`. When the finished text takes their place, the blocks that did not change are not drawn again.
+    var growing: MarkdownDocument? = nil
     var onOwnerTint = false
+    /// What the view drew last, shown while a new long text is parsed.
+    @State private var drawn = DrawnMarkdown()
+    /// Counts the texts parsed off the main actor, to draw again with the result.
+    @State private var parsed = 0
 
-    init(_ text: String, onOwnerTint: Bool = false) {
-        blocks = MarkdownBlock.parse(text)
+    init(_ text: String, growing: MarkdownDocument? = nil, onOwnerTint: Bool = false) {
+        self.text = text
+        self.growing = growing
         self.onOwnerTint = onOwnerTint
     }
 
     var body: some View {
+        let _ = parsed
+        let document = current()
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                MarkdownBlockView(block: block, onOwnerTint: onOwnerTint)
+            ForEach(document.blocks) { block in
+                MarkdownBlockView(block: block.content, onOwnerTint: onOwnerTint, plainCode: block.hasOpenFence).equatable()
+            }
+        }
+        .onChange(of: text) { _, text in
+            guard !MarkdownCache.has(text) else { return }
+            Task {
+                await MarkdownCache.prepare([text])
+                parsed += 1
             }
         }
     }
+
+    /// The blocks to draw: the text's own when they are kept, when the text is short, or when the view has nothing
+    /// else to show; otherwise the ones drawn last, until `onChange` has parsed the new text.
+    private func current() -> MarkdownDocument {
+        if let growing { drawn.document = growing; return growing }
+        if let last = drawn.document, !last.grows, last.source == text { return last }
+        if let last = drawn.document, text.utf8.count > MarkdownCache.longText, !MarkdownCache.has(text) { return last }
+        let document = MarkdownCache.document(text)
+        drawn.document = document
+        return document
+    }
+}
+
+/// Not observed: the view writes it while it draws.
+@MainActor private final class DrawnMarkdown {
+    var document: MarkdownDocument?
 }
 
 enum CalloutKind: String, Equatable {
@@ -83,7 +120,7 @@ indirect enum MarkdownBlock: Equatable {
     case rule
 
     static func parse(_ text: String) -> [MarkdownBlock] {
-        Document(parsing: withoutComments(text)).children.compactMap(block)
+        Document(parsing: withoutComments(text)).children.compactMap { block($0) }
     }
 
     /// HTML comments are hidden, as in Obsidian, such as the markers Umpi puts on planned lines. Line breaks inside a
@@ -94,7 +131,8 @@ indirect enum MarkdownBlock: Equatable {
             .replacing(/[ \t]+(?=\n|$)/, with: "")
     }
 
-    private static func block(_ markup: Markup) -> MarkdownBlock? {
+    /// `lineOffset` is the number of lines before the parsed text in the whole text, when only its end was parsed.
+    static func block(_ markup: Markup, lineOffset: Int = 0) -> MarkdownBlock? {
         switch markup {
         case let heading as Heading: return .heading(level: heading.level, text: inline(heading.children))
         case let paragraph as Paragraph:
@@ -102,12 +140,12 @@ indirect enum MarkdownBlock: Equatable {
             return text.characters.allSatisfy(\.isWhitespace) ? nil : .paragraph(text)
         // Empty items, such as a template's blank "- [ ]", are left out; the note itself keeps them.
         case let list as UnorderedList:
-            let items = Array(list.listItems.map(item)).filter { !$0.isEmpty }
+            let items = Array(list.listItems).map { item($0, lineOffset: lineOffset) }.filter { !$0.isEmpty }
             return items.isEmpty ? nil : .list(ordered: false, start: 1, items: items)
         case let list as OrderedList:
-            let items = Array(list.listItems.map(item)).filter { !$0.isEmpty }
+            let items = Array(list.listItems).map { item($0, lineOffset: lineOffset) }.filter { !$0.isEmpty }
             return items.isEmpty ? nil : .list(ordered: true, start: Int(list.startIndex), items: items)
-        case let quote as BlockQuote: return callout(quote) ?? .quote(quote.children.compactMap(block))
+        case let quote as BlockQuote: return callout(quote, lineOffset: lineOffset) ?? .quote(quote.children.compactMap { block($0, lineOffset: lineOffset) })
         case let code as CodeBlock:
             let body = code.code.hasSuffix("\n") ? String(code.code.dropLast()) : code.code
             return code.language?.lowercased() == "mermaid" ? .mermaid(body) : .code(language: code.language, text: body)
@@ -127,7 +165,7 @@ indirect enum MarkdownBlock: Equatable {
     }
 
     /// Obsidian callout: a quote whose first line is `[!kind] Optional title`.
-    private static func callout(_ quote: BlockQuote) -> MarkdownBlock? {
+    private static func callout(_ quote: BlockQuote, lineOffset: Int) -> MarkdownBlock? {
         guard let first = quote.child(at: 0) as? Paragraph else { return nil }
         // The source text of the first paragraph; format() would escape the brackets.
         let raw = first.children.map { child -> String in
@@ -139,12 +177,12 @@ indirect enum MarkdownBlock: Equatable {
         let title = String(match.2).trimmingCharacters(in: .whitespaces)
         let rest = String(raw[match.range.upperBound...])
         var blocks = rest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? [] : parse(rest)
-        blocks += quote.children.dropFirst().compactMap(block)
+        blocks += quote.children.dropFirst().compactMap { block($0, lineOffset: lineOffset) }
         return .callout(kind: kind, title: title.isEmpty ? kind.rawValue.capitalized : title, blocks: blocks)
     }
 
-    private static func item(_ item: ListItem) -> MarkdownListItem {
-        var blocks = item.children.compactMap(block)
+    private static func item(_ item: ListItem, lineOffset: Int) -> MarkdownListItem {
+        var blocks = item.children.compactMap { block($0, lineOffset: lineOffset) }
         var mark: String?
         // A plan mark ([target], [tentative], [confirmed]) at the start of a plain item replaces its bullet.
         if item.checkbox == nil, case .paragraph(let text)? = blocks.first, let first = text.runs.first, first.font == planMarkFont,
@@ -154,7 +192,7 @@ indirect enum MarkdownBlock: Equatable {
             while rest.characters.first == " " { rest.characters.removeFirst() }
             blocks[0] = .paragraph(rest)
         }
-        return MarkdownListItem(checkbox: item.checkbox.map { $0 == .checked }, blocks: blocks, line: item.range?.lowerBound.line, mark: mark)
+        return MarkdownListItem(checkbox: item.checkbox.map { $0 == .checked }, blocks: blocks, line: item.range.map { $0.lowerBound.line + lineOffset }, mark: mark)
     }
 
     static let planMarks: Set<String> = ["target", "tentative", "confirmed"]
@@ -282,6 +320,8 @@ extension EnvironmentValues {
 private struct MarkdownBlockView: View {
     let block: MarkdownBlock
     let onOwnerTint: Bool
+    /// The block has a code fence that is still being written: its code is not coloured and a diagram is not drawn.
+    var plainCode = false
 
     var body: some View {
         switch block {
@@ -308,7 +348,7 @@ private struct MarkdownBlockView: View {
                             marker(ordered: ordered, number: start + index, checkbox: item.checkbox, line: item.line)
                         }
                         VStack(alignment: .leading, spacing: 4) {
-                            ForEach(Array(item.blocks.enumerated()), id: \.offset) { _, inner in MarkdownBlockView(block: inner, onOwnerTint: onOwnerTint) }
+                            ForEach(Array(item.blocks.enumerated()), id: \.offset) { _, inner in MarkdownBlockView(block: inner, onOwnerTint: onOwnerTint, plainCode: plainCode) }
                         }
                         .foregroundStyle(item.checkbox == true ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
                     }
@@ -318,22 +358,22 @@ private struct MarkdownBlockView: View {
             HStack(alignment: .top, spacing: 10) {
                 RoundedRectangle(cornerRadius: 1.5).fill(Color.accentColor.opacity(onOwnerTint ? 0.9 : 0.6)).frame(width: 3)
                 VStack(alignment: .leading, spacing: 6) {
-                    ForEach(Array(blocks.enumerated()), id: \.offset) { _, inner in MarkdownBlockView(block: inner, onOwnerTint: onOwnerTint) }
+                    ForEach(Array(blocks.enumerated()), id: \.offset) { _, inner in MarkdownBlockView(block: inner, onOwnerTint: onOwnerTint, plainCode: plainCode) }
                 }
                 .foregroundStyle(.secondary)
             }
         case .callout(let kind, let title, let blocks):
             VStack(alignment: .leading, spacing: 6) {
                 Label(title, systemImage: kind.symbol).font(.subheadline.weight(.semibold)).foregroundStyle(kind.color)
-                ForEach(Array(blocks.enumerated()), id: \.offset) { _, inner in MarkdownBlockView(block: inner, onOwnerTint: onOwnerTint) }
+                ForEach(Array(blocks.enumerated()), id: \.offset) { _, inner in MarkdownBlockView(block: inner, onOwnerTint: onOwnerTint, plainCode: plainCode) }
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(kind.color.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         case .code(let language, let text):
-            CodeBlockView(language: language, text: text)
+            CodeBlockView(language: language, text: text, plain: plainCode)
         case .mermaid(let source):
-            MermaidView(source: source)
+            if plainCode { CodeBlockView(language: "mermaid", text: source, plain: true) } else { MermaidView(source: source) }
         case .table(let header, let rows, let alignments):
             NotesTable(header: header, rows: rows, alignments: alignments)
         case .rule:
@@ -378,6 +418,13 @@ private struct MarkdownBlockView: View {
     }
 }
 
+/// A block view shows its block. Two with the same block draw the same, so SwiftUI need not draw the second.
+extension MarkdownBlockView: @MainActor Equatable {
+    static func == (a: MarkdownBlockView, b: MarkdownBlockView) -> Bool {
+        a.onOwnerTint == b.onOwnerTint && a.plainCode == b.plainCode && a.block == b.block
+    }
+}
+
 /// A table drawn like Apple Notes: hairline cell borders, a bold header, rounded corners, scrolling when wide.
 private struct NotesTable: View {
     let header: [AttributedString]
@@ -414,11 +461,18 @@ private struct NotesTable: View {
     }
 }
 
-/// A code block like Obsidian's: monospaced on a soft background, its language, and a copy button.
+/// A code block like Obsidian's: monospaced on a soft background, its language, and a copy button. The code shows
+/// plain at once; its colours come from `SyntaxHighlighter`, which works off the main actor, and are kept there.
 private struct CodeBlockView: View {
     let language: String?
     let text: String
+    /// No colours: the block's fence is still being written.
+    var plain = false
     @State private var copied = false
+    /// Counts the colourings that arrived, to draw again with them.
+    @State private var colored = 0
+
+    private struct Code: Equatable { var text: String; var language: String?; var plain: Bool }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -437,8 +491,15 @@ private struct CodeBlockView: View {
                 .accessibilityIdentifier("markdown.code.copy")
             }
             ScrollView(.horizontal, showsIndicators: false) {
-                Text(SyntaxHighlighter.shared.highlight(text, language: language)).font(.system(.footnote, design: .monospaced)).lineSpacing(2).textSelection(.enabled).fixedSize()
+                let _ = colored
+                Text((plain ? nil : SyntaxHighlighter.shared.cached(text, language: language)) ?? AttributedString(text))
+                    .font(.system(.footnote, design: .monospaced)).lineSpacing(2).textSelection(.enabled).fixedSize()
             }
+        }
+        .task(id: Code(text: text, language: language, plain: plain)) {
+            guard !plain, SyntaxHighlighter.shared.cached(text, language: language) == nil else { return }
+            _ = await SyntaxHighlighter.shared.highlighted(text, language: language)
+            if !Task.isCancelled { colored += 1 }
         }
         .padding(12)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))

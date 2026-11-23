@@ -68,11 +68,48 @@ struct CompanionDiskState: Codable {
 
 extension DeviceSnapshot {
     /// The same state as `other`, whenever each was read: `serverTime` and the device's `lastSeenAt` differ on every
-    /// read and nothing in the app shows them.
+    /// read and nothing in the app shows them. The revision also moves for coordinator fields that are not sent to
+    /// the app, so it is not part of the content.
     func hasSameContent(as other: DeviceSnapshot) -> Bool {
         var copy = self
         copy.serverTime = other.serverTime
         copy.device.lastSeenAt = other.device.lastSeenAt
+        copy.revision = other.revision
         return copy == other
+    }
+}
+
+/// One read of the coordinator's state: the snapshot, or word that the revision the app asked about is still current.
+/// Decoding a snapshot and comparing it with the app's copy both take time for some hundred kilobytes, so `init` is
+/// meant to run off the main actor.
+enum StateRead: Sendable {
+    case unchanged(revision: Int)
+    /// `same`: the snapshot shows what the app's copy shows. `widgetStamp` changes when the widgets' content does.
+    case snapshot(DeviceSnapshot, same: Bool, widgetStamp: String?)
+
+    private struct Reply: Decodable {
+        struct Extra: Decodable { var widget: String? }
+        enum Keys: String, CodingKey { case unchanged, revision, extra }
+        var unchanged: Int?
+        var snapshot: DeviceSnapshot?
+        var widgetStamp: String?
+
+        init(from decoder: Decoder) throws {
+            let keyed = try decoder.container(keyedBy: Keys.self)
+            if try keyed.decodeIfPresent(Bool.self, forKey: .unchanged) == true {
+                unchanged = try keyed.decode(Int.self, forKey: .revision)
+                return
+            }
+            // The same decoder: the reply is parsed once.
+            snapshot = try DeviceSnapshot(from: decoder)
+            widgetStamp = try? keyed.decodeIfPresent(Extra.self, forKey: .extra)?.widget
+        }
+    }
+
+    init(data: Data, held: DeviceSnapshot?) throws {
+        let reply = try JSONDecoder().decode(Reply.self, from: data)
+        if let revision = reply.unchanged { self = .unchanged(revision: revision); return }
+        guard let snapshot = reply.snapshot else { throw CompanionClientError.invalidResponse }
+        self = .snapshot(snapshot, same: held?.hasSameContent(as: snapshot) == true, widgetStamp: reply.widgetStamp)
     }
 }

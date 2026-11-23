@@ -34,6 +34,18 @@ final class CompanionStore {
     @ObservationIgnored private var stateEpoch = 0
     @ObservationIgnored private var storageReady = true
     @ObservationIgnored private var successfulRefreshCount = 0
+    /// The revision of the last read whose content the app's copy still shows, with the `stateEpoch` it was read at.
+    /// While the epoch stands, the coordinator is asked only whether that revision is still current.
+    @ObservationIgnored private var known: (revision: Int, epoch: Int)?
+    /// Counts the snapshots installed from a read. With `stateEpoch` it tells when the saved copy is out of date.
+    @ObservationIgnored private var snapshotInstalls = 0
+    @ObservationIgnored private var savedSnapshotVersion: Int?
+    /// What the coordinator holds of this device's registration, as this session confirmed it, and when.
+    @ObservationIgnored private var registered: (registration: DeviceRegistration, at: Date)?
+    /// An unchanged registration is sent again after this long.
+    nonisolated static let registrationInterval: TimeInterval = 15 * 60
+    /// Changes when what the widgets show changes. The widget content is read again then, not on every cycle.
+    @ObservationIgnored private(set) var widgetStamp: String?
     private static let timestampFormatter = ISO8601DateFormatter()
     @ObservationIgnored private var capabilityProvider: (@MainActor () async -> [Capability])?
     @ObservationIgnored private var effectExecutor: (@MainActor (DeviceAction) async -> DeviceEffectOutcome)?
@@ -60,6 +72,12 @@ final class CompanionStore {
                     state = saved
                 }
                 state.deviceID = credentials.deviceID
+                // The copy of the coordinator's state has its own file. A state file from an earlier build still holds one.
+                if let copy = storage?.loadSnapshot(), copy.deviceID == credentials.deviceID {
+                    state.snapshot = copy.snapshot
+                    state.lastSyncedAt = copy.lastSyncedAt
+                    savedSnapshotVersion = snapshotVersion
+                }
                 lastSyncedAt = state.lastSyncedAt
                 capabilities = state.snapshot?.device.capabilities ?? []
                 statusMessage = hasPendingPairing ? "Pairing needs recovery" : "Cached state — refresh to synchronize"
@@ -409,7 +427,9 @@ final class CompanionStore {
         // Saved copies of the conversation, notes, and previews leave with the pairing.
         let fileManager = FileManager.default
         if let caches = try? fileManager.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: false) {
-            for name in ["chat-recent.json", "Today", "t3-overview.json"] { try? fileManager.removeItem(at: caches.appendingPathComponent(name)) }
+            for name in ["Today", "t3-overview.json"] { try? fileManager.removeItem(at: caches.appendingPathComponent(name)) }
+            // The chat's copy is written off the main actor: removing it this way also stops a write that waits.
+            ChatModel.savedCopy.remove()
         }
         if let support = try? fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: false) {
             for name in ["Companion/Media", "Companion/Attachments"] { try? fileManager.removeItem(at: support.appendingPathComponent(name)) }
@@ -437,6 +457,10 @@ final class CompanionStore {
         state = CompanionDiskState()
         lastSyncedAt = nil
         stateEpoch += 1
+        known = nil
+        registered = nil
+        widgetStamp = nil
+        savedSnapshotVersion = nil
         do { try persistence?.clear(); storageReady = true }
         catch { storageReady = false; report("Disconnected, but local storage could not be removed.") }
         statusMessage = "Disconnected"
@@ -452,34 +476,55 @@ final class CompanionStore {
         let generation = sessionGeneration
         defer { if generation == sessionGeneration { isRefreshing = false } }
         let epoch = stateEpoch
+        let held = state.snapshot
+        // The coordinator answers a revision that is still current with a few bytes. The app asks that way only while
+        // its copy is what a read returned: after a local change to the copy it asks for the whole snapshot.
+        let asked = held != nil && known?.epoch == epoch ? known?.revision : nil
         do {
-            let data = try await client.send(path: "/api/device/state", method: "GET", body: nil)
+            let data = try await client.send(path: asked.map { "/api/device/state?revision=\($0)" } ?? "/api/device/state", method: "GET", body: nil)
             guard generation == sessionGeneration else { return }
-            // Decoded off the main actor: the snapshot is some hundred kilobytes, and it is read every few seconds.
-            let snapshot = try await Task.detached(priority: .userInitiated) { try JSONDecoder().decode(DeviceSnapshot.self, from: data) }.value
+            // Off the main actor: a snapshot is some hundred kilobytes to decode and to compare with the app's copy.
+            let read = try await Task.detached(priority: .userInitiated) { try StateRead(data: data, held: held) }.value
             guard generation == sessionGeneration else { return }
-            guard snapshot.protocolVersion == 1, snapshot.device.id == deviceID, !snapshot.device.revoked,
-                  snapshot.revision >= 0 else { throw CompanionClientError.invalidResponse }
-            // A reply started before a local accepted mutation must not replace its newer result.
-            guard epoch == stateEpoch, snapshot.revision >= (state.snapshot?.revision ?? 0) else { return }
+            let snapshot: DeviceSnapshot
+            let same: Bool
+            switch read {
+            case .unchanged(let revision):
+                guard let held, revision == asked else { throw CompanionClientError.invalidResponse }
+                guard epoch == stateEpoch else { return }
+                snapshot = held
+                same = true
+            case .snapshot(let fresh, let sameAsHeld, let stamp):
+                guard fresh.protocolVersion == 1, fresh.device.id == deviceID, !fresh.device.revoked,
+                      fresh.revision >= 0 else { throw CompanionClientError.invalidResponse }
+                // A reply started before a local accepted mutation must not replace its newer result.
+                guard epoch == stateEpoch, fresh.revision >= (state.snapshot?.revision ?? 0) else { return }
+                snapshot = fresh
+                same = sameAsHeld
+                // A coordinator without the stamp: every revision counts as a change.
+                widgetStamp = stamp ?? "revision:\(fresh.revision)"
+            }
             let conflictsCurrent = state.conflicts.allSatisfy { conflict in
                 conflict.current == snapshot.workflows.first { $0.id == conflict.workflowID }
             }
-            if conflictsCurrent, state.snapshot?.hasSameContent(as: snapshot) == true {
-                // Nothing changed since the last read: `state` is left alone, so no view is drawn again and the state
-                // file is not written again. The time of this read is saved with the next change.
+            if conflictsCurrent, same {
+                // Nothing changed since the last read: `state` is left alone, so no view is drawn again and nothing
+                // is written again. The time of this read is saved with the next change.
                 lastSyncedAt = Date()
             } else {
                 state.snapshot = snapshot
+                snapshotInstalls += 1
                 lastSyncedAt = Date()
                 for i in state.conflicts.indices {
                     state.conflicts[i].current = snapshot.workflows.first { $0.id == state.conflicts[i].workflowID }
                 }
                 guard persist() else { return }
             }
+            known = (snapshot.revision, stateEpoch)
             successfulRefreshCount += 1
-            statusMessage = state.outbox.isEmpty ? "Up to date" : "\(state.outbox.count) changes need synchronization"
-            errorMessage = nil
+            let status = state.outbox.isEmpty ? "Up to date" : "\(state.outbox.count) changes need synchronization"
+            if statusMessage != status { statusMessage = status }
+            if errorMessage != nil { errorMessage = nil }
             if let snapshotObserver { await snapshotObserver(snapshot.jobs) }
             await updateKnocks(snapshot.reminders)
         } catch {
@@ -507,16 +552,28 @@ final class CompanionStore {
         await flushOutbox()
     }
 
+    /// Tells the coordinator what this device can do and where pushes reach it. The apps call this on every cycle; a
+    /// request is sent only when something in it changed, or after `registrationInterval`.
     func register(capabilities: [Capability], apnsToken: String? = nil, apnsEnvironment: String? = nil,
                   activityTokens: [ActivityToken]? = nil, activityJobIds: [String]? = nil) async {
         if self.capabilities != capabilities { self.capabilities = capabilities }
         guard let client else { return }
         let generation = sessionGeneration
+        // The coordinator keeps the fields that a registration leaves out.
+        var result = registered?.registration ?? DeviceRegistration(capabilities: [])
+        result.capabilities = capabilities
+        if let apnsToken { result.apnsToken = apnsToken }
+        if let apnsEnvironment { result.apnsEnvironment = apnsEnvironment }
+        if let activityTokens { result.activityTokens = activityTokens }
+        if let activityJobIds { result.activityJobIds = activityJobIds }
+        if let registered, registered.registration == result,
+           Date().timeIntervalSince(registered.at) < Self.registrationInterval { return }
         do {
             let body = DeviceRegistration(capabilities: capabilities, apnsToken: apnsToken,
                 apnsEnvironment: apnsEnvironment, activityTokens: activityTokens, activityJobIds: activityJobIds)
             _ = try await client.send(path: "/api/device/register", method: "POST", body: JSONEncoder().encode(body))
             guard generation == sessionGeneration else { return }
+            registered = (result, Date())
         } catch { if generation == sessionGeneration { report("Device registration was not confirmed. \(error.localizedDescription)") } }
     }
 
@@ -629,13 +686,25 @@ final class CompanionStore {
         }
         _ = persist()
     }
+    /// Saves what exists only on this device (the outbox, drafts, runs, effect outcomes) before it returns: that part
+    /// is small. The copy of the coordinator's state is written off the main actor, and only when it changed.
     @discardableResult private func persist() -> Bool {
         guard let persistence, storageReady else { report("Local storage is unavailable. No changes will be sent."); return false }
         var saved = state
-        saved.lastSyncedAt = lastSyncedAt
-        do { try persistence.save(saved); return true }
+        saved.snapshot = nil
+        saved.lastSyncedAt = nil
+        do { try persistence.save(saved) }
         catch { report("Could not save local state. No new network request or device effect will start."); return false }
+        if let snapshot = state.snapshot, savedSnapshotVersion != snapshotVersion {
+            savedSnapshotVersion = snapshotVersion
+            persistence.saveSnapshot(SnapshotCopy(deviceID: deviceID, snapshot: snapshot, lastSyncedAt: lastSyncedAt))
+        }
+        return true
     }
+    /// Changes with every change to `state.snapshot`: a snapshot installed from a read, or a local change (`stateEpoch`).
+    private var snapshotVersion: Int { stateEpoch &+ snapshotInstalls }
+    /// Waits until the copy of the coordinator's state is on disk; the app calls it when it leaves the foreground.
+    func flushStorage() { persistence?.flush() }
     private func report(_ message: String) { errorMessage = message }
 
     private func clearSubmittedDraft(_ workflowID: String, edits: [String: String], acceptedRevision: Int?, expectedRevision: Int) {

@@ -9,6 +9,17 @@ struct TodayView: View {
     @State private var loading = false
     @State private var problem: String?
     @State private var notice: String?
+    /// The note's text without its frontmatter, worked out once for each text, not at each drawing.
+    @State private var shown = ShownNote()
+
+    @MainActor private final class ShownNote {
+        private var source: String?
+        private var body: (text: String, offset: Int) = ("", 0)
+        func body(of text: String) -> (text: String, offset: Int) {
+            if text != source { source = text; body = TodayView.withoutFrontmatter(text) }
+            return body
+        }
+    }
 
     struct DayNote: Codable, Equatable { var day: String; var text: String?; var revision: String }
     struct TaskResult: Decodable { var status: String; var text: String?; var revision: String }
@@ -69,7 +80,7 @@ struct TodayView: View {
 
     @ViewBuilder private var content: some View {
         if let note, let text = note.text {
-            let body = TodayView.withoutFrontmatter(text)
+            let body = shown.body(of: text)
             MarkdownView(body.text)
                 .environment(\.markdownTaskToggle) { line, checked in
                     Task { await setTask(sourceLine: line - 1 + body.offset, checked: checked, in: text) }
@@ -99,30 +110,48 @@ struct TodayView: View {
     }
 
     /// Shows the last copy of the day's note at once, then refreshes it; a failed refresh keeps the copy on screen.
+    /// A copy is read, and a note's Markdown parsed, off the main actor before the note shows.
     private func load() async {
-        if note?.day != day { note = TodayView.cached(day) }
+        let day = day
+        if note?.day != day {
+            let copy = await TodayView.prepared { TodayView.cached(day) }
+            guard day == self.day else { return }
+            note = copy
+        }
         guard let transport = store.chatTransport, !loading else { return }
         loading = true; defer { loading = false }
         do {
             let data = try await transport.send(path: "/api/device/today?day=\(day)", method: "GET", body: nil)
             let fresh = try JSONDecoder().decode(DayNote.self, from: data)
-            if fresh.day == day { note = fresh; TodayView.cache(fresh) }
-            problem = nil
+            if fresh.day == self.day, fresh != note {
+                _ = await TodayView.prepared { fresh }
+                if fresh.day == self.day { note = fresh; TodayView.cache(fresh) }
+            }
+            if problem != nil { problem = nil }
         } catch {
             if note == nil { problem = (error as? LocalizedError)?.errorDescription ?? "The note could not be loaded." }
             else { notice = "Showing the last copy; it could not be refreshed." }
         }
     }
 
+    /// The note that `read` gives, with its Markdown parsed, both off the main actor.
+    nonisolated private static func prepared(_ read: @escaping @Sendable () -> DayNote?) async -> DayNote? {
+        await Task.detached(priority: .userInitiated) {
+            let note = read()
+            if let text = note?.text { _ = MarkdownCache.document(withoutFrontmatter(text).text) }
+            return note
+        }.value
+    }
+
     /// The last copy of each day's note, kept on the phone (excluded from backup) for the next time Today opens.
-    private static var cacheDirectory: URL? {
+    nonisolated private static var cacheDirectory: URL? {
         try? FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("Today", isDirectory: true)
     }
-    static func cached(_ day: String) -> DayNote? {
+    nonisolated static func cached(_ day: String) -> DayNote? {
         guard let url = cacheDirectory?.appendingPathComponent("\(day).json"), let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(DayNote.self, from: data)
     }
-    static func cache(_ note: DayNote) {
+    nonisolated static func cache(_ note: DayNote) {
         guard let directory = cacheDirectory, let data = try? JSONEncoder().encode(note) else { return }
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try? data.write(to: directory.appendingPathComponent("\(note.day).json"), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
@@ -165,7 +194,7 @@ struct TodayView: View {
         return Calendar.current.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2]))
     }
     /// Obsidian frontmatter is metadata, not part of the note to read; `offset` maps lines back to the source.
-    static func withoutFrontmatter(_ text: String) -> (text: String, offset: Int) {
+    nonisolated static func withoutFrontmatter(_ text: String) -> (text: String, offset: Int) {
         let lines = text.components(separatedBy: "\n")
         guard lines.first?.trimmingCharacters(in: .whitespaces) == "---",
               let end = lines.dropFirst().firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "---" }) else { return (text, 0) }

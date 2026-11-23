@@ -70,9 +70,9 @@ final class CompanionClient: CompanionTransport, @unchecked Sendable {
     deinit { session.invalidateAndCancel() }
 
     func send(path: String, method: String, body: Data?) async throws -> Data {
-        // Only these take a query: chat paging, the day, and which T3 Code thread.
+        // Only these take a query: the revision the app holds, chat paging, the day, and which T3 Code thread.
         let base = path.split(separator: "?", maxSplits: 1).first.map(String.init) ?? path
-        guard path.hasPrefix("/api/device/"), base == path || ["/api/device/chat", "/api/device/today", "/api/device/t3/thread", "/api/device/t3/questions"].contains(base), !path.contains("#"),
+        guard path.hasPrefix("/api/device/"), base == path || ["/api/device/state", "/api/device/chat", "/api/device/today", "/api/device/t3/thread", "/api/device/t3/questions"].contains(base), !path.contains("#"),
               !path.contains(".."),
               let url = URL(string: path, relativeTo: origin)?.absoluteURL,
               url.host == origin.host, url.scheme == origin.scheme, url.port == origin.port else {

@@ -5,11 +5,29 @@ import UIKit
 import WebKit
 
 /// A Mermaid diagram drawn by Pele, Obsidian's MIT-licensed renderer, bundled in the app. Pele runs offline in a small
-/// web view with the system's colors and font; the view takes the diagram's height. Nothing is loaded from the network.
+///
+/// The web view is made only when the diagram comes near the visible part of its scroll view; until then the diagram
+/// is an empty space of the same size. The height a source was drawn at, or that it could not be drawn, is kept, so a
+/// diagram shown again takes its place at once.
 struct MermaidView: View {
     let source: String
-    @State private var height: CGFloat = 120
-    @State private var failed = false
+    @State private var height: CGFloat
+    @State private var failed: Bool
+    /// The diagram has come near the visible part of its scroll view, so it has a web view.
+    @State private var drawn = false
+    /// The view was told where it is in its scroll view at least once.
+    @State private var placed = false
+
+    /// What is known of a source that was drawn before.
+    struct Outcome { var height: CGFloat; var failed: Bool }
+    nonisolated static let known = RecentCache<String, Outcome>(limit: 100)
+
+    init(source: String) {
+        self.source = source
+        let known = MermaidView.known[source]
+        _height = State(initialValue: known?.height ?? 120)
+        _failed = State(initialValue: known?.failed ?? false)
+    }
 
     var body: some View {
         if failed {
@@ -18,10 +36,34 @@ struct MermaidView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         } else {
-            MermaidWebView(source: source, height: $height, failed: $failed)
-                .frame(height: height)
-                .frame(maxWidth: .infinity)
-                .accessibilityLabel("Diagram")
+            Group {
+                if drawn { MermaidWebView(source: source, height: $height, failed: $failed) } else { Color.clear }
+            }
+            .frame(height: height)
+            .frame(maxWidth: .infinity)
+            .accessibilityLabel("Diagram")
+            .onVisibilityInScrollView(margin: 400) { visible in
+                placed = true
+                if visible, !drawn { drawn = true }
+            }
+            // If the view is never told its place, the diagram is drawn anyway.
+            .task {
+                try? await Task.sleep(for: .seconds(2))
+                if !placed, !Task.isCancelled { drawn = true }
+            }
+        }
+    }
+}
+
+extension View {
+    /// Tells whether the view is in the visible part of the scroll view it is in, or within `margin` points of it, at
+    /// first and whenever that changes. A view outside a scroll view counts as visible.
+    func onVisibilityInScrollView(margin: CGFloat = 0, _ action: @escaping (Bool) -> Void) -> some View {
+        onGeometryChange(for: Bool.self) { proxy in
+            guard let shown = proxy.bounds(of: .scrollView) else { return true }
+            return shown.insetBy(dx: -margin, dy: -margin).intersects(CGRect(origin: .zero, size: proxy.size))
+        } action: { visible in
+            action(visible)
         }
     }
 }
@@ -33,10 +75,13 @@ struct MermaidView: View {
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
+    /// One store for every diagram, kept in memory only: a store for each diagram cost a new one at each drawing.
+    private static let store = WKWebsiteDataStore.nonPersistent()
+
     private func makeView(_ coordinator: Coordinator) -> DiagramWebView {
         let configuration = WKWebViewConfiguration()
         configuration.userContentController.add(coordinator, name: "pele")
-        configuration.websiteDataStore = .nonPersistent()
+        configuration.websiteDataStore = Self.store
         let view = DiagramWebView(frame: .zero, configuration: configuration)
         #if os(iOS)
         view.isOpaque = false
@@ -47,11 +92,18 @@ struct MermaidView: View {
         view.setValue(false, forKey: "drawsBackground")
         #endif
         view.navigationDelegate = coordinator
-        load(view)
+        load(view, coordinator)
         return view
     }
 
-    private func load(_ view: WKWebView) {
+    /// Loads the source when the view does not show it yet.
+    private func update(_ view: WKWebView, _ coordinator: Coordinator) {
+        coordinator.parent = self
+        if coordinator.loaded != source { load(view, coordinator) }
+    }
+
+    private func load(_ view: WKWebView, _ coordinator: Coordinator) {
+        coordinator.loaded = source
         guard let script = Bundle.main.url(forResource: "pele.global", withExtension: "js") else { failed = true; return }
         let encoded = (try? JSONEncoder().encode(source)).flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
         // The source is passed as a JSON string; Pele escapes diagram text and filters links and styles.
@@ -96,13 +148,22 @@ struct MermaidView: View {
 
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         var parent: MermaidWebView
+        /// The source the web view shows, or is loading.
         var loaded: String?
-        init(_ parent: MermaidWebView) { self.parent = parent; loaded = parent.source }
+        init(_ parent: MermaidWebView) { self.parent = parent }
 
         func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
             guard let body = message.body as? [String: Any] else { return }
-            if body["failed"] as? Bool == true { parent.failed = true; return }
-            if let height = body["height"] as? Double, height > 0 { parent.height = min(CGFloat(height), 1_200) }
+            if body["failed"] as? Bool == true {
+                MermaidView.known.set(.init(height: parent.height, failed: true), for: parent.source)
+                parent.failed = true
+                return
+            }
+            if let reported = body["height"] as? Double, reported > 0 {
+                let height = min(CGFloat(reported), 1_200)
+                MermaidView.known.set(.init(height: height, failed: false), for: parent.source)
+                if parent.height != height { parent.height = height }
+            }
         }
         /// Links in a diagram open outside, never inside this view.
         func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction) async -> WKNavigationActionPolicy {
@@ -122,7 +183,7 @@ extension MermaidWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView { makeView(context.coordinator) }
 
     func updateUIView(_ view: WKWebView, context: Context) {
-        if context.coordinator.loaded != source { load(view) }
+        update(view, context.coordinator)
     }
 
     static func dismantleUIView(_ view: WKWebView, coordinator: Coordinator) {
@@ -139,7 +200,7 @@ extension MermaidWebView: NSViewRepresentable {
     func makeNSView(context: Context) -> DiagramWebView { makeView(context.coordinator) }
 
     func updateNSView(_ view: DiagramWebView, context: Context) {
-        if context.coordinator.loaded != source { load(view) }
+        update(view, context.coordinator)
     }
 
     static func dismantleNSView(_ view: DiagramWebView, coordinator: Coordinator) {
