@@ -233,7 +233,7 @@ export const EFFORT_QUESTION = {
 export type Effort = "low" | "medium" | "high";
 const EFFORT_OF = { quick: "low", normal: "medium", deep: "high" } as const;
 const EFFORT_MIN_CONFIDENCE = 0.6;
-const EFFORT_TIMEOUT_MS = 3_000;
+const EFFORT_TIMEOUT_MS = 800;
 
 /**
  * A spoken turn cannot wait: the owner hears the silence. It gets a short limit, and an unsure or late answer keeps

@@ -9,7 +9,7 @@ import { createAssistantModels, selectAssistantModel, DEFAULT_PROVIDER, DEFAULT_
 import { parseAssistantCredential } from "../model/credentials.js";
 import { InputError, boundedText, identifier, record } from "../shared/protocol.js";
 import { DurableCredentials } from "./credentials.js";
-import { Store, StateError, type ButtonBinding, type Channel, type Operation, type OwnerMessageSource, type TelegramMarkup } from "./store.js";
+import { Store, StateError, type ButtonBinding, type Channel, type Operation, type OwnerMessageSource, type Reminder, type TelegramMarkup } from "./store.js";
 import { readJson, authorize, isChatSocketUpgrade, isExecutorWakeUpgrade, telegramEnabled, telegramMissing, telegramUpdate, sendTelegram, answerTelegramCallback, editTelegramKeyboard, type TelegramConfig } from "./transport.js";
 import { formatTelegramStatus } from "./telegram-view.js";
 import { readCoreContext, replaceCoreContext, readMemoryReviews, readMemoryReview, readMemoryHistory, readMemoryRevision, proposeMemoryRestore, decideMemoryReview } from "./core-context.js";
@@ -87,7 +87,7 @@ import { ChatSocket } from "./chat-socket.js";
 import { T3CodeStore, T3_CALLBACK_PATH, t3CallbackPage } from "./t3-code.js";
 import { T3ActionRequests } from "./t3-actions.js";
 import { T3Watcher } from "./t3-watch.js";
-import { openTasks, WidgetStore, type WidgetContent, type WidgetItem } from "./widget.js";
+import { openTasks, widgetStamp, WidgetStore, type WidgetContent, type WidgetItem } from "./widget.js";
 import { KnockPushStore } from "./knock-push.js";
 import type { AppMessage } from "./companion-http.js";
 type ButtonResult = { text: string; replyMarkup?: TelegramMarkup };
@@ -95,6 +95,7 @@ import { SUBSCRIPTION_TRANSCRIPTION_MODEL, transcribeSubscriptionAudio } from ".
 import { MAX_VOICE_NOTE_BYTES, MAX_VOICE_NOTE_SECONDS, VoiceNoteError, type TelegramDocument, type TelegramImage, type TelegramInboxDelivery } from "../shared/voice-note.js";
 import { classifyModelError, describeModelFailure, type ModelFailure } from "../model/failure.js";
 import { ModelFallback } from "./model-fallback.js";
+import { Turns, setThinkingLevel, type TurnHost } from "./turns.js";
 
 export { CodingWorker, BrowserWorker, TailnetBridge, CloudMachine };
 
@@ -146,7 +147,6 @@ export interface Env extends TelegramConfig, CompanionPushConfig {
 }
 
 class Coordinator extends LifecycleCapability {
-  private readonly waits = new Map<string, Promise<void>>();
   /** Reconciliations in a row with a failed stage. */
   private failures = 0;
   constructor(private readonly assistant: Assistant) { super("umpi-coordinator"); }
@@ -193,8 +193,8 @@ class Coordinator extends LifecycleCapability {
       { name: "cloud", run: () => a.cloud.drive(), due: () => a.cloud.nextDue() },
       { name: "web-watch", run: () => a.webWatch.kick(work => this.lifecycle.trackAlarmWork(work), () => this.wake()), due: () => a.webWatch.nextDue() },
       { name: "browser", run: () => a.browserRuntime.drive(), due: () => a.browserRuntime.nextDue() },
-      // A submitted turn is followed every two seconds. Missing credentials do not justify that loop; auth updates wake the queue.
-      { name: "operations", run: () => this.driveOperations(), due: () => store.pendingOperations().some(op => op.status === "submitted") ? Date.now() + 2_000 : undefined },
+      // A running turn's wait brings its result and renews itself; this stage attaches the waits and checks them every 30 seconds (turns.ts).
+      { name: "operations", run: () => a.turns.drive(), due: () => a.turns.nextDue() },
       { name: "memory-cards", run: async () => reconcileMemoryTelegram(await harness.pi(), BACKGROUND_CONTEXT, store) },
       // What may be sent is decided here. A message is never delivered in a run where this decision failed.
       { name: "delivery-holds", run: () => {
@@ -248,66 +248,6 @@ class Coordinator extends LifecycleCapability {
     if (failed.length) a.modelIssue = `Coordinator reconciliation failed in: ${failed.join(", ")}. Other work continued; a retry is scheduled. Protected status lists the faults.`;
     const wakeAt = await nextWake(stages, failed, retryAt, (stage, error) => a.faults.record(`reconcile:${stage}:due`, error));
     if (Number.isFinite(wakeAt)) return { rescheduleAt: wakeAt };
-  }
-
-  /** Submits admitted turns and follows submitted ones. One turn that fails does not hold back the others. */
-  private async driveOperations(): Promise<void> {
-    const { store, harness, proactive } = this.assistant;
-    let first: unknown;
-    for (const op of store.pendingOperations()) {
-      try { await this.driveOperation(op, store, harness, proactive); }
-      catch (error) { first ??= error; this.assistant.faults.record("reconcile:operation", error); }
-    }
-    if (first !== undefined) throw first;
-  }
-
-  private async driveOperation(op: Operation, store: Store, harness: Assistant["harness"], proactive: ProactiveStore): Promise<void> {
-    if (op.background) {
-      const run = proactive.run(op.background.runId);
-      if (!run || !proactive.settings().enabled || run.status === "superseded" || run.status === "expired") {
-        if (op.status === "submitted") await harness.abort({ session: op.sessionId, operationId: op.id });
-        else { store.settle(op.id, "Background review is no longer actionable.", true); return; }
-      }
-      if (op.status === "admitted" && store.hasForegroundInput()) return;
-    }
-    if (op.status === "admitted") {
-      if (!(await this.assistant.modelReady())) return;
-      // Credential reads yield. An owner edit/cancellation may have invalidated this work meanwhile.
-      if (store.operation(op.id)?.status !== "admitted") return;
-      if (op.background) {
-        if (store.hasForegroundInput()) return;
-        try { proactive.assertRunCurrent(op.sessionId); }
-        catch { store.settle(op.id, "Background review is no longer actionable.", true); return; }
-      }
-      if (!op.background) { if (!(await this.assistant.submitOwnerTurn(op))) return; }
-      else {
-        await harness.submit(store.modelContent(op), { session: op.sessionId, operationId: op.id });
-        store.submitted(op.id);
-      }
-    }
-    if (this.waits.has(op.id)) return;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 20_000);
-    const work = harness.wait(op.id, { session: op.sessionId, signal: controller.signal }).then(async answer => {
-      if (answer.status === "done") {
-        this.assistant.modelIssue = undefined;
-        store.settle(op.id, (answer.text ?? "").slice(0, 65_536));
-      } else if (store.operation(op.id)?.interrupted) {
-        // Cut off by the owner talking, not a model failure.
-        store.settle(op.id, interruptedReply(store.operation(op.id)!.interrupted!.heard ?? this.assistant.spokenText(op.id)));
-      } else {
-        const failure = classifyModelError(await this.assistant.lastModelError(op.sessionId) ?? answer.reason);
-        this.assistant.recordModelFailure(failure);
-        store.settle(op.id, `${this.assistant.modelIssue} Any already-created jobs or reminders remain available in their status lists.`, true);
-      }
-      await this.wake();
-    }).catch(error => {
-      if (controller.signal.aborted) return;
-      this.assistant.faults.record("reconcile:operation-result", error);
-      this.assistant.modelIssue = "Model result recovery failed; accepted work remains durable and will be reconciled";
-    }).finally(() => { clearTimeout(timer); this.waits.delete(op.id); });
-    this.waits.set(op.id, work);
-    this.lifecycle.trackAlarmWork(work);
   }
 }
 
@@ -448,8 +388,8 @@ export class Assistant extends Agent<Env> {
       this.knockPushes.queue(reminder);
       return true;
     };
-    // A widget Umpi chose wakes the phone like other owner changes, so the home screen follows.
-    this.companion.extraState = () => ({ widget: this.widgets.current()?.setAt ?? null, actions: this.widgets.actions() });
+    // A change to what the widgets show wakes the phone like other owner changes, so the home screen follows.
+    this.companion.extraState = () => ({ widget: this.widgetStamp() });
     this.store.chat = this.chat;
     this.chat.appended = entry => { this.chatSocket?.changed(entry.seq); };
     this.chat.changed = latest => { this.chatSocket?.changed(latest); };
@@ -550,6 +490,7 @@ export class Assistant extends Agent<Env> {
       harness: ({ storage, context }) => Harness.open(storage, { models, registry, settings: { extensions: [profiles.owner], stream: { transport: "sse" }, compaction: CONTEXT_COMPACTION }, onReport: () => { this.modelIssue = "A model extension operation failed; check protected model and job status"; } }, context),
       defaults: { ...(model ? { model } : {}), thinkingLevel: MAIN_THINKING_LEVEL },
     });
+    this.turns = new Turns(this.turnHost());
     this.telegramInbox = new TelegramInbox({
       db: this.store.db,
       download: (note, signal) => downloadTelegramVoice(note, this.config, signal),
@@ -649,26 +590,40 @@ export class Assistant extends Agent<Env> {
   /** Effort chosen for recent owner turns, since this instance started. */
   private readonly efforts: Record<Effort, number> = { low: 0, medium: 0, high: 0 };
   private effortTally!: EffortTally;
-  private readonly submitting = new Set<string>();
-  /**
-   * Submits one admitted owner turn after setting its reasoning effort. The direct path and the coordinator drive
-   * can both reach the same turn while the effort decision is pending; only the first submits it. Returns whether
-   * the turn is submitted now.
-   */
-  async submitOwnerTurn(op: Operation): Promise<boolean> {
-    if (this.submitting.has(op.id)) return false;
-    this.submitting.add(op.id);
-    try {
-      if (this.store.operation(op.id)?.status === "admitted") {
-        await this.prepareOwnerTurn(op);
-        if (this.store.operation(op.id)?.status === "admitted") {
-          await this.relaySpeech(op);
-          await this.harness.submit(this.store.modelContent(op), { session: op.sessionId, operationId: op.id });
-          this.store.submitted(op.id);
+  /** Submits admitted turns and follows submitted ones; see turns.ts. */
+  readonly turns: Turns;
+  private turnHost(): TurnHost {
+    return {
+      store: this.store, harness: this.harness,
+      modelReady: () => this.modelReady(),
+      prepare: op => this.prepareOwnerTurn(op),
+      beforeSubmit: op => this.relaySpeech(op),
+      backgroundActionable: op => {
+        const run = this.proactive.run(op.background!.runId);
+        return Boolean(run) && this.proactive.settings().enabled && run!.status !== "superseded" && run!.status !== "expired";
+      },
+      backgroundCurrent: op => { try { this.proactive.assertRunCurrent(op.sessionId); return true; } catch { return false; } },
+      finish: async (op, answer) => {
+        if (answer.status === "done") {
+          this.modelIssue = undefined;
+          this.store.settle(op.id, (answer.text ?? "").slice(0, 65_536));
+        } else if (this.store.operation(op.id)?.interrupted) {
+          // Cut off by the owner talking, not a model failure.
+          this.store.settle(op.id, interruptedReply(this.store.operation(op.id)!.interrupted!.heard ?? this.spokenText(op.id)));
+        } else {
+          const failure = classifyModelError(await this.lastModelError(op.sessionId) ?? answer.reason);
+          this.recordModelFailure(failure);
+          this.store.settle(op.id, `${this.modelIssue} Any already-created jobs or reminders remain available in their status lists.`, true);
         }
-      }
-      return this.store.operation(op.id)?.status === "submitted";
-    } finally { this.submitting.delete(op.id); }
+      },
+      resultFailed: error => {
+        this.faults.record("reconcile:operation-result", error);
+        this.modelIssue = "Model result recovery failed; accepted work remains durable and will be reconciled";
+      },
+      driveFailed: error => { this.faults.record("reconcile:operation", error); },
+      wake: () => this.coordinator.wake(),
+      track: work => { this.lifecycle.trackAlarmWork(work); },
+    };
   }
   /** Sets this owner turn's reasoning effort from a decision on the message; anything unclear keeps high. */
   private async prepareOwnerTurn(op: Operation): Promise<void> {
@@ -684,18 +639,23 @@ export class Assistant extends Agent<Env> {
       const was = before.effort;
       this.lifecycle.trackAlarmWork(wasCorrection(this.decisions, op.text, previous).then(corrected => { if (corrected !== undefined) this.effortTally.followed(was, corrected); }).catch(() => undefined));
     }
-    await (await this.harness.conversation(op.sessionId)).configure({ thinkingLevel: effort }, BACKGROUND_CONTEXT);
+    // Most turns keep the effort of the turn before; an unchanged level writes nothing.
+    await setThinkingLevel(await this.harness.conversation(op.sessionId), effort, BACKGROUND_CONTEXT);
   }
 
   /** Spoken replies being read aloud in the app, by operation; kept a while after they end for an interruption's text. */
   private readonly speech = new Map<string, SpeechRelay>();
   /**
-   * Starts passing a spoken turn's reply to the app as it is written. Attached before the turn is submitted, so the
-   * run that answers it is not missed. If watching fails, the app reads the finished reply from the chat instead.
+   * Starts passing a turn's reply to the apps as it is written: read aloud for a spoken turn, shown growing in the
+   * chat for any other. Attached before the turn is submitted, so the run that answers it is not missed. If watching
+   * fails, the app reads the finished reply from the chat instead. A typed turn is followed only while an app is
+   * connected, since nothing else could show it.
    */
   private async relaySpeech(op: Operation): Promise<void> {
-    if (!op.ownerSource?.spoken || this.speech.has(op.id)) return;
-    const relay = new SpeechRelay(op.id, frame => { this.chatSocket?.broadcast(frame); });
+    const spoken = op.ownerSource?.spoken === true;
+    // Only the shared chat shows a growing reply: a control-channel turn has no chat entry that would replace it.
+    if (this.speech.has(op.id) || !spoken && (op.channel !== "telegram" || !this.chatSocket?.count())) return;
+    const relay = new SpeechRelay(op.id, frame => { this.chatSocket?.broadcast(frame); }, spoken ? "speech" : "reply");
     this.speech.set(op.id, relay);
     const forget = () => setTimeout(() => { if (this.speech.get(op.id) === relay) this.speech.delete(op.id); }, 10 * 60_000);
     try {
@@ -804,7 +764,8 @@ export class Assistant extends Agent<Env> {
       if (admitted.status === "admitted" || admitted.status === "submitted") this.proactive.deferForForeground();
       return admitted;
     });
-    if (op.status === "admitted") await this.submitOwnerTurn(op);
+    // The request submits the turn itself, then wakes the coordinator: only its reconciliation attaches the wait that brings the reply.
+    if (op.status === "admitted") await this.turns.submitDirect(op);
     return this.store.operation(op.id)!;
   }
 
@@ -860,19 +821,34 @@ export class Assistant extends Agent<Env> {
     return result;
   }
 
+  private widgetWaiting(): number {
+    return this.store.jobs().filter(job => job.status === "pending_approval").length + this.store.choices().filter(choice => choice.status === "pending").length;
+  }
+  private widgetReminders(): Reminder[] {
+    return this.store.reminders().filter(item => item.status === "scheduled").sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt)).slice(0, 2);
+  }
+  /** Changes with everything `widgetContent` takes from coordinator state; today's note is read only for the content itself. */
+  private widgetStamp(): string {
+    // A state read must not fail on a time zone that is not valid; the day then follows UTC.
+    let day: string;
+    try { day = this.planningRuntime.today(); } catch { day = new Date().toISOString().slice(0, 10); }
+    return widgetStamp({ chosen: this.widgets.current()?.setAt ?? null, actions: this.widgets.actions(), waiting: this.widgetWaiting(), reminders: this.widgetReminders(),
+      day, noteChanges: this.widgets.noteChanges() });
+  }
+
   /** What the phone widgets show: Umpi's chosen items, or today's open tasks, the next reminders, and what is waiting. */
   private async widgetContent(): Promise<WidgetContent> {
     const chosen = this.widgets.current();
     const actions = this.widgets.actions();
     if (chosen) return { items: chosen.items, source: "umpi", updatedAt: chosen.setAt, actions, ...(chosen.note ? { note: chosen.note } : {}) };
     const items: WidgetItem[] = [];
-    const waiting = this.store.jobs().filter(job => job.status === "pending_approval").length + this.store.choices().filter(choice => choice.status === "pending").length;
+    const waiting = this.widgetWaiting();
     if (waiting) items.push({ title: waiting === 1 ? "1 thing needs you" : `${waiting} things need you`, symbol: "hand.raised", link: "work" });
     try {
       if (this.obsyVault) for (const task of openTasks((await this.obsyVault.readDay(this.planningRuntime.today())).text).slice(0, 6)) items.push({ title: task, symbol: "circle", link: "today" });
     } catch (error) { this.faults.record("widget:today", error); /* The widget still shows reminders and waiting work. */ }
     const time = new Intl.DateTimeFormat("en-GB", { timeZone: this.timezone, hour: "2-digit", minute: "2-digit", weekday: "short" });
-    for (const reminder of this.store.reminders().filter(item => item.status === "scheduled").sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt)).slice(0, 2)) {
+    for (const reminder of this.widgetReminders()) {
       items.push({ title: reminder.text, detail: time.format(new Date(reminder.dueAt)), symbol: "bell", link: "work" });
     }
     return { items: items.slice(0, 8), source: "default", updatedAt: new Date().toISOString(), actions };
@@ -1073,7 +1049,10 @@ export class Assistant extends Agent<Env> {
         setWidgetActions: async value => ({ actions: this.widgets.setActions(value) }),
         setTask: async (day, line, expected, checked) => {
           if (!this.obsyVault) throw new StateError(503, this.obsyIssue ?? "No notes vault is configured");
-          return this.obsyVault.setTask(day, line, expected, checked, `app-task-${crypto.randomUUID()}`);
+          const result = await this.obsyVault.setTask(day, line, expected, checked, `app-task-${crypto.randomUUID()}`);
+          // The widgets show today's open tasks: their stamp moves, so the phone reads them again.
+          this.widgets.noteChanged();
+          return result;
         },
         readFile: (name, bytes) => documentFromBytes(bytes, name, (this.env as Env).AI as unknown as DocumentConverter | undefined),
         requireModel: async () => { if (!(await this.modelReady())) throw new StateError(503, this.modelIssue!); },

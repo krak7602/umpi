@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ToolExecutionResult, type ToolRegistration } from "@earendil-works/pi-durable";
 import { InputError, boundedText, record } from "../shared/protocol.js";
@@ -62,6 +63,9 @@ export class WidgetStore {
     return value;
   }
   clear(): void { this.db.all("DELETE FROM umpi_widget WHERE id=1"); }
+  /** Row 3 counts the day-note changes made through the coordinator, so the widget's stamp moves with them. */
+  noteChanged(): void { this.db.all("INSERT INTO umpi_widget VALUES (3, '1') ON CONFLICT(id) DO UPDATE SET data=CAST(CAST(data AS INTEGER)+1 AS TEXT)"); }
+  noteChanges(): number { return Number(this.db.all<{ data: string }>("SELECT data FROM umpi_widget WHERE id=3")[0]?.data ?? 0); }
   /** The widget's buttons, in order: the first is the small widget's only button. */
   actions(): WidgetAction[] {
     const row = this.db.all<{ data: string }>("SELECT data FROM umpi_widget WHERE id=2")[0];
@@ -76,6 +80,15 @@ export class WidgetStore {
     this.db.all("INSERT INTO umpi_widget VALUES (2, ?) ON CONFLICT(id) DO UPDATE SET data=excluded.data", JSON.stringify(actions));
     return actions;
   }
+}
+
+/**
+ * A stamp of what the widgets show, from state the coordinator holds. The app reads the widget content again when the
+ * stamp changes, and otherwise only at a slow interval: the default content also shows today's note, which can change
+ * outside the coordinator, and reading it costs a storage read.
+ */
+export function widgetStamp(parts: { chosen: string | null; actions: readonly string[]; waiting: number; reminders: readonly { text: string; dueAt: string }[]; day: string; noteChanges: number }): string {
+  return createHash("sha256").update(JSON.stringify([parts.chosen, parts.actions, parts.waiting, parts.reminders.map(reminder => [reminder.text, reminder.dueAt]), parts.day, parts.noteChanges])).digest("hex").slice(0, 16);
 }
 
 /** Open checklist items of a Markdown note, in order. */

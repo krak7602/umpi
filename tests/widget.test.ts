@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { openTasks, WidgetStore } from "../src/worker/widget.js";
+import { openTasks, widgetStamp, WidgetStore } from "../src/worker/widget.js";
 
 test("Umpi chooses widget items for a while, then the default returns; open tasks come from the note", t => {
   const sqlite = new DatabaseSync(":memory:"); t.after(() => sqlite.close());
@@ -28,4 +28,24 @@ test("widget buttons are a stored choice of known actions; the earlier idea butt
   assert.throws(() => widgets.setActions(["camera"]), /Unknown widget action/);
   sqlite.prepare("UPDATE umpi_widget SET data=? WHERE id=2").run(JSON.stringify(["idea", "today", "ideas"]));
   assert.deepEqual(widgets.actions(), ["voice", "today"], "stored older buttons are read in the new terms");
+});
+
+test("the widget stamp changes with what the widgets show from coordinator state, and with a task set through it", t => {
+  const sqlite = new DatabaseSync(":memory:"); t.after(() => sqlite.close());
+  const widgets = new WidgetStore({ all: <T extends object>(sql: string, ...values: (string | number | null)[]) => sqlite.prepare(sql).all(...values) as T[], transaction: <T>(run: () => T) => run() });
+  const base = { chosen: null, actions: widgets.actions(), waiting: 0, reminders: [{ text: "Water the ferns", dueAt: "2026-11-03T17:00:00.000Z" }], day: "2026-11-03", noteChanges: widgets.noteChanges() };
+  const stamp = widgetStamp(base);
+  assert.match(stamp, /^[0-9a-f]{16}$/);
+  assert.equal(widgetStamp({ ...base }), stamp, "the same state gives the same stamp");
+  assert.notEqual(widgetStamp({ ...base, waiting: 1 }), stamp);
+  assert.notEqual(widgetStamp({ ...base, reminders: [] }), stamp);
+  assert.notEqual(widgetStamp({ ...base, day: "2026-11-04" }), stamp, "a new day shows another note");
+  assert.notEqual(widgetStamp({ ...base, chosen: "2026-11-03T10:00:00.000Z" }), stamp);
+  assert.notEqual(widgetStamp({ ...base, actions: ["voice"] }), stamp);
+  assert.equal(widgets.noteChanges(), 0);
+  widgets.noteChanged(); widgets.noteChanged();
+  assert.equal(widgets.noteChanges(), 2);
+  assert.notEqual(widgetStamp({ ...base, noteChanges: widgets.noteChanges() }), stamp);
+  assert.deepEqual(widgets.actions(), ["voice", "today", "chat", "work"], "the counter does not disturb the stored buttons");
+  assert.equal(widgets.current(), undefined);
 });

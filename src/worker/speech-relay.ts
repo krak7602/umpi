@@ -1,14 +1,19 @@
 import type { AgentEvent, SubmissionId } from "@earendil-works/pi-durable";
 
 /**
- * A spoken reply as it is written: what the phone reads aloud while Claude is still answering. Frames go over the
- * app's chat socket. `part` counts the answer's model messages, so text written before a tool call ("Let me check
- * your calendar") and the answer after it are separate parts. The finished reply still arrives as a chat entry.
+ * A reply as it is written. Frames go over the app's chat socket. `part` counts the answer's model messages, so text
+ * written before a tool call ("Let me check your calendar") and the answer after it are separate parts. The finished
+ * reply still arrives as a chat entry, which replaces what the frames showed.
+ *
+ * - `speech`: a spoken turn. The phone reads the text aloud while Claude is still answering.
+ * - `reply`: any other turn of the owner's conversation. The apps show the text growing; nothing is read aloud. The
+ *   two types are separate so that an app never speaks a reply to a typed message.
  */
+export type ReplyFrameType = "speech" | "reply";
 export type SpeechFrame =
-  | { type: "speech"; operationId: string; part: number; text: string }
-  | { type: "speech"; operationId: string; part: number; working: string }
-  | { type: "speech"; operationId: string; done: true };
+  | { type: ReplyFrameType; operationId: string; part: number; text: string }
+  | { type: ReplyFrameType; operationId: string; part: number; working: string }
+  | { type: ReplyFrameType; operationId: string; done: true };
 
 /** Text inside these tags is shown in the chat and never read aloud. */
 export const SHOWN_OPEN = "<chat>", SHOWN_CLOSE = "</chat>";
@@ -61,7 +66,7 @@ export class SpeechRelay {
   /** Everything passed on, for the chat entry of a reply that was cut off. */
   spoken = "";
 
-  constructor(readonly operationId: string, private readonly send: (frame: SpeechFrame) => void) {}
+  constructor(readonly operationId: string, private readonly send: (frame: SpeechFrame) => void, private readonly type: ReplyFrameType = "speech") {}
 
   get done(): boolean { return this.finished; }
 
@@ -102,7 +107,7 @@ export class SpeechRelay {
           }
           break;
         case "tool_execution_start":
-          if (this.active) this.send({ type: "speech", operationId: this.operationId, part: this.part, working: event.toolName });
+          if (this.active) this.send({ type: this.type, operationId: this.operationId, part: this.part, working: event.toolName });
           break;
         case "run_end":
           if (this.active && this.submission && event.inputs.includes(this.submission)) this.finish();
@@ -118,7 +123,7 @@ export class SpeechRelay {
   finish(): void {
     if (this.finished) return;
     this.finished = true;
-    this.send({ type: "speech", operationId: this.operationId, done: true });
+    this.send({ type: this.type, operationId: this.operationId, done: true });
   }
 
   private whole(content: readonly unknown[]): void {
@@ -138,6 +143,6 @@ export class SpeechRelay {
     this.sent.set(index, already + fresh.length);
     this.partHasText = true;
     this.spoken += (this.spoken && this.part > 0 && already === 0 && !this.spoken.endsWith(" ") ? " " : "") + fresh;
-    this.send({ type: "speech", operationId: this.operationId, part: this.part, text: fresh });
+    this.send({ type: this.type, operationId: this.operationId, part: this.part, text: fresh });
   }
 }

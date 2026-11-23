@@ -7,8 +7,9 @@ interface ChatAttachment { kind: typeof CHAT_SOCKET_TAG; deviceId: string }
 
 /**
  * A paired phone's live view of the shared conversation. The socket carries {"type":"chat","latest":N} when the
- * conversation grows; the app then reads the new entries through the authenticated chat route. While a spoken reply
- * is written it also carries that reply's text as `speech` frames (see speech-relay.ts). Nothing the app sends is read.
+ * conversation grows; the app then reads the new entries through the authenticated chat route. While a reply is
+ * written it also carries that reply's text: `speech` frames for a spoken turn, `reply` frames for any other (see
+ * speech-relay.ts). Nothing the app sends is read.
  */
 export class ChatSocket extends LifecycleCapability {
   constructor(private readonly options: { authenticate(request: Request): Promise<string>; active(deviceId: string): boolean; latest(): number }) { super("umpi-chat-socket"); }

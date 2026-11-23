@@ -535,3 +535,82 @@ test("tokenless activity tracking survives restart and old-job transitions witho
   assert.equal(companion.snapshot().jobs.some(job => job.jobId === "local-tracked"), false);
   assert.equal(companion.snapshot("phone-2").jobs.some(job => job.jobId === "remote-tracked"), true);
 });
+
+test("a device that holds the current revision gets a small answer; a changed state gets the snapshot, without coordinator fields", async t => {
+  const f = fixture(t);
+  const { token } = paired(f.companion);
+  const read = async (query = "") => await (await companionRequest(request(`/api/device/state${query}`, token), f.context))!.json() as Record<string, unknown>;
+  const first = await read();
+  assert.equal(first.unchanged, undefined, "a read without a revision is the whole snapshot, as older app builds send it");
+  assert.deepEqual(await read(`?revision=${first.revision}`), { protocolVersion: 1, revision: first.revision, unchanged: true });
+  // A new operation moves the revision in the read that finds it, so the same question now gets the snapshot.
+  f.owner.admit("m1", "Water the ferns", "telegram", "2", { kind: "app-text", note: "Text for the model only" });
+  const changed = await read(`?revision=${first.revision}`);
+  assert.ok(Number(changed.revision) > Number(first.revision));
+  const [operation] = changed.operations as Record<string, unknown>[];
+  assert.deepEqual(Object.keys(operation!).sort(), ["channel", "createdAt", "id", "requestId", "sessionId", "status", "surface", "text"], "the fields the apps decode, and where the reply goes");
+  assert.equal(JSON.stringify(changed).includes("Text for the model only"), false, "the model's input stays on the coordinator");
+  assert.equal(typeof (changed.device as Record<string, unknown>).lastSeenAt, "string");
+  assert.deepEqual(await read(`?revision=${changed.revision}`), { protocolVersion: 1, revision: changed.revision, unchanged: true });
+  assert.equal((await read(`?revision=${Number(changed.revision) + 5}`)).unchanged, undefined, "a revision the coordinator does not hold gets the snapshot");
+  await assert.rejects(read("?revision=abc"), InputError);
+  assert.ok(f.owner.operation("message:telegram:m1")!.modelInput, "the stored operation keeps what was removed from the reply");
+  const sent = await (await companionRequest(request("/api/device/messages", token, { id: "m2", text: "Buy seeds", context: "A note for the model" }), f.context))!.json() as Record<string, unknown>;
+  assert.equal(sent.modelInput, undefined, "the reply to a sent message carries no model input either");
+  assert.equal(sent.text, "Buy seeds");
+});
+
+test("the control snapshot keeps whole operations", t => {
+  const f = fixture(t);
+  f.owner.admit("m1", "Water the ferns", "telegram", "2", { kind: "app-text", note: "Text for the model only" });
+  assert.ok(f.companion.snapshot().operations[0]!.modelInput);
+});
+
+test("a repeated registration does not wake the coordinator; a changed one does", async t => {
+  const f = fixture(t);
+  const { token } = paired(f.companion);
+  let wakes = 0;
+  f.context.wake = async () => { wakes++; };
+  const register = async (body: unknown) => (await companionRequest(request("/api/device/register", token, body), f.context))!.json();
+  const full = { capabilities, apnsToken: "ab".repeat(32), apnsEnvironment: "sandbox", activityTokens: [], activityJobIds: [] };
+  assert.deepEqual(await register(full), { ok: true });
+  assert.equal(wakes, 1, "the first registration brings a push token: the coordinator has a push to consider");
+  const revision = f.companion.snapshot("phone-1").revision;
+  assert.deepEqual(await register(full), { ok: true });
+  assert.deepEqual(await register({ capabilities }), { ok: true });
+  assert.equal(wakes, 1, "the same registration, and one that only repeats the capabilities, change nothing");
+  assert.equal(f.companion.snapshot("phone-1").revision, revision);
+  await register({ ...full, apnsToken: "cd".repeat(32) });
+  assert.equal(wakes, 2, "a new push token wakes it");
+  await register({ capabilities: [{ id: "notification.schedule", version: 1, status: "permission_required", reason: "Allow notifications in system settings" }] });
+  assert.equal(wakes, 3, "changed capabilities wake it");
+  await assert.rejects(register({ capabilities, apnsToken: "not hex" }), InputError);
+  assert.equal(wakes, 3);
+});
+
+test("the time a device was last seen is written at most once a minute", t => {
+  const f = fixture(t);
+  paired(f.companion);
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() + 5_000 });
+  const first = f.companion.seen("phone-1").lastSeenAt;
+  t.mock.timers.tick(12_000);
+  assert.equal(f.companion.seen("phone-1").lastSeenAt, first, "a read 12 seconds later writes nothing");
+  t.mock.timers.tick(60_000);
+  const later = f.companion.seen("phone-1").lastSeenAt;
+  assert.ok(Date.parse(later) - Date.parse(first) >= 60_000);
+  assert.equal(f.companion.device("phone-1")!.lastSeenAt, later);
+});
+
+test("extra owner state reaches the device snapshot and moves the revision when it changes", t => {
+  const f = fixture(t);
+  paired(f.companion);
+  let stamp = "stamp-1";
+  f.companion.extraState = () => ({ widget: stamp });
+  const first = f.companion.snapshot("phone-1");
+  assert.deepEqual(first.extra, { widget: "stamp-1" });
+  assert.deepEqual(f.companion.snapshot("phone-1", first.revision), { protocolVersion: 1, revision: first.revision, unchanged: true });
+  stamp = "stamp-2";
+  const second = f.companion.snapshot("phone-1", first.revision);
+  assert.ok(!("unchanged" in second) && second.revision > first.revision);
+  assert.deepEqual("extra" in second ? second.extra : undefined, { widget: "stamp-2" });
+});

@@ -4,7 +4,7 @@ import type { ChatLog } from "./chat.js";
 import type { SpeechWordStore } from "./speech-words.js";
 import { KNOCK_SNOOZE_MINUTES } from "../shared/knock.js";
 import { exactKeys, parsePairClaim } from "../shared/companion.js";
-import { CompanionStore, companionHash } from "./companion-store.js";
+import { CompanionStore, companionHash, deviceOperation } from "./companion-store.js";
 import { companionRole } from "./companion-routes.js";
 import { authorize, readJson, secretEqual, type TelegramConfig } from "./transport.js";
 import { StateError, type Operation } from "./store.js";
@@ -134,7 +134,13 @@ export async function companionRequest(request: Request, context: CompanionHttpC
     return Response.json(path === "/api/companion/changes" ? companion.mutate(body, "control") : companion.requestAction(body));
   }
   const device = companion.authenticate(request.headers.get("authorization"));
-  if (path === "/api/device/state") { companion.seen(device.id); return Response.json(companion.snapshot(device.id)); }
+  if (path === "/api/device/state") {
+    // `revision` is the one the app holds: when nothing changed since, the answer says only that.
+    const known = new URL(request.url).searchParams.get("revision");
+    if (known !== null && !/^\d{1,16}$/.test(known)) throw new InputError("Invalid revision");
+    companion.seen(device.id);
+    return Response.json(known === null ? companion.snapshot(device.id) : companion.snapshot(device.id, Number(known)));
+  }
   if (path === "/api/device/chat") {
     const query = new URL(request.url).searchParams;
     const limit = query.get("limit");
@@ -177,6 +183,11 @@ export async function companionRequest(request: Request, context: CompanionHttpC
     return Response.json({ ok: true });
   }
   const body = await readJson(request, path === "/api/device/messages" ? MAX_APP_MESSAGE_BYTES : undefined);
+  if (path === "/api/device/register") {
+    // The apps repeat their registration. Only a changed one gives the coordinator something to do.
+    if (companion.registrationChanges(device.id, body)) await context.wake();
+    return Response.json(companion.register(device.id, body));
+  }
   // Recheck after asynchronous boundaries. Revocation can race a body read or a lifecycle write.
   await context.wake();
   companion.requireDevice(device.id);
@@ -224,7 +235,6 @@ export async function companionRequest(request: Request, context: CompanionHttpC
   if (path === "/api/device/knocks") return Response.json(companion.owner.recordPhoneKnocks(device.id, body));
   const knock = /^\/api\/device\/reminders\/([^/]+)\/answer$/.exec(path);
   if (knock) return Response.json(companion.owner.answerPhoneKnock(knock[1]!, body, KNOCK_SNOOZE_MINUTES));
-  if (path === "/api/device/register") return Response.json(companion.register(device.id, body));
   if (path === "/api/device/changes") return Response.json(companion.mutate(body, `device:${device.id}`));
   if (path === "/api/device/actions") return Response.json(companion.requestAction(body, device.id));
   const ack = /^\/api\/device\/actions\/([^/]+)\/ack$/.exec(path);
@@ -238,7 +248,10 @@ export async function companionRequest(request: Request, context: CompanionHttpC
   const choice = /^\/api\/device\/choices\/([^/]+)\/answer$/.exec(path);
   if (choice) {
     await context.requireModel();
-    return Response.json(companion.answerChoice(device.id, choice[1]!, body), { status: 202 });
+    const answered = companion.answerChoice(device.id, choice[1]!, body);
+    // The wake above can run before the answer is admitted; this one submits it.
+    await context.wake();
+    return Response.json(deviceOperation(answered), { status: 202 });
   }
   // A paired device pairs another, such as the Mac app: a one-use code for 10 minutes, shown only to this device.
   if (path === "/api/device/pairings") {
@@ -252,7 +265,7 @@ export async function companionRequest(request: Request, context: CompanionHttpC
     const note = message.interrupts ? await context.interrupt(message.interrupts, message.heard) : undefined;
     if (note) message.context = message.context ? `${note}\n\n${message.context}` : note;
     // Fixed-size, device-scoped identity also fits the existing 128-character message ID contract.
-    return Response.json(await context.admitApp(`app:${companionHash(JSON.stringify([device.id, id]))}`, device.id, message), { status: 202 });
+    return Response.json(deviceOperation(await context.admitApp(`app:${companionHash(JSON.stringify([device.id, id]))}`, device.id, message)), { status: 202 });
   }
   throw new StateError(404, "Not found");
 }

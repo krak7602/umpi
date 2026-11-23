@@ -84,6 +84,7 @@
       "set_daily_brief": {"guards":[],"classes":[]},
       "set_widget": {"guards":["background"],"classes":[]},
       "set_widget_actions": {"guards":["background"],"classes":[]},
+      "show_ui": {"guards":["background"],"classes":[]},
       "spawn_subagent": {"guards":["background"],"classes":[]},
       "speech_words": {"guards":["background"],"classes":[]},
       "subagent_status": {"guards":["background"],"classes":[]},

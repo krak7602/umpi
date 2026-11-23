@@ -587,7 +587,7 @@ Production pairing requires HTTPS. Debug builds additionally allow loopback HTTP
 
 Use Workflows to create/edit native forms or Ask Umpi to request supported compositions. Local drafts survive refresh and restart. Review stale edits in the queued-change UI rather than discarding them or silently rebasing them. Activity shows requests, questions, jobs, and device outcomes. Command approval always shows the exact version, command, folder, and timeout separately from generated workflow controls.
 
-Settings provides OS permission requests and separate remote-effect consent. Keep per-action review unless standing consent is intended. Foreground state refreshes every 12 seconds; background refresh and pushes are best effort. Disconnect attempts revocation and explicitly clears local data, but does not cancel installed alarms or notifications.
+Settings provides OS permission requests and separate remote-effect consent. Keep per-action review unless standing consent is intended. Foreground state refreshes every 12 seconds, with a small answer when nothing changed; background refresh and pushes are best effort. Disconnect attempts revocation and explicitly clears local data, but does not cancel installed alarms or notifications.
 
 #### Configure push deliberately
 

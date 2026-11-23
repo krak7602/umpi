@@ -25,6 +25,8 @@ export interface ChatEntry {
   media?: { kind: string; name?: string; seconds?: number; count?: number };
   operationId?: string;
   buttons?: ChatButton[][];
+  /** UI blocks Umpi composed for this reply (`show_ui`), drawn under the text. A surface that cannot draw them shows the text alone. */
+  ui?: unknown[];
 }
 type NewEntry = Omit<ChatEntry, "seq" | "at">;
 
@@ -50,6 +52,29 @@ export class ChatLog {
     db.all("CREATE TABLE IF NOT EXISTS umpi_chat (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, at INTEGER NOT NULL, data TEXT NOT NULL)");
     db.all("CREATE TABLE IF NOT EXISTS umpi_chat_push (seq INTEGER PRIMARY KEY, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0)");
     db.all("CREATE TABLE IF NOT EXISTS umpi_chat_settings (id TEXT PRIMARY KEY, data TEXT NOT NULL)");
+    db.all("CREATE TABLE IF NOT EXISTS umpi_chat_ui (operation TEXT NOT NULL, n INTEGER NOT NULL, at INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (operation, n))");
+  }
+
+  /**
+   * Keeps a checked UI block for the reply of a turn that is still running. The reply's entry takes the blocks when it
+   * is written. Returns the block's position, or undefined when the turn already holds `limit` blocks.
+   */
+  attachUi(operationId: string, spec: unknown, limit: number): number | undefined {
+    return this.db.transaction(() => {
+      const count = this.db.all<{ n: number }>("SELECT count(*) AS n FROM umpi_chat_ui WHERE operation=?", operationId)[0]!.n;
+      if (count >= limit) return undefined;
+      this.db.all("INSERT INTO umpi_chat_ui VALUES (?,?,?,?)", operationId, count + 1, this.now(), JSON.stringify(spec));
+      // Blocks of turns that never wrote a reply.
+      this.db.all("DELETE FROM umpi_chat_ui WHERE at<?", this.now() - 86_400_000);
+      return count + 1;
+    });
+  }
+  /** Takes the blocks kept for a turn: its reply is being written now. */
+  private takeUi(operationId: string): { ui: unknown[] } | Record<string, never> {
+    const rows = this.db.all<{ data: string }>("SELECT data FROM umpi_chat_ui WHERE operation=? ORDER BY n", operationId);
+    if (!rows.length) return {};
+    this.db.all("DELETE FROM umpi_chat_ui WHERE operation=?", operationId);
+    return { ui: rows.map(row => JSON.parse(row.data) as unknown) };
   }
 
   settings(): { notify: ChatNotify; version: number } {
@@ -87,7 +112,8 @@ export class ChatLog {
   }
   /** Umpi's reply to an app message: shown and announced in the app only. */
   appReply(operationId: string, text: string): void {
-    if (this.add({ id: `umpi:answer:${operationId}`, role: "umpi", surface: "app", kind: "reply", text, operationId })) this.queuePush(`umpi:answer:${operationId}`);
+    if (this.db.all("SELECT seq FROM umpi_chat WHERE id=?", `umpi:answer:${operationId}`).length) return;
+    if (this.add({ id: `umpi:answer:${operationId}`, role: "umpi", surface: "app", kind: "reply", text, operationId, ...this.takeUi(operationId) })) this.queuePush(`umpi:answer:${operationId}`);
   }
   /**
    * A message queued for Telegram. Returns whether Telegram should deliver it silently because the app announces it.
@@ -100,7 +126,9 @@ export class ChatLog {
     // A panel answers a button the owner just pressed, so it is not announced.
     const reply = REPLY.test(groupId) || panel;
     const buttons = chatButtons(markup);
-    const entry = this.add({ id: `umpi:${groupId}`, role: "umpi", surface: "telegram", kind: reply ? "reply" : "message", text, ...(buttons ? { buttons } : {}) });
+    // An answer's group is `answer:<operation>`: its UI blocks go with the entry, on the first write only.
+    const ui = groupId.startsWith("answer:") && !this.db.all("SELECT seq FROM umpi_chat WHERE id=?", `umpi:${groupId}`).length ? this.takeUi(groupId.slice("answer:".length)) : {};
+    const entry = this.add({ id: `umpi:${groupId}`, role: "umpi", surface: "telegram", kind: reply ? "reply" : "message", text, ...(buttons ? { buttons } : {}), ...ui });
     // A quiet message already alerted the owner another way, such as a knock on the phone.
     if (reply || options?.quiet || this.settings().notify !== "app") return { silent: false };
     if (entry) this.queuePush(entry.id);

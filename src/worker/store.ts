@@ -289,6 +289,11 @@ export class Store {
   }
   /** The turns of a conversation that are waiting or running: a tool call belongs to one of them. */
   private inFlight(sessionId: string): Operation[] { return this.pendingOperations().filter(op => op.sessionId === sessionId); }
+  /** The turn now running in a conversation: the submitted one, or the only one waiting. Undefined when there is none or it is unclear. */
+  turnInFlight(sessionId: string): Operation | undefined {
+    const waiting = this.inFlight(sessionId), running = waiting.filter(op => op.status === "submitted");
+    return running.length === 1 ? running[0] : waiting.length === 1 ? waiting[0] : undefined;
+  }
   /** A tool is about to return text the owner did not write. Every turn in flight is marked, since any of them may read it. */
   markOutsideText(sessionId: string, tool: string): void {
     this.db.transaction(() => {

@@ -74,3 +74,10 @@ test("what a spoken reply shows stays in the chat without its tags, and Umpi is 
   assert.match(SPOKEN_TURN_NOTE, /between <chat> and <\/chat>/);
   assert.match(SPOKEN_TURN_NOTE, /speech recognition/);
 });
+
+test("a typed turn's reply is passed on as reply frames, so no app reads it aloud", () => {
+  const frames: SpeechFrame[] = [];
+  const relay = new SpeechRelay("op", frame => frames.push(frame), "reply");
+  relay.finish();
+  assert.deepEqual(frames, [{ type: "reply", operationId: "op", done: true }]);
+});

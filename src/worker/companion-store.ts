@@ -12,8 +12,21 @@ interface SnapshotState {
   jobs: Job[]; reminders: Reminder[]; choices: Choice[]; operations: Operation[];
   pushDeliveries: { deviceId: string; status: string }[];
 }
-export interface DeviceSnapshot extends SnapshotState { device: Device }
+/**
+ * What a device gets of an operation: the fields the apps decode, and `surface`, which says the reply stays in the app.
+ * The model's input, the message's source record, the effort, and the other coordinator fields stay out of device replies.
+ */
+export type DeviceOperation = Pick<Operation, "id" | "requestId" | "channel" | "sessionId" | "text" | "status" | "createdAt" | "result" | "error" | "surface">;
+export const deviceOperation = (op: Operation): DeviceOperation => ({
+  id: op.id, requestId: op.requestId, channel: op.channel, sessionId: op.sessionId, text: op.text, status: op.status, createdAt: op.createdAt,
+  ...(op.result !== undefined ? { result: op.result } : {}), ...(op.error !== undefined ? { error: op.error } : {}), ...(op.surface ? { surface: op.surface } : {}),
+});
+export interface DeviceSnapshot extends Omit<SnapshotState, "operations"> { device: Device; operations: DeviceOperation[]; extra?: unknown }
+/** The answer to a device that already holds the current revision: nothing else is sent. */
+export interface UnchangedSnapshot { protocolVersion: 1; revision: number; unchanged: true }
 export interface CompanionSnapshot extends SnapshotState { devices: Device[] }
+/** A read at least this long after the last one writes the device's `lastSeenAt` again. */
+const SEEN_WRITE_MS = 60_000;
 interface DeviceRow { id: string; token_hash: string; data: string; push: string }
 interface PairingRow { hash: string; expires: number; claim_hash: string | null; device_id: string | null }
 const iso = () => new Date().toISOString();
@@ -148,16 +161,32 @@ export class CompanionStore {
     if (!row) throw new StateError(401, "Unauthorized device session");
     return this.requireDevice(row.id);
   }
+  /** Records that the device was here. The apps read every few seconds; the time is written at most once a minute. */
   seen(id: string): Device {
-    const device = { ...this.requireDevice(id), lastSeenAt: iso() };
-    this.db.all("UPDATE umpi_companion_devices SET data=? WHERE id=?", JSON.stringify(device), id); return device;
+    const device = this.requireDevice(id), now = Date.now(), last = Date.parse(device.lastSeenAt);
+    if (Number.isFinite(last) && now - last >= 0 && now - last < SEEN_WRITE_MS) return device;
+    const fresh = { ...device, lastSeenAt: new Date(now).toISOString() };
+    this.db.all("UPDATE umpi_companion_devices SET data=? WHERE id=?", JSON.stringify(fresh), id); return fresh;
+  }
+  private registration(id: string): DeviceRegistration {
+    return JSON.parse(this.db.all<DeviceRow>("SELECT * FROM umpi_companion_devices WHERE id=?", id)[0]!.push) as DeviceRegistration;
+  }
+  /**
+   * Whether this registration differs from the stored one. The apps repeat an unchanged registration to stay fresh;
+   * that changes nothing the coordinator drives, so the caller need not wake it.
+   */
+  registrationChanges(id: string, value: unknown): boolean {
+    const input = parseRegistration(value);
+    this.requireDevice(id);
+    const prior = this.registration(id);
+    return fingerprint(prior) !== fingerprint({ ...prior, ...input });
   }
   register(id: string, value: unknown): { ok: true } {
     const input = parseRegistration(value);
     return this.db.transaction(() => {
       const device = this.requireDevice(id);
       for (const jobId of activityJobIds(input)) if (!this.owner.job(jobId)) throw new InputError("Live Activity requires an existing job");
-      const prior = JSON.parse(this.db.all<DeviceRow>("SELECT * FROM umpi_companion_devices WHERE id=?", id)[0]!.push) as DeviceRegistration;
+      const prior = this.registration(id);
       const push = { ...prior, ...input };
       if ((push.apnsToken || push.activityTokens?.length) && !push.apnsEnvironment) throw new InputError("Push registration requires its APNs environment");
       this.db.all("UPDATE umpi_companion_devices SET data=?,push=? WHERE id=?", JSON.stringify({ ...device, capabilities: input.capabilities, lastSeenAt: iso() }), JSON.stringify(push), id);
@@ -225,7 +254,11 @@ export class CompanionStore {
       this.changed(); return result;
     });
   }
-  /** Other owner state the phone should refresh for, such as the widget; a change wakes it like any other. */
+  /**
+   * Other owner state the phone should refresh for; a change wakes it like any other. It is part of the revision and
+   * is sent to devices as `extra`. `extra.widget` is the stamp of what the widgets show: the app reads the widget
+   * content again when it changes.
+   */
   extraState: (() => unknown) | undefined;
   private ownerState() {
     const recentJobs = this.owner.jobs();
@@ -240,7 +273,7 @@ export class CompanionStore {
       }
       trackedByDevice.set(row.id, tracked);
     }
-    const state = { jobs: [...jobs.values()], reminders: this.owner.reminders(), choices: this.owner.choices(), operations: this.owner.recentOperations(false), ...(this.extraState ? { extra: this.extraState() } : {}) };
+    const state: { jobs: Job[]; reminders: Reminder[]; choices: Choice[]; operations: Operation[]; extra?: unknown } = { jobs: [...jobs.values()], reminders: this.owner.reminders(), choices: this.owner.choices(), operations: this.owner.recentOperations(false), ...(this.extraState ? { extra: this.extraState() } : {}) };
     // One owner-wide hash includes every active device's tracked jobs, regardless of which device reads first.
     const hash = fingerprint(state);
     this.db.transaction(() => {
@@ -251,15 +284,24 @@ export class CompanionStore {
     });
     return { state, recentJobs, trackedByDevice };
   }
+  /**
+   * `known` is the revision the device already holds. When it is still the current one, the answer is only that: the
+   * revision changes with everything a device snapshot shows, except the time stamps of the read itself.
+   */
+  snapshot(deviceId: string, known: number): DeviceSnapshot | UnchangedSnapshot;
   snapshot(deviceId: string): DeviceSnapshot;
   snapshot(): CompanionSnapshot;
-  snapshot(deviceId?: string): DeviceSnapshot | CompanionSnapshot {
+  snapshot(deviceId?: string, known?: number): DeviceSnapshot | CompanionSnapshot | UnchangedSnapshot {
+    // The owner state is compared first: a change to it moves the revision in this read.
     const { state, recentJobs, trackedByDevice } = this.ownerState();
-    return { protocolVersion: 1, revision: this.revision(), serverTime: iso(),
-      ...(deviceId ? { device: this.requireDevice(deviceId) } : { devices: this.devices() }),
-      workflows: this.workflows(), actions: this.actions(deviceId), ...state,
-      jobs: deviceId ? includeJobs(recentJobs, trackedByDevice.get(deviceId) ?? []) : state.jobs,
-      pushDeliveries: this.db.all<{ deviceId: string; status: string }>(deviceId ? "SELECT id AS deviceId,status FROM umpi_companion_push WHERE id=?" : "SELECT id AS deviceId,status FROM umpi_companion_push", ...(deviceId ? [deviceId] : [])) };
+    const revision = this.revision();
+    const pushDeliveries = this.db.all<{ deviceId: string; status: string }>(deviceId ? "SELECT id AS deviceId,status FROM umpi_companion_push WHERE id=?" : "SELECT id AS deviceId,status FROM umpi_companion_push", ...(deviceId ? [deviceId] : []));
+    if (deviceId === undefined) return { protocolVersion: 1, revision, serverTime: iso(), devices: this.devices(), workflows: this.workflows(), actions: this.actions(), ...state, pushDeliveries };
+    const device = this.requireDevice(deviceId);
+    if (known === revision) return { protocolVersion: 1, revision, unchanged: true };
+    return { protocolVersion: 1, revision, serverTime: iso(), device, workflows: this.workflows(), actions: this.actions(deviceId),
+      jobs: includeJobs(recentJobs, trackedByDevice.get(deviceId) ?? []), reminders: state.reminders, choices: state.choices,
+      operations: state.operations.map(deviceOperation), ...(state.extra !== undefined ? { extra: state.extra } : {}), pushDeliveries };
   }
   answerChoice(deviceId: string, id: string, value: unknown): Operation {
     identifier(id, "choice ID"); const input = record(value); exactKeys(input, ["answer"]);

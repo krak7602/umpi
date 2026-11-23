@@ -109,3 +109,19 @@ test("a correction of the previous reply is counted against the effort that repl
   tally.followed("low", true); tally.followed("low", false); tally.followed("high", false);
   assert.deepEqual(tally.status(), [{ month: "2027-03", low: { turns: 2, checked: 2, corrected: 1 }, medium: { turns: 0, checked: 0, corrected: 0 }, high: { turns: 1, checked: 1, corrected: 0 } }]);
 });
+
+test("a typed turn waits at most 0.8 seconds for its effort, and a late answer keeps high", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const never: WorkersAi = { run: () => new Promise(() => undefined) };
+  const typed = chooseEffort(new Decisions(database(t), never, () => 1_000), "thanks!", undefined);
+  let settled: string | undefined;
+  void typed.then(effort => { settled = effort; });
+  t.mock.timers.tick(799);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(settled, undefined, "the decision is still awaited just under the limit");
+  t.mock.timers.tick(1);
+  assert.equal(await typed, "high");
+  const spoken = chooseEffort(new Decisions(database(t), never, () => 1_000), "thanks!", undefined, SPOKEN_EFFORT);
+  t.mock.timers.tick(700);
+  assert.equal(await spoken, "low", "a spoken turn keeps its own limit and fallback");
+});
