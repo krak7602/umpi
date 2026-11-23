@@ -47,8 +47,9 @@ import { ExecutorWake } from "./executor-wake.js";
 import { KnockStore } from "./knocks.js";
 import { KNOCK_SNOOZE_MINUTES } from "../shared/knock.js";
 import { CONTEXT_COMPACTION, ContextHealth, mayResetBackground } from "./context-health.js";
-import { DEFAULT_WEB_MONTHLY_BUDGET, WebUsageStore } from "./web-search.js";
+import { DEFAULT_WEB_MONTHLY_BUDGET, WebSeenStore, WebUsageStore } from "./web-search.js";
 import { WebWatcher } from "./web-watch.js";
+import { WebRequests } from "./web-requests.js";
 import { BriefStore } from "./brief-store.js";
 import { briefRequest, enqueueBriefControls, formatBriefStatus, handleBriefCallback } from "./brief-telegram.js";
 import { AlertRuntime, AlertStore, alertRequest } from "./alerts.js";
@@ -349,6 +350,7 @@ export class Assistant extends Agent<Env> {
   readonly webUsage: WebUsageStore;
   readonly decisions: Decisions;
   readonly webWatch: WebWatcher;
+  readonly webRequests: WebRequests;
   readonly dream: DreamStore;
   readonly history: HistoryIndex;
   readonly dreamRuntime: DreamRuntime;
@@ -463,6 +465,9 @@ export class Assistant extends Agent<Env> {
     this.webWatch = new WebWatcher(this.store.db, this.decisions, { key: () => this.config.UMPI_PARALLEL_API_KEY, usage: this.webUsage }, {
       notice: (group, text) => this.store.enqueue(group, "telegram", text, undefined, undefined, undefined, this.proactive.quiet(Date.now()) ? { quiet: true } : undefined),
     });
+    this.webRequests = new WebRequests(this.store.db, this.store, this.webWatch, { seen: new WebSeenStore(this.store.db),
+      // An approved card continues the conversation that asked, as a result turn.
+      admit: (id, text, channel, sessionId) => { this.proactive.deferForForeground(); this.store.admitResult(id, text, channel, sessionId); } });
     this.history = new HistoryIndex(this.store.db, this.decisions);
     this.dream.index = this.history;
     this.dream.backfillIndex();
@@ -534,7 +539,7 @@ export class Assistant extends Agent<Env> {
       conversations: async () => Promise.all(ownerSessions().map(async ({ channel, session }) => ({ channel, entries: await this.harness.messages({ session }) as never }))),
       provenance: this.provenance, companion: this.companion, proactive: this.proactive, situation: this.situation, activity: this.activity, mail: this.mail, brief: this.brief,
       dream: this.dream, coding: this.coding, browser: this.browser, journal: this.journal, speechWords: this.speechWords, widgets: this.widgets, t3: this.t3, t3Requests: this.t3Requests,
-      t3Watch: this.t3Watch, cloud: this.cloud, webUsage: this.webUsage, webWatch: this.webWatch, decisions: this.decisions, history: this.history, contextHealth: this.contextHealth, chat: this.chat,
+      t3Watch: this.t3Watch, cloud: this.cloud, webUsage: this.webUsage, webWatch: this.webWatch, webRequests: this.webRequests, decisions: this.decisions, history: this.history, contextHealth: this.contextHealth, chat: this.chat,
       planningRuntime: this.planningRuntime, mailRuntime: this.mailRuntime, codingRuntime: this.codingRuntime, browserRuntime: this.browserRuntime, dreamRuntime: this.dreamRuntime, subagents: this.subagents,
     });
     this.backgroundExtension = profiles.background;
@@ -813,6 +818,8 @@ export class Assistant extends Agent<Env> {
       // T3 Code approvals answer the same way from Telegram and the app.
       const t3 = await this.t3Requests.press(data, messageId, groupId);
       if (t3) return t3;
+      const web = await this.webRequests.press(data, messageId, groupId);
+      if (web) return web;
       // An app press on a message that never reached Telegram (it is turned off, or not sent yet) is bound to its chat entry.
       if (messageId === undefined && groupId === undefined) throw new StateError(400, "Invalid button");
       const binding: ButtonBinding = messageId ?? { groupId: groupId! };
@@ -978,6 +985,7 @@ export class Assistant extends Agent<Env> {
       model: { providerId: this.providerId, modelId: this.modelId, configured, issue: this.modelIssue ?? null, lastFailure: this.lastModelFailure ?? null, fallback: this.modelFallback.status() },
       web: this.webUsage.status(Boolean(this.config.UMPI_PARALLEL_API_KEY)),
       webWatches: this.webWatch.status(),
+      webRequests: this.webRequests.status(),
       decisions: { ...this.decisions.status(), ownerEffort: this.efforts, effortCorrections: this.effortTally.status() },
       knocks: { ...this.knocks.status(), pushed: this.knockPushes.status() },
       chat: { ...this.chat.status(), sockets: this.chatSocket?.count() ?? 0 },

@@ -74,6 +74,8 @@
       "request_device_action": {"guards":["background"],"classes":[]},
       "request_mac_command": {"guards":["background"],"classes":["background-list"]},
       "request_t3_action": {"guards":["background"],"classes":["background-list"]},
+      "request_web_links": {"guards":["background"],"classes":[]},
+      "request_web_watch": {"guards":["background"],"classes":[]},
       "resume_daily_plan": {"guards":[],"classes":[]},
       "revert_lesson": {"guards":["background"],"classes":[]},
       "schedule_wakeup": {"guards":["planning-review","mail-review","brief-review","dream-review"],"classes":[]},

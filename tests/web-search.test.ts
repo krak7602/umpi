@@ -203,7 +203,7 @@ test("read_web_page refuses a URL the model composed, sends nothing and charges 
   for (const url of composed) {
     const refused = await run("read_web_page", { urls: [url] });
     assert.equal(refused.error, true, url);
-    assert.match(refused.value, /Find the page with web_search, or ask the owner for the link\./);
+    assert.match(refused.value, /Find the page with web_search, or put an address you worked out yourself on a card with request_web_links\./);
     assert.doesNotMatch(refused.value, /reword|rephrase|try again|another form|different URL/i);
   }
   // One refused URL refuses the call: the seen URL beside it is not read either.

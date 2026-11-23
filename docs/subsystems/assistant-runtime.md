@@ -213,10 +213,21 @@ Background conversations, which run mail review, the brief, daily preparation, a
 - **Fallback without decision models.** A watch with `requires` phrases tells the owner that the page now has those phrases and that no model judged it. A watch without phrases, and every number watch, counts the check as unknown.
 - **Messages.** The owner gets one message when the condition is true (with the reason, a page excerpt, and the link), one after 6 unknown checks in a row, one when the watch stops after 72, and one when it reaches its end date. Messages respect quiet hours without being held.
 - **Limits.** A check every 30 to 1,440 minutes (default 60), for 1 to 90 days (default 14); at most 8 active watches; and at most 3,000 planned page reads in 30 days over all active watches. Each read is charged to the web budget first; a spent budget is an unknown check.
-- **Authority.** `create_web_watch` and `cancel_web_watch` are owner-directed tools: a turn that has read web pages proposes the watch, and the next owner message lets it be created. `create_web_watch` returns no page text, so one turn can set up several. `list_web_watches` and `check_web_watch` quote pages and mark the turn as having read outside text. Background reviews, the nightly run, and subagents have none of these tools.
+- **Authority.** `create_web_watch` and `cancel_web_watch` are owner-directed tools. A turn that has read web pages puts the watch on an [approval card](#web-approval-cards) with `request_web_watch`. `create_web_watch` returns no page text, so one turn can set up several. `list_web_watches` and `check_web_watch` quote pages and mark the turn as having read outside text. Background reviews, the nightly run, and subagents have none of these tools.
 - **State.** `umpi_web_watches` keeps each watch for 30 days after it ends. Protected status reports counts, schedule, and last outcomes under `webWatches`, without titles, conditions, or page text.
 
 The evidence is unit tests and one hosted exercise; see [verification](../learning/assistant-core-verification.md#web-watch-verification). A watch reads only what Parallel can fetch: a page behind a login, or one that a site refuses to Parallel, cannot be watched.
+
+#### Web approval cards
+
+`web-requests.ts` gives the owner a card with Approve and Decline for two web actions Umpi may not take alone. Like every card, it is answered from Telegram or from the chat in the apps.
+
+- **Links** (`request_web_links`). `read_web_page` refuses a URL the model wrote, because such a URL can carry private text to the site it names. Some pages have no other way in: an address with a date or an ID in a known pattern that no search result holds. The card shows each such address in full. Approve makes them readable in the conversation that asked, and starts a result turn there so Umpi goes on.
+- **Watch** (`request_web_watch`). The card shows the whole watch: title, condition, phrases, number limit, schedule, and pages, with the addresses Umpi wrote marked. Approve creates the watch in code, with its first live check, and sends the owner the outcome: watching and the current state, already true with a page excerpt, or why it could not be set up. No model turn runs.
+- **Rules.** An address is at most 300 characters and must be `https`, so the owner can read what they approve. A watch is checked against the watch limits before its card is sent. Approve runs only when the delivered card equals the card of the stored request. A card expires after 24 hours, and at most 5 wait at once. Neither tool returns page text; background reviews and subagents do not have them.
+- **In the iPhone app,** web links in the chat open in a Safari sheet inside Umpi, so an address on a card can be checked without leaving the conversation. The Mac app opens links in the default browser.
+
+Protected status reports request kinds and states under `webRequests`, without addresses.
 
 ### Decision models
 
@@ -537,6 +548,7 @@ The [development and operation runbook](../runbooks/local-development.md) owns l
 - 2026-10-30: Set compaction to start at 550k tokens, stored long tool results behind handles, reset background reviews between runs, and added conversation sizes to status.
 - 2026-10-29: Added web search and page reading through Parallel, within a monthly budget.
 - 2026-11-23: Added live page reads (`fresh`) and web watches: scheduled checks of a page in code, with a message to the owner when a condition becomes true.
+- 2026-11-23: Added approval cards for links Umpi wrote itself and for web watches.
 - 2026-10-24: Added the executor wake socket, owned by a lifecycle capability, and protected `executor` status (online, last seen). After a day without the executor, one Telegram notice says Mac work is waiting.
 - 2026-11-05: Added `UMPI_TELEGRAM=off` to turn Telegram off without removing it, now that the app is the primary surface, and pairing from a paired device.
 - 2026-11-23: Every card's buttons are answered from the app when Telegram is off or has not sent the card; memory reviews lead with the changed lines; `edit_daily_note` changes or removes one existing note line on the owner's request.

@@ -1,3 +1,6 @@
+#if os(iOS)
+import SafariServices
+#endif
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -197,6 +200,7 @@ struct ChatView: View {
             talk()
         }
         #if os(iOS)
+        .modifier(InAppBrowser())
         .fullScreenCover(isPresented: $showVoice) {
             VoiceModeView().environment(store)
         }
@@ -908,3 +912,32 @@ extension EnvironmentValues {
     /// the chat opens voice mode itself.
     @Entry var openVoiceMode: (@MainActor () -> Void)? = nil
 }
+
+#if os(iOS)
+/// Web links in the chat open in a Safari sheet inside Umpi, so reading a page, or checking an address on an approval
+/// card, does not leave the conversation. Other links (mail, phone, app links) go to the system as before.
+private struct InAppBrowser: ViewModifier {
+    @State private var page: BrowserPage?
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.openURL, OpenURLAction { url in
+                guard let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" else { return .systemAction }
+                page = BrowserPage(url: url)
+                return .handled
+            })
+            .sheet(item: $page) { SafariPage(url: $0.url).ignoresSafeArea() }
+    }
+}
+
+private struct BrowserPage: Identifiable {
+    let url: URL
+    var id: String { url.absoluteString }
+}
+
+private struct SafariPage: UIViewControllerRepresentable {
+    let url: URL
+    func makeUIViewController(context: Context) -> SFSafariViewController { SFSafariViewController(url: url) }
+    func updateUIViewController(_ controller: SFSafariViewController, context: Context) {}
+}
+#endif

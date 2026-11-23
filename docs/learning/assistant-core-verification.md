@@ -216,7 +216,9 @@ On 2026-11-23 the hosted coordinator exercised [web watches](../subsystems/assis
 - `create_web_watch` on a title the page did not list saved a watch with the first check "not yet", decided by the phrase test without a model call. `check_web_watch` repeated that.
 - `cancel_web_watch` in the same turn as `check_web_watch` was refused by the provenance guard, and ran on the owner's next message.
 
-Not verified: a scheduled check that turns true and its message to the owner, the unknown-streak and end-date messages (unit tests only), a number watch on a live page, and how often the provider's live fetch of this site fails over days.
+- After [approval cards](../subsystems/assistant-runtime.md#web-approval-cards) were added, the same request produced one `request_web_watch` card in the owner's chat, with two addresses marked as written by Umpi. Pressing it was left to the owner.
+
+Not verified: a scheduled check that turns true and its message to the owner, a press on a links or watch card outside unit tests, the in-app browser on a phone, the unknown-streak and end-date messages (unit tests only), a number watch on a live page, and how often the provider's live fetch of this site fails over days.
 
 ### Automated checks and limits
 
