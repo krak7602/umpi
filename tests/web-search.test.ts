@@ -99,6 +99,16 @@ test("read_web_page extracts excerpts or full content and reports unreadable pag
   assert.equal((usage.status(true) as { pages: number }).pages, 4);
 });
 
+test("read_web_page with fresh asks for a live fetch without an old copy as fallback, and reports the day of the copy", async t => {
+  const { sent, run } = setup(t, { owner: ["Is https://example.org/stock in stock right now?"], reply: () => Response.json({ extract_id: "e", session_id: "s",
+    results: [{ url: "https://example.org/stock", title: "Stock", excerpts: ["3 left"], acquired_at: "2026-03-04T00:00:00Z" }], errors: [] }) });
+  const saved = JSON.parse((await run("read_web_page", { urls: ["https://example.org/stock"] })).value);
+  assert.deepEqual(sent[0]!.body.advanced_settings, { excerpt_settings: { max_chars_per_result: 12000 } }, "a normal read uses the provider's saved copy");
+  assert.deepEqual(saved.pages, [{ url: "https://example.org/stock", title: "Stock", acquired: "2026-03-04", excerpts: ["3 left"] }]);
+  assert.equal((await run("read_web_page", { urls: ["https://example.org/stock"], fresh: true })).error, false);
+  assert.deepEqual(sent[1]!.body.advanced_settings, { excerpt_settings: { max_chars_per_result: 12000 }, fetch_policy: { max_age_seconds: 600, timeout_seconds: 45, disable_cache_fallback: true } });
+});
+
 test("web tools refuse without a key, in background reviews, and say why the provider failed", async t => {
   const missing = setup(t, { key: undefined });
   const unconfigured = await missing.run("web_search", { objective: "x", queries: ["x"] });

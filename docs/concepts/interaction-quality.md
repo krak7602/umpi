@@ -1,7 +1,7 @@
 ---
 title: Intent, follow-through, and interaction quality
 aliases: [interaction principles, voice retention criteria, assistant responsiveness]
-updated: 2026-11-05
+updated: 2026-11-23
 ---
 
 ## Current

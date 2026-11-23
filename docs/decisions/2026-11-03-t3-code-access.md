@@ -1,7 +1,7 @@
 ---
 title: Read T3 Code threads through T3 Connect, not through the Mac executor
 aliases: [T3 Code integration decision, T3 Connect MCP access, coding-thread visibility]
-updated: 2026-11-04
+updated: 2026-11-23
 status: accepted and amended the same day; see assistant runtime for the current contract
 ---
 
