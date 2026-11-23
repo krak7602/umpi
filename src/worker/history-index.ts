@@ -11,6 +11,12 @@ import type { Database } from "./store.js";
  */
 export interface HistoryPassage { id: string; source: "digest" | "conversation"; period: string; at: number; text: string }
 export interface HistoryMatch { id: string; source: string; period: string; at: string; text: string; keyword: boolean; meaning: boolean; reranked: boolean }
+/**
+ * What one search ran besides keyword ranking. `meaning` is the query embedding; `rerank` is "not needed" when at
+ * most one candidate was found. "unavailable" means the decision service is off, its budget is used, or the call failed.
+ */
+export interface HistorySteps { meaning: "ran" | "unavailable"; rerank: "ran" | "unavailable" | "not needed" }
+export interface HistorySearchOptions { source?: HistoryPassage["source"]; limit?: number; from?: number; to?: number; /** Names the caller in decision usage. */ purpose?: string }
 
 const RRF_K = 60;
 /** Fused candidates the reranker reads. */
@@ -114,8 +120,13 @@ export class HistoryIndex {
    * Keyword and meaning rankings fused by reciprocal rank, then reranked by the cross-encoder. Meaning or reranking
    * is skipped when its model is unavailable. `from` and `to` bound the passage time in milliseconds.
    */
-  async search(query: string, options: { source?: HistoryPassage["source"]; limit?: number; from?: number; to?: number } = {}): Promise<HistoryMatch[]> {
-    const limit = Math.min(options.limit ?? 8, 20);
+  async search(query: string, options: HistorySearchOptions = {}): Promise<HistoryMatch[]> {
+    return (await this.searchWithSteps(query, options)).matches;
+  }
+  /** The same search, with the steps that ran, so a caller can tell a full search from a keyword-only one. */
+  async searchWithSteps(query: string, options: HistorySearchOptions = {}): Promise<{ matches: HistoryMatch[]; steps: HistorySteps }> {
+    const limit = Math.min(options.limit ?? 8, 20), purpose = options.purpose ?? "history-search";
+    const steps: HistorySteps = { meaning: "unavailable", rerank: "not needed" };
     const where: string[] = [], bindings: (string | number)[] = [];
     if (options.source) { where.push("h.source=?"); bindings.push(options.source); }
     if (options.from !== undefined) { where.push("h.at>=?"); bindings.push(options.from); }
@@ -126,28 +137,32 @@ export class HistoryIndex {
     let meaning: string[] = [];
     if (this.decisions?.available()) {
       try {
-        const [vector] = await this.decisions.embed("history-search", [query], "query");
+        const [vector] = await this.decisions.embed(purpose, [query], "query");
         meaning = this.db.all<{ id: string; vec: string }>(`SELECT h.id AS id, h.vec AS vec FROM umpi_history h WHERE h.vec IS NOT NULL${filter}`, ...bindings)
           .map(row => ({ id: row.id, score: dot(vector!, row.vec) })).sort((a, b) => b.score - a.score).slice(0, CANDIDATES).map(row => row.id);
+        steps.meaning = "ran";
       } catch (error) { if (!(error instanceof DecisionUnavailable)) throw error; }
     }
     const fused = new Map<string, number>();
     keyword.forEach((id, rank) => fused.set(id, (fused.get(id) ?? 0) + 1 / (RRF_K + rank + 1)));
     meaning.forEach((id, rank) => fused.set(id, (fused.get(id) ?? 0) + 1 / (RRF_K + rank + 1)));
     const candidates = [...fused.entries()].sort((a, b) => b[1] - a[1]).slice(0, RERANK_CANDIDATES).map(([id]) => id);
-    if (!candidates.length) return [];
+    if (!candidates.length) return { matches: [], steps };
     const rows = this.db.all<{ id: string; source: string; period: string; at: number; text: string }>(`SELECT id, source, period, at, text FROM umpi_history WHERE id IN (${candidates.map(() => "?").join(",")})`, ...candidates);
     const byId = new Map(rows.map(row => [row.id, row]));
     let ordered = candidates.filter(id => byId.has(id)), reranked = false;
-    if (this.decisions?.available() && ordered.length > 1) {
-      try {
-        const scores = await this.decisions.rerank("history-search", query, ordered.map(id => byId.get(id)!.text));
-        ordered = ordered.map((id, index) => ({ id, score: scores[index]! })).sort((a, b) => b.score - a.score).map(item => item.id);
-        reranked = true;
-      } catch (error) { if (!(error instanceof DecisionUnavailable)) throw error; }
+    if (ordered.length > 1) {
+      steps.rerank = "unavailable";
+      if (this.decisions?.available()) {
+        try {
+          const scores = await this.decisions.rerank(purpose, query, ordered.map(id => byId.get(id)!.text));
+          ordered = ordered.map((id, index) => ({ id, score: scores[index]! })).sort((a, b) => b.score - a.score).map(item => item.id);
+          reranked = true; steps.rerank = "ran";
+        } catch (error) { if (!(error instanceof DecisionUnavailable)) throw error; }
+      }
     }
-    return ordered.slice(0, limit).map(id => { const row = byId.get(id)!;
-      return { id, source: row.source, period: row.period, at: new Date(row.at).toISOString(), text: row.text.slice(0, 1_500), keyword: keyword.includes(id), meaning: meaning.includes(id), reranked }; });
+    return { steps, matches: ordered.slice(0, limit).map(id => { const row = byId.get(id)!;
+      return { id, source: row.source, period: row.period, at: new Date(row.at).toISOString(), text: row.text.slice(0, 1_500), keyword: keyword.includes(id), meaning: meaning.includes(id), reranked }; }) };
   }
   status(): object {
     const rows = this.db.all<{ source: string; n: number; embedded: number }>("SELECT source, count(*) AS n, sum(vec IS NOT NULL) AS embedded FROM umpi_history GROUP BY source");

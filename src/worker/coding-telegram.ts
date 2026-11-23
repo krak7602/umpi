@@ -1,10 +1,12 @@
 import type { CodingRuntime } from "./coding-runtime.js";
 import type { CodingTask } from "./coding-store.js";
-import { StateError, type TelegramEntity, type TelegramMarkup } from "./store.js";
+import { StateError, type ButtonBinding, type TelegramEntity, type TelegramMarkup } from "./store.js";
 
 type CodingButton = { groupId: string; taskId: string; version: number; status: CodingTask["status"]; action: "approve" | "cancel" | "view" };
 export interface CodingCallbackResult { text: string; removeKeyboard: boolean }
 const cancellable: Record<string, true> = { pending_approval: true, queued: true, preparing: true, running: true, finishing: true };
+/** The outbox's largest text budget. A review is posted whole or not at all. */
+const MAX_CODING_REVIEW_CHARACTERS = 524_288;
 
 function buttons(runtime: CodingRuntime): void {
   runtime.store.owner.db.all("CREATE TABLE IF NOT EXISTS umpi_coding_buttons (token TEXT PRIMARY KEY,data TEXT NOT NULL)");
@@ -41,14 +43,28 @@ function enqueueCard(runtime: CodingRuntime, task: CodingTask, groupId: string, 
   const owner = runtime.store.owner;
   owner.effect(groupId, () => {
     const view = card(runtime, task), row: TelegramMarkup["inline_keyboard"][number] = [];
+    // The default budget would cut a long task after 65,536 characters and still post Approve under the rest.
+    if (view.text.length > MAX_CODING_REVIEW_CHARACTERS) throw new StateError(413, "Coding review exceeds its complete-text budget; no partial approval is posted");
     const identity = { groupId, taskId: task.taskId, version: task.version, status: task.status };
     if (channel === "telegram") {
       if (task.status === "pending_approval") row.push(button(runtime, "Approve", { ...identity, action: "approve" }));
       if (cancellable[task.status]) row.push(button(runtime, "Cancel", { ...identity, action: "cancel" }));
     }
-    owner.enqueue(groupId, channel, view.text, row.length ? { inline_keyboard: [row] } : undefined, view.entities);
+    owner.enqueue(groupId, channel, view.text, row.length ? { inline_keyboard: [row] } : undefined, view.entities, view.text.length);
     return { posted: true };
   });
+}
+
+/**
+ * Called after a correction, in its mutation transaction. A correction to a claimed run joins it without a new
+ * approval card, and the model wrote its text. So the owner gets the whole text at once, as a notice.
+ */
+export function enqueueCodingCorrection(runtime: CodingRuntime, task: CodingTask): void {
+  const correction = task.corrections.at(-1);
+  if (correction === undefined || (task.status !== "preparing" && task.status !== "running")) return;
+  const title = "Coding · correction sent to the approved task";
+  const text = `${title}\n\n${correction}\n\nFolder\n${task.cwd}\nThis text joined the approved task without a new approval. The task keeps its folder, tools and time limit. To stop it, open /code.`;
+  runtime.store.owner.enqueue(`coding-correction:${task.taskId}:${task.version}`, task.channel, text, undefined, [{ type: "bold", offset: 0, length: title.length }], text.length);
 }
 
 /** Called after owner proposals/corrections, inside their mutation transaction where possible. */
@@ -73,16 +89,16 @@ export function enqueueCodingControls(runtime: CodingRuntime, requestId: string)
 }
 
 /** Only the owner-authenticated Telegram webhook may call this handler. */
-export async function handleCodingCallback(runtime: CodingRuntime, token: string, messageId: number): Promise<CodingCallbackResult | undefined> {
+export async function handleCodingCallback(runtime: CodingRuntime, token: string, binding: ButtonBinding): Promise<CodingCallbackResult | undefined> {
   if (!token.startsWith("cod:")) return;
-  if (!/^cod:[a-f0-9-]{36}$/.test(token) || !Number.isSafeInteger(messageId) || messageId <= 0) throw new StateError(409, "Invalid coding control");
+  if (!/^cod:[a-f0-9-]{36}$/.test(token)) throw new StateError(409, "Invalid coding control");
   buttons(runtime);
   const owner = runtime.store.owner;
   const row = owner.db.all<{ data: string }>("SELECT data FROM umpi_coding_buttons WHERE token=?", token)[0];
   if (!row) throw new StateError(409, "This coding control is unavailable. Open /code again.");
   const value = JSON.parse(row.data) as CodingButton;
-  if (!owner.deliveries(value.groupId).some(delivery => delivery.channel === "telegram" && delivery.status === "sent" && delivery.messageId === messageId
-    && delivery.replyMarkup?.inline_keyboard.some(row => row.some(item => item.callback_data === token)))) throw new StateError(409, "This coding control does not belong to that confirmed message.");
+  // Approve needs every part of the review confirmed in Telegram: the owner must have had the whole text.
+  if (!owner.buttonShown(value.groupId, token, binding, value.action === "approve")) throw new StateError(409, "This coding control does not belong to that confirmed message, or the review did not arrive whole.");
   await runtime.wake();
   return owner.effect(`coding-button:${token}`, () => {
     const task = runtime.store.requireTask(value.taskId);

@@ -94,8 +94,11 @@ export class ChatLog {
    * Replies to the owner in Telegram stay normal there and are not pushed to the app.
    */
   telegram(groupId: string, text: string, markup?: TelegramMarkup, options?: { quiet: true }): { silent: boolean } {
-    if (PANEL.test(groupId)) return { silent: false };
-    const reply = REPLY.test(groupId);
+    // With Telegram turned off the chat is the only place a panel can show, such as memory history opened from a card.
+    const panel = PANEL.test(groupId);
+    if (panel && !this.telegramOff) return { silent: false };
+    // A panel answers a button the owner just pressed, so it is not announced.
+    const reply = REPLY.test(groupId) || panel;
     const buttons = chatButtons(markup);
     const entry = this.add({ id: `umpi:${groupId}`, role: "umpi", surface: "telegram", kind: reply ? "reply" : "message", text, ...(buttons ? { buttons } : {}) });
     // A quiet message already alerted the owner another way, such as a knock on the phone.
@@ -125,6 +128,17 @@ export class ChatLog {
   }
   /** Called when an existing entry changes, so open apps read it again. */
   changed: ((latest: number) => void) | undefined;
+
+  /**
+   * The texts of the owner's own messages that hold `needle`, newest first, for checks of what the owner wrote (such
+   * as a link). The query only narrows the rows; the role is checked on each entry, so a message Umpi sent that holds
+   * the same words never counts.
+   */
+  ownerTexts(needle: string, limit = 50): string[] {
+    if (!needle) return [];
+    return this.db.all<{ data: string }>("SELECT data FROM umpi_chat WHERE instr(lower(data), ?)>0 ORDER BY seq DESC LIMIT ?", needle.toLowerCase(), limit * 4)
+      .map(row => JSON.parse(row.data) as NewEntry).filter(entry => entry.role === "owner").slice(0, limit).map(entry => entry.text);
+  }
 
   /** The entry for a message Umpi sent, by its group (the chat ID is `umpi:<group>`). */
   seqOf(groupId: string): number | undefined {

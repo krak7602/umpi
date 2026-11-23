@@ -1,5 +1,5 @@
 import { PlanningRuntime } from "./planning-runtime.js";
-import { StateError, type TelegramMarkup } from "./store.js";
+import { StateError, type ButtonBinding, type TelegramMarkup } from "./store.js";
 
 type PlanningButton = { groupId: string; settingsVersion: number } & (
   | { action: "prepare"; day: string; planVersion: number; briefVersion: number }
@@ -37,17 +37,14 @@ export function enqueuePlanningControls(runtime: PlanningRuntime, requestId: str
 }
 
 /** Parent performs owner webhook checks first; wake happens before the synchronous decision. */
-export async function handlePlanningCallback(runtime: PlanningRuntime, token: string, messageId: number): Promise<PlanningCallbackResult | undefined> {
+export async function handlePlanningCallback(runtime: PlanningRuntime, token: string, binding: ButtonBinding): Promise<PlanningCallbackResult | undefined> {
   if (!token.startsWith("pln:")) return;
   const { store } = runtime, owner = store.proactive.owner;
   owner.db.all("CREATE TABLE IF NOT EXISTS umpi_planning_buttons (token TEXT PRIMARY KEY, data TEXT NOT NULL)");
   const row = owner.db.all<{ data: string }>("SELECT data FROM umpi_planning_buttons WHERE token=?", token)[0];
   if (!row) throw new StateError(409, "This planning control is no longer available. Open /plan again.");
   const button = JSON.parse(row.data) as PlanningButton;
-  if (!owner.deliveries(button.groupId).some(delivery => delivery.channel === "telegram" && delivery.status === "sent" && delivery.messageId === messageId
-    && delivery.replyMarkup?.inline_keyboard.some(buttons => buttons.some(item => item.callback_data === token)))) {
-    throw new StateError(409, "This planning control does not belong to that confirmed message.");
-  }
+  if (!owner.buttonShown(button.groupId, token, binding)) throw new StateError(409, "This planning control does not belong to that confirmed message.");
   await runtime.wake();
   return owner.effect(`planning-button:${token}`, () => {
     if (store.settings().version !== button.settingsVersion) throw new StateError(409, "Daily-planning settings changed. Open /plan again.");

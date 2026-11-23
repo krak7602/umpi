@@ -93,7 +93,7 @@ test("the file's text reaches the model in a tagged block, and the nightly run r
 
   const at = Date.parse("2026-11-03T08:00:00Z");
   const lines = transcriptLines([{ channel: "telegram", entries: [{ model: [{ role: "user", content: [{ type: "text", text: input }], timestamp: at }] },
-    { model: [{ role: "assistant", content: [{ type: "text", text: "Noted: triglycerides 364." }], timestamp: at + 1 }] }] }], at - 1, TZ);
+    { model: [{ role: "assistant", content: [{ type: "text", text: "Noted: triglycerides 364." }], timestamp: at + 1 }] }] }], at - 1, TZ, undefined, text => text === input ? op.text : undefined);
   assert.equal(lines.length, 3);
   assert.match(lines[0]!.text, /owner: .*Keep this in mind \[file: health\.md\]$/); assert.equal(lines[0]!.file, undefined);
   assert.equal(lines[1]!.file, "health.md"); assert.match(lines[1]!.text, /owner file "health\.md":\nTG 364 mg\/dL\.\nNo rice at dinner\./);

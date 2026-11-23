@@ -83,9 +83,15 @@ export class KnockStore {
   demand(now = this.now()): string[] {
     return this.open().filter(knock => knock.status === "pending" && knock.nextAt <= now).map(knock => `knock:${knock.id}:${knock.attempt}`);
   }
-  /** When the coordinator should look again: a retry, or an abandoned claim. */
-  nextDue(): number | undefined {
-    return this.db.all<{ next: number | null }>("SELECT MIN(next_at) AS next FROM umpi_knocks WHERE status IN ('pending','claimed')")[0]?.next ?? undefined;
+  /**
+   * When the coordinator should look again. Stale knocks and abandoned claims are settled first, here and not only in
+   * the Mac's poll, so a Mac that never polls cannot leave a time in the past. A knock that waits for the Mac's poll
+   * has nothing for the coordinator to do until it expires; the answer is then its expiry, never "now".
+   */
+  nextDue(now = this.now()): number | undefined {
+    const open = this.db.transaction(() => { this.settle(now); return this.open(); });
+    if (!open.length) return undefined;
+    return Math.min(...open.map(knock => knock.status === "claimed" ? knock.claimedAt! + KNOCK_CLAIM_MS : knock.nextAt > now ? knock.nextAt : knock.expiresAt));
   }
   status(): object {
     const rows = this.db.all<{ status: string; count: number }>("SELECT status, COUNT(*) AS count FROM umpi_knocks GROUP BY status");

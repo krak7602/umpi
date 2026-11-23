@@ -3,7 +3,9 @@ import { DatabaseSync } from "node:sqlite";
 import test, { type TestContext } from "node:test";
 import { mergeDailyPlan } from "../src/shared/daily-planning.js";
 import { vaultNoteRevision, type VaultPlanningApply, type VaultPlanningResult, type VaultPlanningSnapshot } from "../src/shared/vault-planning.js";
-import { JournalRuntime, JournalStore, noteTasks } from "../src/worker/journal.js";
+import { JournalRuntime, JournalStore, journalTools, noteTasks, type NoteEditor } from "../src/worker/journal.js";
+import type { ToolExecutionApi } from "@earendil-works/pi-durable";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { MailStore } from "../src/worker/mail-store.js";
 import { PlanningStore } from "../src/worker/planning-store.js";
 import { ProactiveStore } from "../src/worker/proactive-store.js";
@@ -54,13 +56,24 @@ function fixture(t: TestContext) {
   const situation = new SituationStore(db, TZ), planning = new PlanningStore(proactive, TZ), mail = new MailStore(proactive, situation);
   const notes = new Map<string, string>(), vault = fakeVault(notes);
   const work: Promise<unknown>[] = [];
+  // The vault's one-line edit: the whole note is read, edited, and stored again.
+  const edits: string[] = [];
+  const editor: NoteEditor = {
+    async editDay(day, run, edit) {
+      const current = notes.get(day);
+      if (current === undefined) return { status: "missing" };
+      const result = edit(current);
+      if (result.status === "edited") { notes.set(day, result.text); edits.push(run); }
+      return { status: "synced", result };
+    },
+  };
   const journal = new JournalRuntime(new JournalStore(db), proactive, {
-    vault: () => vault.client, planning, situation, mail, calendarCredentials: () => undefined, ownedCommitment: () => false,
+    vault: () => vault.client, editor: () => editor, planning, situation, mail, calendarCredentials: () => undefined, ownedCommitment: () => false,
     track: promise => { work.push(promise); }, wake: async () => {},
   });
   async function drive(now = Date.now()) { journal.drive(now); await Promise.all(work.splice(0)); }
   const sent = () => owner.deliveries().filter(delivery => delivery.groupId.startsWith("journal:")).map(delivery => delivery.text);
-  return { owner, proactive, situation, journal, notes, vault, drive, sent, time(now: number) { t.mock.timers.setTime(now); } };
+  return { owner, proactive, situation, journal, notes, vault, edits, drive, sent, time(now: number) { t.mock.timers.setTime(now); } };
 }
 const source = { account: "primary", threadId: "t", webUrl: "https://mail.google.com/x", receivedAt: "2027-04-14T05:00:00Z" };
 
@@ -156,4 +169,58 @@ test("journal routes are owner-only and exact-method", async () => {
     await authorize(new Request(`https://example.test${path}`, { method, headers: { authorization: `Bearer ${env.UMPI_CONTROL_TOKEN}` } }), env);
     await assert.rejects(authorize(new Request(`https://example.test${path}`, { method, headers: { authorization: `Bearer ${env.UMPI_EXECUTOR_TOKEN}` } }), env), { status: 401 });
   }
+});
+
+test("the owner's edit changes one existing line, or a line still waiting to be written, and says what happened", async t => {
+  const f = fixture(t);
+  f.journal.store.configure({ expectedVersion: 1, closeOut: false, checkIns: [] });
+  f.notes.set("2027-04-15", "# Apr 15th, 2027\n\n## Plan\n\n### Tasks\n\n- [ ] Call the landlord\n- [ ] Call the plumber\n\n## Notes\n\n- Paid the water bill\n");
+  assert.deepEqual(await f.journal.edit("2027-04-15", { line: "Paid the water bill", action: "replace", text: "Paid the gas bill" }, "run-1"),
+    { changed: true, day: "2027-04-15", where: "note", before: "Paid the water bill", after: "Paid the gas bill" });
+  assert.match(f.notes.get("2027-04-15")!, /\n- Paid the gas bill\n$/);
+  assert.deepEqual(await f.journal.edit("2027-04-15", { line: "Call the plumber", action: "remove" }, "run-2"),
+    { changed: true, day: "2027-04-15", where: "note", before: "[ ] Call the plumber", after: null });
+  assert.doesNotMatch(f.notes.get("2027-04-15")!, /plumber/);
+  const twice = await f.journal.edit("2027-04-15", { line: "Call", action: "check" }, "run-3");
+  assert.equal(twice.changed, true, "one line is left that says Call");
+  const unknown = await f.journal.edit("2027-04-15", { line: "Water the plants", action: "remove" }, "run-4");
+  assert.deepEqual([unknown.changed, !unknown.changed && unknown.reason], [false, "not_found"]);
+  const none = await f.journal.edit("2027-04-14", { line: "Anything at all", action: "remove" }, "run-5");
+  assert.deepEqual([none.changed, !none.changed && none.reason], [false, "no_note"]);
+  await assert.rejects(f.journal.edit("2027-05-30", { line: "Too far", action: "remove" }, "run-6"), /seven days/);
+  // A line added a moment ago is not in the note yet: it is corrected, or dropped, where it waits.
+  f.owner.db.all("CREATE TABLE IF NOT EXISTS umpi_daily_plans (day TEXT PRIMARY KEY, status TEXT NOT NULL, commitment_id TEXT, data TEXT NOT NULL)");
+  f.journal.add("2027-04-16", "notes", "Insurance renewal is on the 12th");
+  f.journal.add("2027-04-16", "notes", "Second line");
+  f.notes.set("2027-04-16", "# Apr 16th, 2027\n\n## Notes\n");
+  assert.deepEqual(await f.journal.edit("2027-04-16", { line: "Insurance renewal is on the 12th", action: "replace", text: "Insurance renewal is on the 21st" }, "run-7"),
+    { changed: true, day: "2027-04-16", where: "queue", before: "Insurance renewal is on the 12th", after: "Insurance renewal is on the 21st" });
+  assert.equal((await f.journal.edit("2027-04-16", { line: "Second line", action: "remove" }, "run-8")).changed, true);
+  await f.drive();
+  assert.match(f.notes.get("2027-04-16")!, /Insurance renewal is on the 21st/);
+  assert.doesNotMatch(f.notes.get("2027-04-16")!, /12th|Second line/);
+  // Today's note is not edited while morning preparation holds it.
+  f.owner.db.all("INSERT OR REPLACE INTO umpi_daily_plans VALUES (?,?,?,?)", "2027-04-15", "ready", null, JSON.stringify({ day: "2027-04-15", status: "ready" }));
+  const busy = await f.journal.edit("2027-04-15", { line: "Call the landlord", action: "remove" }, "run-9");
+  assert.deepEqual([busy.changed, !busy.changed && busy.reason], [false, "busy"]);
+  assert.match(f.notes.get("2027-04-15")!, /Call the landlord/);
+});
+
+test("edit_daily_note is for the owner's own conversation, validates its input, and repeats nothing on a replayed call", async t => {
+  const f = fixture(t);
+  f.notes.set("2027-04-15", "## Tasks\n\n- [ ] Call the landlord\n");
+  const tool = journalTools(f.journal, id => id === "background").find(item => item.name === "edit_daily_note")!;
+  const call = async (input: object, conversationId = "owner", taskId = "task-1") => {
+    const result = await tool.execute(input, { conversationId, taskId } as unknown as ToolExecutionApi, BACKGROUND_CONTEXT);
+    return { error: result.isError === true, text: (result.content![0] as { text: string }).text };
+  };
+  assert.match((await call({ line: "Call the landlord", action: "remove" }, "background")).text, /owner's own conversation/);
+  assert.equal((await call({ line: "Call the landlord", action: "replace" })).error, true);
+  assert.equal((await call({ line: "Call the landlord", action: "erase" })).error, true);
+  assert.equal((await call({ line: "Call the landlord", action: "remove", path: "Other.md" })).error, true);
+  assert.match(f.notes.get("2027-04-15")!, /Call the landlord/);
+  const first = await call({ line: "Call the landlord", action: "replace", text: "Call the landlady" }, "owner", "task-2");
+  assert.deepEqual(JSON.parse(first.text), { changed: true, day: "2027-04-15", where: "note", before: "[ ] Call the landlord", after: "[ ] Call the landlady" });
+  assert.deepEqual(await call({ line: "Call the landlord", action: "replace", text: "Call the landlady" }, "owner", "task-2"), first);
+  assert.equal(f.edits.length, 1, "the replayed call did not write again");
 });

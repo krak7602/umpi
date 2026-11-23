@@ -3,7 +3,7 @@ import { browserDisplayUrl } from "../shared/browser.js";
 import type { BrowserRuntime } from "./browser-runtime.js";
 import type { BrowserTask } from "./browser-store.js";
 import { StateError } from "./store.js";
-import type { TelegramMarkup } from "./store.js";
+import type { ButtonBinding, TelegramMarkup } from "./store.js";
 interface BrowserButton { groupId: string; taskId: string; version: number; status: BrowserTask["status"]; action: "view" | "approve" | "cancel" }
 function buttons(runtime: BrowserRuntime): void { runtime.store.owner.db.all("CREATE TABLE IF NOT EXISTS umpi_browser_buttons (token TEXT PRIMARY KEY,data TEXT NOT NULL)"); }
 function button(runtime: BrowserRuntime, text: string, value: BrowserButton) { const token = `brw:${randomUUID()}`; runtime.store.owner.db.all("INSERT INTO umpi_browser_buttons VALUES (?,?)", token, JSON.stringify(value)); return { text, callback_data: token }; }
@@ -29,6 +29,14 @@ export function enqueueBrowserApproval(runtime: BrowserRuntime, task: BrowserTas
   for (const group of runtime.store.owner.pendingDeliveryGroups(prefix)) if (task.status !== "pending_approval" || group !== groupId) runtime.store.owner.discardDeliveryGroup(group, "Browser scope changed; open /browse for current controls");
   if (task.status === "pending_approval") card(runtime, task, groupId);
 }
+/** A correction to a claimed run joins it without a new approval card, and the model wrote its text. The owner gets the whole text at once. */
+export function enqueueBrowserCorrection(runtime: BrowserRuntime, task: BrowserTask): void {
+  const correction = task.corrections.at(-1);
+  if (correction === undefined || (task.status !== "preparing" && task.status !== "running")) return;
+  const title = "Browser · correction sent to the approved task";
+  const text = `${title}\n\n${correction}\n\nThis text joined the approved task without a new approval. The task keeps its sites and time limit. To stop it, open /browse.`;
+  runtime.store.owner.enqueue(`browser-correction:${task.taskId}:${task.version}`, task.channel, text, undefined, [{ type: "bold", offset: 0, length: title.length }], text.length);
+}
 export function enqueueBrowserControls(runtime: BrowserRuntime, requestId: string): void {
   buttons(runtime); const owner = runtime.store.owner, groupId = `browser-menu:${requestId}`;
   owner.effect(groupId, () => {
@@ -37,14 +45,13 @@ export function enqueueBrowserControls(runtime: BrowserRuntime, requestId: strin
     owner.enqueue(groupId, "telegram", `Browser\n\n${rows.length ? rows.join("\n\n") : "No browser tasks yet."}\n\nMac-first. Cloud needs separate approval and uses only selected saved sessions. A disconnect never duplicates claimed work.`, markup); return { posted: true };
   });
 }
-export async function handleBrowserCallback(runtime: BrowserRuntime, token: string, messageId: number): Promise<{ text: string; removeKeyboard: boolean } | undefined> {
+export async function handleBrowserCallback(runtime: BrowserRuntime, token: string, binding: ButtonBinding): Promise<{ text: string; removeKeyboard: boolean } | undefined> {
   if (!token.startsWith("brw:")) return;
-  if (!/^brw:[a-f0-9-]{36}$/.test(token) || !Number.isSafeInteger(messageId) || messageId <= 0) throw new StateError(409, "Invalid browser control");
+  if (!/^brw:[a-f0-9-]{36}$/.test(token)) throw new StateError(409, "Invalid browser control");
   buttons(runtime); const owner = runtime.store.owner, row = owner.db.all<{ data: string }>("SELECT data FROM umpi_browser_buttons WHERE token=?", token)[0];
   if (!row) throw new StateError(409, "Browser control unavailable; open /browse again");
   const value = JSON.parse(row.data) as BrowserButton;
-  const deliveries = owner.deliveries(value.groupId);
-  if (!deliveries.length || deliveries.some(delivery => delivery.channel !== "telegram" || delivery.status !== "sent") || !deliveries.some(delivery => delivery.messageId === messageId && delivery.replyMarkup?.inline_keyboard.some(row => row.some(button => button.callback_data === token)))) throw new StateError(409, "Browser control belongs to a different or incomplete confirmed review");
+  if (!owner.buttonShown(value.groupId, token, binding, true)) throw new StateError(409, "Browser control belongs to a different or incomplete confirmed review");
   await runtime.wake();
   return owner.effect(`browser-button:${token}`, () => {
     const task = runtime.store.requireTask(value.taskId); if (task.version !== value.version) throw new StateError(409, "Browser instructions changed; open /browse again");

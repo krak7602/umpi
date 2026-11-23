@@ -13,6 +13,7 @@
 # Private deployment and native signing configuration
 wrangler.local.*
 wrangler.private.*
+.publishable-deny.local
 *.cer
 *.der
 *.local.xcconfig

@@ -9,68 +9,60 @@ import { createAssistantModels, selectAssistantModel, DEFAULT_PROVIDER, DEFAULT_
 import { parseAssistantCredential } from "../model/credentials.js";
 import { InputError, boundedText, identifier, record } from "../shared/protocol.js";
 import { DurableCredentials } from "./credentials.js";
-import { Store, StateError, type Channel, type Operation, type OwnerMessageSource, type TelegramMarkup } from "./store.js";
-import { assistantTools, ASSISTANT_INSTRUCTIONS, RESPONSE_STYLE_INSTRUCTIONS } from "./tools.js";
+import { Store, StateError, type ButtonBinding, type Channel, type Operation, type OwnerMessageSource, type TelegramMarkup } from "./store.js";
 import { readJson, authorize, isChatSocketUpgrade, isExecutorWakeUpgrade, telegramEnabled, telegramMissing, telegramUpdate, sendTelegram, answerTelegramCallback, editTelegramKeyboard, type TelegramConfig } from "./transport.js";
 import { formatTelegramStatus } from "./telegram-view.js";
-import { coreContextSection, coreContextTools, readCoreContext, replaceCoreContext, readMemoryReviews, readMemoryReview, readMemoryHistory, readMemoryRevision, proposeMemoryRestore, decideMemoryReview } from "./core-context.js";
-import { reconcileMemoryTelegram, handleMemoryTelegramCallback, enqueueMemoryOverview } from "./memory-telegram.js";
+import { readCoreContext, replaceCoreContext, readMemoryReviews, readMemoryReview, readMemoryHistory, readMemoryRevision, proposeMemoryRestore, decideMemoryReview } from "./core-context.js";
+import type { ProvenanceCounts } from "./provenance.js";
+import { FaultLedger, nextWake, retryDelay, runStages, type Stage } from "./faults.js";
+import { reconcileMemoryTelegram, handleMemoryTelegramCallback, enqueueMemoryOverview, deviceMemoryReviews, memoryDecisionButton } from "./memory-telegram.js";
 import { CompanionConflict, CompanionStore } from "./companion-store.js";
 import { companionRequest } from "./companion-http.js";
-import { companionTools, COMPANION_INSTRUCTIONS } from "./companion-tools.js";
 import { sendCompanionPush, type CompanionPushConfig } from "./companion-push.js";
 import { ProactiveStore } from "./proactive-store.js";
-import { proactiveTools, PROACTIVE_INSTRUCTIONS } from "./proactive-tools.js";
-import { backgroundTools, guardBackgroundTools } from "./proactive-runtime.js";
 import { scheduleRequest } from "./proactive-http.js";
 import { enqueueScheduleControls, handleScheduleCallback, formatScheduleStatus } from "./proactive-telegram.js";
 import { Buffer } from "node:buffer";
 import { DEFAULT_VAULT_SCOPE } from "../shared/vault-planning.js";
 import { PlanningStore } from "./planning-store.js";
 import { PlanningRuntime, type VaultPlanningClient } from "./planning-runtime.js";
-import { planningTools, guardPlanningReviewTools, PLANNING_INSTRUCTIONS } from "./planning-tools.js";
 import { planningRequest } from "./planning-http.js";
 import { enqueuePlanningControls, handlePlanningCallback, formatPlanningStatus } from "./planning-telegram.js";
 import { MailStore } from "./mail-store.js";
 import { MailRuntime } from "./mail-runtime.js";
 import { mailScreen } from "./mail-screen.js";
-import { DECISION_INSTRUCTIONS, DEFAULT_DECISION_MONTHLY_BUDGET, Decisions, SPOKEN_EFFORT, chooseEffort, decisionTools, type Effort, type WorkersAi } from "./decisions.js";
+import { DEFAULT_DECISION_MONTHLY_BUDGET, Decisions, EffortTally, SPOKEN_EFFORT, chooseEffort, wasCorrection, type Effort, type WorkersAi } from "./decisions.js";
 import { SpeechRelay, cutOffNote, interruptedReply } from "./speech-relay.js";
 import { mailReplies } from "./mail-replies.js";
 import { mailFact } from "./mail-facts.js";
 import { DreamStore } from "./dream-store.js";
 import { HistoryIndex } from "./history-index.js";
-import { DREAM_INSTRUCTIONS, DreamRuntime, dreamRequest, dreamTools, guardDreamReviewTools, historyTools, refExists } from "./dream-tools.js";
-import { mailTools, guardMailReviewTools, MAIL_INSTRUCTIONS } from "./mail-tools.js";
+import { DreamRuntime, dreamRequest, refExists } from "./dream-tools.js";
 import { mailRequest } from "./mail-http.js";
 import { enqueueMailControls, handleMailCallback, formatMailStatus } from "./mail-telegram.js";
 import { SituationStore } from "./situation-store.js";
-import { situationTools, SITUATION_INSTRUCTIONS } from "./situation-tools.js";
 import { ActivityStore } from "./activity-store.js";
 import { ExecutorPresence } from "./executor-presence.js";
 import { ExecutorWake } from "./executor-wake.js";
-import { activityTools, ACTIVITY_INSTRUCTIONS } from "./activity-tools.js";
 import { KnockStore } from "./knocks.js";
 import { KNOCK_SNOOZE_MINUTES } from "../shared/knock.js";
-import { CONTEXT_COMPACTION, ContextHealth, contextHooks, contextTools, mayResetBackground } from "./context-health.js";
-import { DEFAULT_WEB_MONTHLY_BUDGET, WEB_INSTRUCTIONS, WebUsageStore, webForeground, webTools } from "./web-search.js";
+import { CONTEXT_COMPACTION, ContextHealth, mayResetBackground } from "./context-health.js";
+import { DEFAULT_WEB_MONTHLY_BUDGET, WebUsageStore } from "./web-search.js";
 import { BriefStore } from "./brief-store.js";
-import { briefTools, guardBriefReviewTools, BRIEF_INSTRUCTIONS } from "./brief-tools.js";
 import { briefRequest, enqueueBriefControls, formatBriefStatus, handleBriefCallback } from "./brief-telegram.js";
 import { AlertRuntime, AlertStore, alertRequest } from "./alerts.js";
-import { JournalRuntime, JournalStore, journalRequest, journalTools, JOURNAL_INSTRUCTIONS } from "./journal.js";
+import { JournalRuntime, JournalStore, journalRequest } from "./journal.js";
 import { ObsyVaultClient } from "./obsy-vault.js";
 import { publicPage } from "./public-pages.js";
 import { CodingStore } from "./coding-store.js";
 import { CodingRuntime, type CodingCloudClient } from "./coding-runtime.js";
-import { codingExtension, codingSubagentExtension, codingOwnerTools, CODING_OWNER_INSTRUCTIONS } from "./coding-tools.js";
 import { codingRequest, codingExecutorRequest } from "./coding-http.js";
 import { enqueueCodingControls, handleCodingCallback } from "./coding-telegram.js";
 import { CodingWorker } from "./coding-worker.js";
 import { TailnetBridge } from "./tailnet-bridge.js";
 import { cloudFetch, tailnetFetch } from "./tailnet-fetch.js";
 import { CloudMachine } from "./cloud-machine.js";
-import { CloudMachines, cloudMachineTools, type CloudMachineStart } from "./cloud-machines.js";
+import { CloudMachines, type CloudMachineStart } from "./cloud-machines.js";
 import { cloudflareDns } from "./cloudflare-dns.js";
 import { CLOUD_MODEL_PATH, cloudModelRequest } from "./cloud-model.js";
 import { BrowserWorker } from "./browser-cloud.js";
@@ -78,23 +70,22 @@ import type { BrowserCloudClient, BrowserWorkerEnvironment } from "./browser-clo
 import { BrowserStore } from "./browser-store.js";
 import { BrowserSnapshots } from "./browser-snapshots.js";
 import { BrowserRuntime } from "./browser-runtime.js";
-import { browserExtension, browserOwnerTools, BROWSER_OWNER_INSTRUCTIONS } from "./browser-tools.js";
 import { browserRequest, browserExecutorRequest, browserSyncRequest } from "./browser-http.js";
 import { enqueueBrowserControls, handleBrowserCallback } from "./browser-telegram.js";
-import { SubagentRuntime, SUBAGENT_INSTRUCTIONS } from "./subagent-runtime.js";
-import { assistantSubagentExtension } from "./subagent-profile.js";
+import { SubagentRuntime } from "./subagent-runtime.js";
 import { subagentRequest } from "./subagent-http.js";
+import { buildProfiles, subagentScope } from "./profiles.js";
 import type { SubagentReport, SubagentScope } from "./subagent-types.js";
 import { FILE_WITHOUT_CAPTION, IMAGE_WITHOUT_CAPTION, TelegramInbox } from "./telegram-inbox.js";
 import { downloadTelegramImage, downloadTelegramVoice } from "./telegram-voice.js";
 import { documentFromBytes, readTelegramFile, type DocumentConverter } from "./telegram-files.js";
 import { ChatLog, type ChatEntry } from "./chat.js";
-import { SpeechWordStore, speechWordTools, speechWordsPrompt } from "./speech-words.js";
+import { SpeechWordStore, speechWordsPrompt } from "./speech-words.js";
 import { ChatSocket } from "./chat-socket.js";
-import { T3CodeStore, T3_CALLBACK_PATH, t3CallbackPage, t3CodeTools } from "./t3-code.js";
-import { T3ActionRequests, t3ActionTools } from "./t3-actions.js";
-import { T3Watcher, t3WatchTools } from "./t3-watch.js";
-import { openTasks, WidgetStore, widgetTools, type WidgetContent, type WidgetItem } from "./widget.js";
+import { T3CodeStore, T3_CALLBACK_PATH, t3CallbackPage } from "./t3-code.js";
+import { T3ActionRequests } from "./t3-actions.js";
+import { T3Watcher } from "./t3-watch.js";
+import { openTasks, WidgetStore, type WidgetContent, type WidgetItem } from "./widget.js";
 import { KnockPushStore } from "./knock-push.js";
 import type { AppMessage } from "./companion-http.js";
 type ButtonResult = { text: string; replyMarkup?: TelegramMarkup };
@@ -154,6 +145,8 @@ export interface Env extends TelegramConfig, CompanionPushConfig {
 
 class Coordinator extends LifecycleCapability {
   private readonly waits = new Map<string, Promise<void>>();
+  /** Reconciliations in a row with a failed stage. */
+  private failures = 0;
   constructor(private readonly assistant: Assistant) { super("umpi-coordinator"); }
 
   async wake(): Promise<void> {
@@ -167,125 +160,151 @@ class Coordinator extends LifecycleCapability {
     this.assistant.telegramInbox.recover();
     // Recover both new proposals and decisions committed before their SQL delivery projection.
     await reconcileMemoryTelegram(await this.assistant.harness.pi(), BACKGROUND_CONTEXT, this.assistant.store);
-    if (this.assistant.telegramInbox.hasPending() || this.assistant.store.pendingOperations().length || this.assistant.store.nextReminder() !== undefined || this.assistant.knocks.nextDue() !== undefined || this.assistant.knockPushes.nextDue() !== undefined || this.assistant.store.readyDeliveries().length || this.assistant.companion.nextPush() || this.assistant.chat.nextPush() || this.assistant.proactive.settings().enabled || this.assistant.planning.settings().enabled || this.assistant.brief.settings().enabled || this.assistant.dream.settings().enabled || this.assistant.mailRuntime.nextDue() !== undefined || this.assistant.coding.active().length || this.assistant.browserRuntime.nextDue() !== undefined || this.assistant.browser.active().length || await this.assistant.subagents.nextDue() !== undefined || this.assistant.cloud.nextDue() !== undefined || this.assistant.t3Watch.nextDue() !== undefined) await this.wake();
+    // One pass decides what is due; the stages below are the only list of what can wake the coordinator.
+    await this.wake();
   }
 
   async onJob({ job }: LifecycleJobContext): Promise<LifecycleJobOutcome> {
     if (job.fn !== "reconcile") return;
     const { store, harness, proactive } = this.assistant;
-    try {
-      store.fireReminders();
-      await this.assistant.telegramInbox.drive();
-      this.assistant.planning.drive("control", store.session("control")!, this.assistant.planningRuntime.available());
-      await this.assistant.mailRuntime.drive();
-      this.assistant.situation.purge();
-      this.assistant.brief.drive();
-      this.assistant.dream.drive();
-      this.assistant.dream.closeLongDay((['telegram', 'control'] as const).flatMap(channel => { const session = store.session(channel); return session ? [this.assistant.contextHealth.read(session).contextTokens] : []; }));
-      await this.assistant.alerts.drive();
-      this.assistant.journal.drive();
-      await this.assistant.driveProactive();
-      await this.assistant.dreamRuntime.drive();
-      this.assistant.planning.reconcile();
-      await this.assistant.subagents.drive();
-      await this.assistant.codingRuntime.drive();
-      this.assistant.t3Watch.kick(work => this.lifecycle.trackAlarmWork(work), () => this.wake());
-      await this.assistant.cloud.drive();
-      await this.assistant.browserRuntime.drive();
-      for (const op of store.pendingOperations()) {
-        if (op.background) {
-          const run = proactive.run(op.background.runId);
-          if (!run || !proactive.settings().enabled || run.status === "superseded" || run.status === "expired") {
-            if (op.status === "submitted") await harness.abort({ session: op.sessionId, operationId: op.id });
-            else { store.settle(op.id, "Background review is no longer actionable.", true); continue; }
-          }
-          if (op.status === "admitted" && store.hasForegroundInput()) continue;
+    const a = this.assistant;
+    // The order is part of the contract: what is admitted and driven first is delivered and pushed last, in the same run.
+    const stages: Stage[] = [
+      { name: "reminders", run: () => store.fireReminders(), due: () => store.nextReminder() },
+      { name: "telegram-inbox", run: () => a.telegramInbox.drive(), due: () => a.telegramInbox.nextDue() },
+      { name: "planning", run: () => a.planning.drive("control", store.session("control")!, a.planningRuntime.available()), due: () => a.planning.nextDue() },
+      { name: "mail", run: () => a.mailRuntime.drive(), due: () => a.mailRuntime.nextDue() },
+      { name: "situation", run: () => a.situation.purge() },
+      { name: "brief", run: () => a.brief.drive(), due: () => a.brief.nextDue() },
+      { name: "nightly", run: () => {
+        a.dream.drive();
+        a.dream.closeLongDay((['telegram', 'control'] as const).flatMap(channel => { const session = store.session(channel); return session ? [a.contextHealth.read(session).contextTokens] : []; }));
+      }, due: () => a.dream.nextDue() },
+      { name: "alerts", run: () => a.alerts.drive(), due: () => a.alerts.nextDue() },
+      { name: "journal", run: () => a.journal.drive(), due: () => a.journal.nextDue() },
+      { name: "proactive", run: () => a.driveProactive(), due: () => proactive.nextDue(Date.now(), store.hasForegroundInput()) },
+      { name: "nightly-review", run: () => a.dreamRuntime.drive(), due: () => a.dreamRuntime.nextDue() },
+      { name: "planning-reconcile", run: () => a.planning.reconcile() },
+      { name: "subagents", run: () => a.subagents.drive(), due: () => a.subagents.nextDue() },
+      { name: "coding", run: () => a.codingRuntime.drive(), due: () => a.codingRuntime.nextDue() },
+      { name: "t3-watch", run: () => a.t3Watch.kick(work => this.lifecycle.trackAlarmWork(work), () => this.wake()), due: () => a.t3Watch.nextDue() },
+      { name: "cloud", run: () => a.cloud.drive(), due: () => a.cloud.nextDue() },
+      { name: "browser", run: () => a.browserRuntime.drive(), due: () => a.browserRuntime.nextDue() },
+      // A submitted turn is followed every two seconds. Missing credentials do not justify that loop; auth updates wake the queue.
+      { name: "operations", run: () => this.driveOperations(), due: () => store.pendingOperations().some(op => op.status === "submitted") ? Date.now() + 2_000 : undefined },
+      { name: "memory-cards", run: async () => reconcileMemoryTelegram(await harness.pi(), BACKGROUND_CONTEXT, store) },
+      // What may be sent is decided here. A message is never delivered in a run where this decision failed.
+      { name: "delivery-holds", run: () => {
+        for (const groupId of store.pendingDeliveryGroups("proactive:")) {
+          const state = proactive.notificationDeliveryState(groupId);
+          if (state === "drop") store.discardDeliveryGroup(groupId, "This proactive update is no longer relevant or permitted.");
+          else store.holdDeliveryGroup(groupId, state === "deferred");
         }
-        if (op.status === "admitted") {
-          if (!(await this.assistant.modelReady())) continue;
-          // Credential reads yield. An owner edit/cancellation may have invalidated this work meanwhile.
-          if (store.operation(op.id)?.status !== "admitted") continue;
-          if (op.background) {
-            if (store.hasForegroundInput()) continue;
-            try { proactive.assertRunCurrent(op.sessionId); }
-            catch { store.settle(op.id, "Background review is no longer actionable.", true); continue; }
-          }
-          if (!op.background) { if (!(await this.assistant.submitOwnerTurn(op))) continue; }
-          else {
-            await harness.submit(store.modelContent(op), { session: op.sessionId, operationId: op.id });
-            store.submitted(op.id);
-          }
+      } },
+      { name: "telegram-delivery", needs: ["delivery-holds"], run: async () => {
+        // Telegram turned off: nothing is sent there. The chat already holds every message, and the app notifies.
+        if (!telegramEnabled(a.config)) {
+          for (const ready of store.readyDeliveries()) store.discardDeliveryGroup(ready.groupId, "Telegram is turned off; this message is in the app's chat.");
+          return;
         }
-        if (this.waits.has(op.id)) continue;
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 20_000);
-        const work = harness.wait(op.id, { session: op.sessionId, signal: controller.signal }).then(async answer => {
-          if (answer.status === "done") {
-            this.assistant.modelIssue = undefined;
-            store.settle(op.id, (answer.text ?? "").slice(0, 65_536));
-          } else if (store.operation(op.id)?.interrupted) {
-            // Cut off by the owner talking, not a model failure.
-            store.settle(op.id, interruptedReply(store.operation(op.id)!.interrupted!.heard ?? this.assistant.spokenText(op.id)));
-          } else {
-            const failure = classifyModelError(await this.assistant.lastModelError(op.sessionId) ?? answer.reason);
-            this.assistant.recordModelFailure(failure);
-            store.settle(op.id, `${this.assistant.modelIssue} Any already-created jobs or reminders remain available in their status lists.`, true);
-          }
-          await this.wake();
-        }).catch(() => {
-          if (!controller.signal.aborted) this.assistant.modelIssue = "Model result recovery failed; accepted work remains durable and will be reconciled";
-        }).finally(() => { clearTimeout(timer); this.waits.delete(op.id); });
-        this.waits.set(op.id, work);
-        this.lifecycle.trackAlarmWork(work);
-      }
-      await reconcileMemoryTelegram(await harness.pi(), BACKGROUND_CONTEXT, store);
-      for (const groupId of store.pendingDeliveryGroups("proactive:")) {
-        const state = proactive.notificationDeliveryState(groupId);
-        if (state === "drop") store.discardDeliveryGroup(groupId, "This proactive update is no longer relevant or permitted.");
-        else store.holdDeliveryGroup(groupId, state === "deferred");
-      }
-      // Telegram turned off: nothing is sent there. The chat already holds every message, and the app notifies.
-      if (!telegramEnabled(this.assistant.config)) {
-        for (const ready of store.readyDeliveries()) store.discardDeliveryGroup(ready.groupId, "Telegram is turned off; this message is in the app's chat.");
-      }
-      // One bounded external send per drive. Later chunks cannot pass a failed or uncertain earlier chunk.
-      const next = telegramEnabled(this.assistant.config) ? store.readyDeliveries()[0] : undefined;
-      if (next) {
-        const delivery = store.beginDelivery(next.id);
+        // One bounded external send per drive. Later chunks cannot pass a failed or uncertain earlier chunk.
+        const next = store.readyDeliveries()[0];
+        const delivery = next && store.beginDelivery(next.id);
         if (delivery) {
-          const result = await sendTelegram(delivery, this.assistant.config);
+          const result = await sendTelegram(delivery, a.config);
           store.finishDelivery(delivery.id, result.status, result.error, result.messageId);
         }
-      }
-      const push = this.assistant.companion.nextPush();
-      if (push) {
-        this.assistant.companion.beginPush(push.target.deviceId, push.hash);
-        const result = await sendCompanionPush(push.target, { revision: push.revision, jobs: push.jobs }, this.assistant.config);
-        this.assistant.companion.finishPush(push.target.deviceId, push.hash, result.status);
-      }
-      const knock = this.assistant.knockPushes.next();
-      if (knock) {
+      }, due: () => telegramEnabled(a.config) && store.readyDeliveries().length ? Date.now() + 100 : undefined },
+      { name: "companion-push", run: async () => {
+        const push = a.companion.nextPush();
+        if (!push) return;
+        a.companion.beginPush(push.target.deviceId, push.hash);
+        const result = await sendCompanionPush(push.target, { revision: push.revision, jobs: push.jobs }, a.config);
+        a.companion.finishPush(push.target.deviceId, push.hash, result.status);
+      }, due: () => a.companion.nextPush() ? Date.now() + 100 : undefined },
+      { name: "knock-push", run: async () => {
+        const knock = a.knockPushes.next();
+        if (!knock) return;
         // An answered, changed, or cancelled reminder stops knocking.
         const reminder = store.reminder(knock.reminderId);
-        if (!reminder || reminder.version !== knock.version || reminder.answer || reminder.status !== "fired") this.assistant.knockPushes.finish(knock.id, "skipped");
-        else {
-          const results = await Promise.all(this.assistant.companion.alertTargets().map(target => sendCompanionPush(target, { revision: 0, jobs: [], knock }, this.assistant.config)));
-          this.assistant.knockPushes.finish(knock.id, results.some(result => result.status === "accepted") ? "sent" : "failed");
-        }
-      }
-      const chatPush = this.assistant.chat.nextPush();
-      if (chatPush) this.assistant.chat.finishPush(chatPush.seq, await this.assistant.announce(chatPush));
-      this.assistant.driveExecutor();
-      const due = store.nextReminder();
-      // Missing credentials do not justify a two-second polling loop; auth updates wake the queue.
-      const pending = store.pendingOperations().some(op => op.status === "submitted");
-      const outbox = store.readyDeliveries().length > 0;
-      const wakeAt = Math.min(due ?? Infinity, proactive.nextDue(Date.now(), store.hasForegroundInput()) ?? Infinity, this.assistant.planning.nextDue() ?? Infinity, this.assistant.brief.nextDue() ?? Infinity, this.assistant.dream.nextDue() ?? Infinity, this.assistant.dreamRuntime.nextDue() ?? Infinity, this.assistant.alerts.nextDue() ?? Infinity, this.assistant.journal.nextDue() ?? Infinity, this.assistant.mailRuntime.nextDue() ?? Infinity, this.assistant.codingRuntime.nextDue() ?? Infinity, this.assistant.browserRuntime.nextDue() ?? Infinity, await this.assistant.subagents.nextDue() ?? Infinity, this.assistant.telegramInbox.nextDue() ?? Infinity, this.assistant.knocks.nextDue() ?? Infinity, this.assistant.knockPushes.nextDue() ?? Infinity, this.assistant.cloud.nextDue() ?? Infinity, this.assistant.t3Watch.nextDue() ?? Infinity, pending ? Date.now() + 2_000 : Infinity, outbox || this.assistant.companion.nextPush() || this.assistant.chat.nextPush() ? Date.now() + 100 : Infinity);
-      if (Number.isFinite(wakeAt)) return { rescheduleAt: wakeAt };
-    } catch {
-      this.assistant.modelIssue = "Coordinator reconciliation failed; work is retained and retry is scheduled. Check configuration and protected status.";
-      return { rescheduleAt: Date.now() + 10_000 };
+        if (!reminder || reminder.version !== knock.version || reminder.answer || reminder.status !== "fired") { a.knockPushes.finish(knock.id, "skipped"); return; }
+        const results = await Promise.all(a.companion.alertTargets().map(target => sendCompanionPush(target, { revision: 0, jobs: [], knock }, a.config)));
+        a.knockPushes.finish(knock.id, results.some(result => result.status === "accepted") ? "sent" : "failed");
+      }, due: () => a.knockPushes.nextDue() },
+      { name: "chat-push", run: async () => {
+        const chatPush = a.chat.nextPush();
+        if (chatPush) a.chat.finishPush(chatPush.seq, await a.announce(chatPush));
+      }, due: () => a.chat.nextPush() ? Date.now() + 100 : undefined },
+      // The one-day "Mac is offline" notice has its own wake, so work waiting on an absent Mac is never left unseen.
+      { name: "executor", run: () => a.driveExecutor(), due: () => a.executorPresence.nextDue(store.executors(), a.knocks.nextDue()) },
+    ];
+    const failed = await runStages(stages, (stage, error) => a.faults.record(`reconcile:${stage}`, error));
+    this.failures = failed.length ? this.failures + 1 : 0;
+    // A fault is retried soon, and then less often; it never replaces the wake the other subsystems need.
+    const retryAt = failed.length ? Date.now() + retryDelay(this.failures) : Infinity;
+    if (failed.length) a.modelIssue = `Coordinator reconciliation failed in: ${failed.join(", ")}. Other work continued; a retry is scheduled. Protected status lists the faults.`;
+    const wakeAt = await nextWake(stages, failed, retryAt, (stage, error) => a.faults.record(`reconcile:${stage}:due`, error));
+    if (Number.isFinite(wakeAt)) return { rescheduleAt: wakeAt };
+  }
+
+  /** Submits admitted turns and follows submitted ones. One turn that fails does not hold back the others. */
+  private async driveOperations(): Promise<void> {
+    const { store, harness, proactive } = this.assistant;
+    let first: unknown;
+    for (const op of store.pendingOperations()) {
+      try { await this.driveOperation(op, store, harness, proactive); }
+      catch (error) { first ??= error; this.assistant.faults.record("reconcile:operation", error); }
     }
+    if (first !== undefined) throw first;
+  }
+
+  private async driveOperation(op: Operation, store: Store, harness: Assistant["harness"], proactive: ProactiveStore): Promise<void> {
+    if (op.background) {
+      const run = proactive.run(op.background.runId);
+      if (!run || !proactive.settings().enabled || run.status === "superseded" || run.status === "expired") {
+        if (op.status === "submitted") await harness.abort({ session: op.sessionId, operationId: op.id });
+        else { store.settle(op.id, "Background review is no longer actionable.", true); return; }
+      }
+      if (op.status === "admitted" && store.hasForegroundInput()) return;
+    }
+    if (op.status === "admitted") {
+      if (!(await this.assistant.modelReady())) return;
+      // Credential reads yield. An owner edit/cancellation may have invalidated this work meanwhile.
+      if (store.operation(op.id)?.status !== "admitted") return;
+      if (op.background) {
+        if (store.hasForegroundInput()) return;
+        try { proactive.assertRunCurrent(op.sessionId); }
+        catch { store.settle(op.id, "Background review is no longer actionable.", true); return; }
+      }
+      if (!op.background) { if (!(await this.assistant.submitOwnerTurn(op))) return; }
+      else {
+        await harness.submit(store.modelContent(op), { session: op.sessionId, operationId: op.id });
+        store.submitted(op.id);
+      }
+    }
+    if (this.waits.has(op.id)) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20_000);
+    const work = harness.wait(op.id, { session: op.sessionId, signal: controller.signal }).then(async answer => {
+      if (answer.status === "done") {
+        this.assistant.modelIssue = undefined;
+        store.settle(op.id, (answer.text ?? "").slice(0, 65_536));
+      } else if (store.operation(op.id)?.interrupted) {
+        // Cut off by the owner talking, not a model failure.
+        store.settle(op.id, interruptedReply(store.operation(op.id)!.interrupted!.heard ?? this.assistant.spokenText(op.id)));
+      } else {
+        const failure = classifyModelError(await this.assistant.lastModelError(op.sessionId) ?? answer.reason);
+        this.assistant.recordModelFailure(failure);
+        store.settle(op.id, `${this.assistant.modelIssue} Any already-created jobs or reminders remain available in their status lists.`, true);
+      }
+      await this.wake();
+    }).catch(error => {
+      if (controller.signal.aborted) return;
+      this.assistant.faults.record("reconcile:operation-result", error);
+      this.assistant.modelIssue = "Model result recovery failed; accepted work remains durable and will be reconciled";
+    }).finally(() => { clearTimeout(timer); this.waits.delete(op.id); });
+    this.waits.set(op.id, work);
+    this.lifecycle.trackAlarmWork(work);
   }
 }
 
@@ -332,6 +351,10 @@ export class Assistant extends Agent<Env> {
   readonly dreamRuntime: DreamRuntime;
   private backgroundExtension!: Extension;
   readonly contextHealth: ContextHealth;
+  /** Failures caught and carried on from, for protected status. */
+  readonly faults: FaultLedger;
+  /** How often the owner-request check let an action run or refused it, since this instance started. */
+  readonly provenance: ProvenanceCounts = { refused: {}, allowed: 0 };
   readonly knocks: KnockStore;
   readonly chat: ChatLog;
   readonly speechWords: SpeechWordStore;
@@ -378,6 +401,9 @@ export class Assistant extends Agent<Env> {
     this.t3Requests.watcher = this.t3Watch;
     // A cloud machine's threads are checked once more before it sleeps, so a finished thread is announced.
     this.cloud.beforeSleep = id => this.t3Watch.check(id, true);
+    // A machine that could not be saved or restored tells the owner once, quietly in quiet hours.
+    this.cloud.notice = (group, text) => this.store.enqueue(group, "telegram", text, undefined, undefined, undefined, this.proactive.quiet(Date.now()) ? { quiet: true } : undefined);
+    this.cloud.background = { track: work => this.lifecycle.trackAlarmWork(work), wake: () => this.coordinator.wake() };
     this.planning = new PlanningStore(this.proactive, this.timezone);
     this.situation = new SituationStore(this.store.db, this.timezone);
     this.activity = new ActivityStore(this.store.db);
@@ -391,7 +417,7 @@ export class Assistant extends Agent<Env> {
     this.dream.refExists = ref => refExists({ dream: this.dream, mail: this.mail }, ref);
     const systemOwned = (id: string) => this.mail.ownsCommitment(id) || this.brief.ownsCommitment(id) || this.planning.ownsCommitment(id) || this.dream.ownsCommitment(id);
     this.journal = new JournalRuntime(new JournalStore(this.store.db), this.proactive, {
-      vault: () => this.vaultClient(), planning: this.planning, situation: this.situation, mail: this.mail,
+      vault: () => this.vaultClient(), editor: () => this.obsyVault, planning: this.planning, situation: this.situation, mail: this.mail,
       calendarCredentials: () => this.config.UMPI_CALENDAR_CREDENTIALS, ownedCommitment: systemOwned,
       track: work => this.lifecycle.trackAlarmWork(work), wake: () => this.coordinator.wake(),
     });
@@ -403,6 +429,8 @@ export class Assistant extends Agent<Env> {
     try { new Intl.DateTimeFormat("en-US", { timeZone: fallbackZone }).format(); } catch { fallbackZone = "UTC"; }
     this.modelFallback = new ModelFallback(this.store.db, () => env.UMPI_ANTHROPIC_FALLBACK_KEY, fallbackZone, (groupId, text) => this.store.enqueue(groupId, "telegram", text));
     this.contextHealth = new ContextHealth(this.store.db);
+    this.faults = new FaultLedger(this.store.db);
+    this.effortTally = new EffortTally(this.store.db);
     this.knocks = new KnockStore(this.store.db);
     this.chat = new ChatLog(this.store.db);
     this.speechWords = new SpeechWordStore(this.store.db);
@@ -459,7 +487,7 @@ export class Assistant extends Agent<Env> {
     this.mailRuntime = new MailRuntime(this.mail, this.config.UMPI_GMAIL_CREDENTIALS, () => this.coordinator.wake(), this.decisions.available() ? mailScreen(this.decisions) : undefined, this.decisions.available() ? mailFact(this.decisions, this.timezone) : undefined,
       this.decisions.available() ? mailReplies(this.decisions) : undefined);
     this.codingRuntime = new CodingRuntime(this.coding, {
-      harness: () => this.harness, extension: () => codingProfile, archive: () => this.config.CODING_ARCHIVE,
+      harness: () => this.harness, extension: () => profiles.coding, archive: () => this.config.CODING_ARCHIVE,
       cloudAvailable: () => Boolean(this.config.CODING_WORKER),
       cloud: (taskId, runId) => this.config.CODING_WORKER?.getByName(`coding:${JSON.stringify([taskId, runId])}`),
       modelReady: () => this.modelReady(), wake: () => this.coordinator.wake(),
@@ -470,63 +498,45 @@ export class Assistant extends Agent<Env> {
         correct: (session, run, input, text) => this.subagents.correct(session, run, input, text),
       },
     });
-    const web = webTools({ key: () => this.config.UMPI_PARALLEL_API_KEY, usage: this.webUsage, foreground: webForeground(id => this.store.isBackgroundSession(id) && !this.dream.ownsSession(id)) });
-    const decision = decisionTools(this.decisions);
-    const assistantChild = assistantSubagentExtension(this.store, this.timezone, () => this.coordinator.wake(), (api, context) => this.subagents.childScope(api, context), web, decision);
-    const codingChild = codingSubagentExtension(this.codingRuntime, (api, context) => this.subagents.childScope(api, context));
     this.subagents = new SubagentRuntime({
       harness: () => this.harness.pi(),
       scope: session => this.subagentScope(session),
       validate: scope => this.validateSubagentScope(scope),
-      profile: scope => scope.kind === "coding" ? codingChild : assistantChild,
+      profile: scope => scope.kind === "coding" ? profiles.codingChild : profiles.assistantChild,
       deliver: report => this.deliverSubagentReport(report),
       wake: () => this.coordinator.wake(),
       track: work => this.lifecycle.trackAlarmWork(work),
     });
-    const delegation = this.subagents.extension();
-    const codingBase = codingExtension(this.codingRuntime);
-    const codingProfile: Extension = { ...codingBase,
-      tools: [...codingBase.tools ?? [], ...delegation.tools ?? []],
-      sections: [...codingBase.sections ?? [], { key: "delegation", tag: false, render: () => SUBAGENT_INSTRUCTIONS }],
-    };
     this.browserRuntime = new BrowserRuntime(this.browser, new BrowserSnapshots(this.browser, () => this.config.BROWSER_ARCHIVE), {
-      harness: () => this.harness, extension: () => browserProfile,
+      harness: () => this.harness, extension: () => profiles.browser,
       cloudAvailable: () => Boolean(this.config.BROWSER_WORKER && this.config.BROWSER),
       cloud: (taskId, runId) => this.config.BROWSER_WORKER?.getByName(`browser:${JSON.stringify([taskId, runId])}`),
       modelReady: () => this.modelReady(), wake: () => this.coordinator.wake(),
       track: work => this.lifecycle.trackAlarmWork(work),
     });
-    const browserProfile = browserExtension(this.browserRuntime);
-    const foregroundTools = [...assistantTools(this.store, this.timezone, () => this.coordinator.wake()), ...coreContextTools(() => this.coordinator.wake()), ...companionTools(this.companion, () => this.coordinator.wake()), ...codingOwnerTools(this.codingRuntime), ...browserOwnerTools(this.browserRuntime), ...situationTools(this.store, this.situation, () => this.config.UMPI_CALENDAR_CREDENTIALS), ...speechWordTools(this.speechWords, id => this.store.isBackgroundSession(id)), ...activityTools(this.store, this.activity, this.timezone, () => this.notifyExecutor()), ...journalTools(this.journal, id => this.store.isBackgroundSession(id)), ...widgetTools(this.widgets, () => this.coordinator.wake()), ...t3CodeTools(this.t3, () => this.t3Watch.recent()), ...t3ActionTools(this.t3, this.t3Requests, this.t3Watch), ...t3WatchTools(this.t3, this.t3Watch), ...cloudMachineTools(this.cloud, this.t3Watch), ...web, ...decision, ...historyTools(this.dream, this.history, id => this.store.isBackgroundSession(id)), ...contextTools(this.contextHealth, id => !this.store.isBackgroundSession(id)), ...delegation.tools ?? []];
-    const guardedProactiveTools = guardDreamReviewTools(guardBriefReviewTools(guardMailReviewTools(guardPlanningReviewTools(proactiveTools(this.proactive, () => this.coordinator.wake()), this.planningRuntime), this.mailRuntime), this.brief), this.dream);
-    const briefSources = { brief: this.brief, situation: this.situation, mail: this.mail, planning: this.planningRuntime, calendarCredentials: () => this.config.UMPI_CALENDAR_CREDENTIALS, activity: this.activity, dream: this.dream };
     const ownerSessions = () => (["telegram", "control"] as const).flatMap(channel => { const session = this.store.session(channel); return session ? [{ channel, session }] : []; });
-    const dreamSources = { dream: this.dream, mail: this.mail, situation: this.situation, activity: this.activity,
-      tasks: () => [
-        ...this.coding.tasks().map(task => ({ kind: "coding" as const, id: task.taskId, status: task.status, prompt: task.prompt.slice(0, 300), result: task.result?.summary?.slice(0, 400) ?? null, updatedAt: task.updatedAt })),
-        ...this.browser.tasks().map(task => ({ kind: "browser" as const, id: task.taskId, status: task.status, prompt: task.prompt.slice(0, 300), result: (task.result as { summary?: string } | undefined)?.summary?.slice(0, 400) ?? task.issue ?? null, updatedAt: task.updatedAt })),
-      ],
-      conversations: async () => Promise.all(ownerSessions().map(async ({ channel, session }) => ({ channel, entries: await this.harness.messages({ session }) as never }))) };
     this.dreamRuntime = new DreamRuntime(this.dream, this.decisions, this.history, {
       sessions: () => ownerSessions().map(item => item.session),
       compact: async (session, marker) => { await (await this.harness.conversation(session)).compact(marker, BACKGROUND_CONTEXT); },
+      // The probe re-check's searches run beside the reconcile job, not inside it.
+      track: work => this.lifecycle.trackAlarmWork(work),
     });
-    // The nightly run may look into the owner's open questions and read older digests; other reviews may not.
-    const dreamOnly = ["web_search", "read_web_page", "search_history", "read_history"];
-    const dreamExtra = (session: string, tool: string) => dreamOnly.includes(tool) && this.dream.ownsSession(session);
-    const umpiExtension: Extension = { name: "umpi", hooks: contextHooks({ health: this.contextHealth, isForeground: id => !this.store.isBackgroundSession(id), summaryFor: instructions => this.dreamRuntime.summaryFor(instructions) }), tools: [...guardBackgroundTools(foregroundTools, this.proactive, dreamExtra), ...guardedProactiveTools, ...planningTools(this.planningRuntime), ...mailTools(this.mailRuntime), ...briefTools(briefSources), ...dreamTools(dreamSources)],
-      sections: [{ key: "umpi", tag: false, render: () => `${ASSISTANT_INSTRUCTIONS}\n${COMPANION_INSTRUCTIONS}\n${PROACTIVE_INSTRUCTIONS}\n${PLANNING_INSTRUCTIONS}\n${MAIL_INSTRUCTIONS}\n${SITUATION_INSTRUCTIONS}\n${ACTIVITY_INSTRUCTIONS}\n${WEB_INSTRUCTIONS}\n${DECISION_INSTRUCTIONS}\n${JOURNAL_INSTRUCTIONS}\n${BRIEF_INSTRUCTIONS}\n${DREAM_INSTRUCTIONS}\n${CODING_OWNER_INSTRUCTIONS}\n${BROWSER_OWNER_INSTRUCTIONS}\n${SUBAGENT_INSTRUCTIONS}\nOwner timezone: ${this.timezone}.` }, coreContextSection, { key: "lessons", tag: false, render: () => this.dream.playbook() }, { key: "response-style", tag: false, render: () => RESPONSE_STYLE_INSTRUCTIONS }] };
-    // Background reviews get only the tools they may use: every request carries its tool list, and a review
-    // pays for it in full on each cold start.
-    const reviewTools = [...guardBackgroundTools(foregroundTools, this.proactive, dreamExtra).filter(tool => backgroundTools.has(tool.name) || dreamOnly.includes(tool.name)),
-      ...guardedProactiveTools, ...planningTools(this.planningRuntime), ...mailTools(this.mailRuntime), ...briefTools(briefSources), ...dreamTools(dreamSources)];
-    this.backgroundExtension = { name: "umpi-background", hooks: umpiExtension.hooks, tools: reviewTools,
-      sections: [{ key: "umpi", tag: false, render: () => `${ASSISTANT_INSTRUCTIONS}\n${PROACTIVE_INSTRUCTIONS}\n${PLANNING_INSTRUCTIONS}\n${MAIL_INSTRUCTIONS}\n${SITUATION_INSTRUCTIONS}\n${DECISION_INSTRUCTIONS}\n${BRIEF_INSTRUCTIONS}\n${DREAM_INSTRUCTIONS}\nOwner timezone: ${this.timezone}.` }, coreContextSection, { key: "lessons", tag: false, render: () => this.dream.playbook() }, { key: "response-style", tag: false, render: () => RESPONSE_STYLE_INSTRUCTIONS }] };
-    registry.install(umpiExtension); registry.install(this.backgroundExtension); registry.install(codingProfile); registry.install(browserProfile);
-    registry.install(delegation); registry.install(assistantChild); registry.install(codingChild);
+    // Who can call what: the tool lists, guard wrappers, and instruction sections are assembled in profiles.ts.
+    const profiles = buildProfiles({
+      store: this.store, timezone: this.timezone, wake: () => this.coordinator.wake(), notifyExecutor: () => this.notifyExecutor(),
+      calendarCredentials: () => this.config.UMPI_CALENDAR_CREDENTIALS, webKey: () => this.config.UMPI_PARALLEL_API_KEY,
+      conversations: async () => Promise.all(ownerSessions().map(async ({ channel, session }) => ({ channel, entries: await this.harness.messages({ session }) as never }))),
+      provenance: this.provenance, companion: this.companion, proactive: this.proactive, situation: this.situation, activity: this.activity, mail: this.mail, brief: this.brief,
+      dream: this.dream, coding: this.coding, browser: this.browser, journal: this.journal, speechWords: this.speechWords, widgets: this.widgets, t3: this.t3, t3Requests: this.t3Requests,
+      t3Watch: this.t3Watch, cloud: this.cloud, webUsage: this.webUsage, decisions: this.decisions, history: this.history, contextHealth: this.contextHealth, chat: this.chat,
+      planningRuntime: this.planningRuntime, mailRuntime: this.mailRuntime, codingRuntime: this.codingRuntime, browserRuntime: this.browserRuntime, dreamRuntime: this.dreamRuntime, subagents: this.subagents,
+    });
+    this.backgroundExtension = profiles.background;
+    registry.install(profiles.owner); registry.install(profiles.background); registry.install(profiles.coding); registry.install(profiles.browser);
+    registry.install(profiles.delegation); registry.install(profiles.assistantChild); registry.install(profiles.codingChild);
     this.harness = new PiHarness({
       // Use HTTP/SSE, not a Node-style WebSocket constructor with custom headers.
-      harness: ({ storage, context }) => Harness.open(storage, { models, registry, settings: { extensions: [umpiExtension], stream: { transport: "sse" }, compaction: CONTEXT_COMPACTION }, onReport: () => { this.modelIssue = "A model extension operation failed; check protected model and job status"; } }, context),
+      harness: ({ storage, context }) => Harness.open(storage, { models, registry, settings: { extensions: [profiles.owner], stream: { transport: "sse" }, compaction: CONTEXT_COMPACTION }, onReport: () => { this.modelIssue = "A model extension operation failed; check protected model and job status"; } }, context),
       defaults: { ...(model ? { model } : {}), thinkingLevel: MAIN_THINKING_LEVEL },
     });
     this.telegramInbox = new TelegramInbox({
@@ -557,17 +567,7 @@ export class Assistant extends Agent<Env> {
     this.lifecycle.use(this.harness).use(this.coordinator).use(this.executorWake).use(this.chatSocket);
   }
 
-  private subagentScope(parentSessionId: string): SubagentScope {
-    const coding = this.coding.forSession(parentSessionId);
-    if (coding) {
-      if (!coding.run) throw new StateError(403, "This conversation owns no active coding run");
-      const task = this.coding.assertRunning(coding.taskId, coding.run.runId);
-      return { kind: "coding", parentSessionId, taskId: task.taskId, runId: task.run!.runId, deadlineAt: task.run!.assignment.deadlineAt };
-    }
-    const channel = this.store.channelForSession(parentSessionId);
-    if (this.store.isBackgroundSession(parentSessionId) || this.store.session(channel) !== parentSessionId) throw new StateError(403, "Only an original foreground parent may delegate");
-    return { kind: "assistant", parentSessionId, channel };
-  }
+  private subagentScope(parentSessionId: string): SubagentScope { return subagentScope({ store: this.store, coding: this.coding }, parentSessionId); }
 
   private validateSubagentScope(scope: SubagentScope): void {
     if (scope.kind === "assistant") {
@@ -637,6 +637,7 @@ export class Assistant extends Agent<Env> {
   }
   /** Effort chosen for recent owner turns, since this instance started. */
   private readonly efforts: Record<Effort, number> = { low: 0, medium: 0, high: 0 };
+  private effortTally!: EffortTally;
   private readonly submitting = new Set<string>();
   /**
    * Submits one admitted owner turn after setting its reasoning effort. The direct path and the coordinator drive
@@ -661,9 +662,17 @@ export class Assistant extends Agent<Env> {
   /** Sets this owner turn's reasoning effort from a decision on the message; anything unclear keeps high. */
   private async prepareOwnerTurn(op: Operation): Promise<void> {
     if (this.store.isBackgroundSession(op.sessionId)) return;
-    const previous = this.store.recentOperations(false).find(other => other.id !== op.id && other.channel === op.channel && other.status === "done" && other.result)?.result;
+    const before = this.store.recentOperations(false).find(other => other.id !== op.id && other.channel === op.channel && other.status === "done" && other.result);
+    const previous = before?.result;
     const effort = await chooseEffort(this.decisions, op.modelInput ?? op.text, previous, op.ownerSource?.spoken ? SPOKEN_EFFORT : undefined);
     this.efforts[effort]++;
+    this.effortTally.turn(effort);
+    this.store.setEffort(op.id, effort);
+    // Did this message correct the reply before it? Asked beside the turn, never in its way; only an owner's own message counts.
+    if (before?.effort && previous && op.origin !== "result") {
+      const was = before.effort;
+      this.lifecycle.trackAlarmWork(wasCorrection(this.decisions, op.text, previous).then(corrected => { if (corrected !== undefined) this.effortTally.followed(was, corrected); }).catch(() => undefined));
+    }
     await (await this.harness.conversation(op.sessionId)).configure({ thinkingLevel: effort }, BACKGROUND_CONTEXT);
   }
 
@@ -685,7 +694,7 @@ export class Assistant extends Agent<Env> {
       void stream.closed.then(() => { clearTimeout(limit); relay.finish(); forget(); }, () => { clearTimeout(limit); relay.finish(); forget(); });
       relay.handle([stream.snapshot]);
       stream.start(async events => { if (relay.handle(events)) end(); });
-    } catch { relay.finish(); forget(); }
+    } catch (error) { this.faults.record("speech-relay", error); relay.finish(); forget(); }
   }
   /** What a spoken reply had said when it stopped. */
   spokenText(operationId: string): string { return this.speech.get(operationId)?.spoken ?? ""; }
@@ -798,29 +807,27 @@ export class Assistant extends Agent<Env> {
       // T3 Code approvals answer the same way from Telegram and the app.
       const t3 = await this.t3Requests.press(data, messageId, groupId);
       if (t3) return t3;
-      if (messageId !== undefined) {
-        const coding = await handleCodingCallback(this.codingRuntime, data, messageId);
-        if (coding) return { text: coding.text, ...(coding.removeKeyboard ? { replyMarkup: { inline_keyboard: [] } } : {}) };
-        const browser = await handleBrowserCallback(this.browserRuntime, data, messageId);
-        if (browser) return { text: browser.text, ...(browser.removeKeyboard ? { replyMarkup: { inline_keyboard: [] } } : {}) };
-        const mail = await handleMailCallback(this.mailRuntime, data, messageId);
-        if (mail) {
-          if (mail.prompt) {
-            const sessionId = await this.session("telegram");
-            this.proactive.deferForForeground();
-            this.store.admitResult(`mail-draft:${data}`, mail.prompt, "telegram", sessionId);
-          }
-          return { text: mail.text, replyMarkup: mail.replyMarkup };
+      // An app press on a message that never reached Telegram (it is turned off, or not sent yet) is bound to its chat entry.
+      if (messageId === undefined && groupId === undefined) throw new StateError(400, "Invalid button");
+      const binding: ButtonBinding = messageId ?? { groupId: groupId! };
+      const coding = await handleCodingCallback(this.codingRuntime, data, binding);
+      if (coding) return { text: coding.text, ...(coding.removeKeyboard ? { replyMarkup: { inline_keyboard: [] } } : {}) };
+      const browser = await handleBrowserCallback(this.browserRuntime, data, binding);
+      if (browser) return { text: browser.text, ...(browser.removeKeyboard ? { replyMarkup: { inline_keyboard: [] } } : {}) };
+      const mail = await handleMailCallback(this.mailRuntime, data, binding);
+      if (mail) {
+        if (mail.prompt) {
+          const sessionId = await this.session("telegram");
+          this.proactive.deferForForeground();
+          this.store.admitResult(`mail-draft:${data}`, mail.prompt, "telegram", sessionId);
         }
+        return { text: mail.text, replyMarkup: mail.replyMarkup };
       }
-      const result = messageId !== undefined
-        ? await handleBriefCallback(this.brief, data, messageId, () => this.coordinator.wake())
-          ?? await handlePlanningCallback(this.planningRuntime, data, messageId)
-          ?? handleScheduleCallback(this.proactive, data, messageId)
-          ?? await handleMemoryTelegramCallback(await this.harness.pi(), BACKGROUND_CONTEXT, this.store, data, messageId)
-          ?? this.store.resolveTelegramCallback(data, messageId)
-        // Without a Telegram message, only approvals and questions are answered here, bound to their own message.
-        : this.store.resolveTelegramCallback(data, { groupId: groupId! });
+      const result = await handleBriefCallback(this.brief, data, binding, () => this.coordinator.wake())
+        ?? await handlePlanningCallback(this.planningRuntime, data, binding)
+        ?? handleScheduleCallback(this.proactive, data, binding)
+        ?? await handleMemoryTelegramCallback(await this.harness.pi(), BACKGROUND_CONTEXT, this.store, data, binding)
+        ?? this.store.resolveTelegramCallback(data, binding);
       if (this.store.hasForegroundInput()) this.proactive.deferForForeground();
       return { text: result.text, replyMarkup: result.replyMarkup };
     } finally { await this.coordinator.wake(); }
@@ -850,7 +857,7 @@ export class Assistant extends Agent<Env> {
     if (waiting) items.push({ title: waiting === 1 ? "1 thing needs you" : `${waiting} things need you`, symbol: "hand.raised", link: "work" });
     try {
       if (this.obsyVault) for (const task of openTasks((await this.obsyVault.readDay(this.planningRuntime.today())).text).slice(0, 6)) items.push({ title: task, symbol: "circle", link: "today" });
-    } catch { /* The widget still shows reminders and waiting work. */ }
+    } catch (error) { this.faults.record("widget:today", error); /* The widget still shows reminders and waiting work. */ }
     const time = new Intl.DateTimeFormat("en-GB", { timeZone: this.timezone, hour: "2-digit", minute: "2-digit", weekday: "short" });
     for (const reminder of this.store.reminders().filter(item => item.status === "scheduled").sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt)).slice(0, 2)) {
       items.push({ title: reminder.text, detail: time.format(new Date(reminder.dueAt)), symbol: "bell", link: "work" });
@@ -964,9 +971,11 @@ export class Assistant extends Agent<Env> {
     return {
       model: { providerId: this.providerId, modelId: this.modelId, configured, issue: this.modelIssue ?? null, lastFailure: this.lastModelFailure ?? null, fallback: this.modelFallback.status() },
       web: this.webUsage.status(Boolean(this.config.UMPI_PARALLEL_API_KEY)),
-      decisions: { ...this.decisions.status(), ownerEffort: this.efforts },
+      decisions: { ...this.decisions.status(), ownerEffort: this.efforts, effortCorrections: this.effortTally.status() },
       knocks: { ...this.knocks.status(), pushed: this.knockPushes.status() },
       chat: { ...this.chat.status(), sockets: this.chatSocket?.count() ?? 0 },
+      faults: this.faults.recent(),
+      provenance: this.provenance,
       t3Code: { ...this.t3.status(), awaitingApproval: this.t3Requests.pending().length, following: this.t3Watch.watching().length, held: this.t3Watch.held().length },
       cloudMachines: { ...this.cloud.status(), configured: this.cloudStart() !== undefined },
       conversations: this.contextHealth.status([
@@ -1033,6 +1042,15 @@ export class Assistant extends Agent<Env> {
         },
         decideT3: async (id, approve) => {
           const button = this.t3Requests.button(id, approve);
+          const seq = this.chat.seqOf(button.groupId);
+          const result = seq !== undefined ? await this.pressChatButton(seq, button.data) : await this.pressButton(button.data, undefined, button.groupId);
+          return { text: result.text };
+        },
+        memoryReviews: async () => deviceMemoryReviews(await this.harness.pi(), BACKGROUND_CONTEXT, this.store),
+        decideMemory: async (id, decision) => {
+          // The card may not be queued yet when the review is seconds old; the decision always runs through its button.
+          await reconcileMemoryTelegram(await this.harness.pi(), BACKGROUND_CONTEXT, this.store);
+          const button = memoryDecisionButton(this.store, id, decision);
           const seq = this.chat.seqOf(button.groupId);
           const result = seq !== undefined ? await this.pressChatButton(seq, button.data) : await this.pressButton(button.data, undefined, button.groupId);
           return { text: result.text };
@@ -1286,7 +1304,11 @@ export class Assistant extends Agent<Env> {
         return Response.json({ ok: true, inputId: accepted.id, status: accepted.status, ...(accepted.operationId ? { operationId: accepted.operationId } : {}) });
       }
       throw new StateError(404, "Not found");
-    } catch (error) { return failure(error); }
+    } catch (error) {
+      // An input or state error is an answer; anything else is a fault the 503 below would hide.
+      if (!(error instanceof InputError || error instanceof StateError || error instanceof CompanionConflict)) this.faults.record(`http:${request.method} ${new URL(request.url).pathname.replace(/\/[^/]*[0-9][^/]*/g, "/:id").slice(0, 60)}`, error);
+      return failure(error);
+    }
   }
 }
 

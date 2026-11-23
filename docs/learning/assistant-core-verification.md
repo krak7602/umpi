@@ -1,7 +1,7 @@
 ---
 title: Assistant core verification
 aliases: [real model smoke, coordinator restart verification, subscription transport evidence]
-updated: 2026-10-19
+updated: 2026-11-23
 ---
 
 # Assistant core verification
@@ -208,7 +208,9 @@ On 2026-10-19 the 02:30 preparation and a manual retry both reported the private
 
 ### Automated checks and limits
 
-The publication check passed `npm run typecheck`, 600 Node tests (597 passed, 3 environment-gated skips), and the complete `npm run build` Wrangler dry run with both container images. Root and vault-runtime `npm audit --audit-level=high` reported zero vulnerabilities. All 18 maintained documentation pages were reachable from `README.md` with no missing local target or heading fragment. Candidate-source privacy scanning and the public `/`, `/privacy`, and `/terms` smoke also passed.
+The publication check passed `npm run typecheck`, the full Node test suite (600 tests at that time: 597 passed, 3 environment-gated skips), and the complete `npm run build` Wrangler dry run with both container images. Root and vault-runtime `npm audit --audit-level=high` reported zero vulnerabilities. All 18 maintained documentation pages were reachable from `README.md` with no missing local target or heading fragment. Candidate-source privacy scanning and the public `/`, `/privacy`, and `/terms` smoke also passed.
+
+Authority checks have three standing checks, added on 2026-11-23. `tests/authority.test.ts` covers the checks that a mutation experiment found untested: the background tool list, approval cards in quiet hours, the nightly run's own schedule, its single commit, the lesson limit, background mail reading, and `authorize` for one request of every route family. `tests/profiles.test.ts` builds the tool profiles with the function the coordinator calls (`buildProfiles` in `src/worker/profiles.ts`) and compares them with `tests/fixtures/capabilities.json`: for each profile, each tool with its guards and classes. A change to who can call what is a diff of that file; `UPDATE_MANIFEST=1 npm test` rewrites it. The same test fails when the owner or background prompt (instruction sections plus tool definitions) grows more than 5% over `tests/fixtures/prompt-size.json`. `npm run test:mutants` (`scripts/mutate-authority.mjs`) removes each listed check in a temporary copy of the tree and reports whether the type check or a test noticed. It is run by hand and takes about 25 seconds per mutant. On 2026-11-23 it had 41 mutants: 39 killed, each by a test, and 2 known survivors in `src/worker/index.ts`, which no test can import (authorization before the coordinator's routes, and the delivery-holds dependency of Telegram delivery). The full suite then had 879 tests: 876 passed, with 3 environment-gated skips.
 
 Not established by the current evidence:
 
@@ -228,3 +230,4 @@ Not established by the current evidence:
 - 2026-10-19: Verified the Claude subscription route locally and on the hosted coordinator.
 - 2026-10-19: Diagnosed the stalled mail reviews, measured email cleaning, and added situation and brief test coverage.
 - 2026-10-19: Traced daily-note failures to a lapsed Obsidian Sync subscription.
+- 2026-11-23: Added authority tests, the capability manifest with a prompt-size limit, and the authority mutation check.

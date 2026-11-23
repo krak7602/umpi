@@ -1,7 +1,7 @@
 ---
 title: Development and operation
 aliases: [setup, startup, local assistant, executor recovery, hosted deployment, Gmail follow-through]
-updated: 2026-10-19
+updated: 2026-11-23
 ---
 
 # Development and operation
@@ -568,7 +568,7 @@ xcodebuild -project ios/Umpi.xcodeproj -scheme UmpiMac -destination 'platform=ma
   -derivedDataPath "$TMPDIR/UmpiMac" -allowProvisioningUpdates test
 ```
 
-The tests cover shortcut reading and display and which chat entries become notifications. Pair the Mac with a code from a paired phone (Settings › Server › Pair another device). Global shortcuts over full-screen apps, notifications, and the microphone in voice mode need a check by the owner on the Mac itself.
+The tests cover shortcut reading and display, which chat entries become notifications, and the message field: that it keeps focus and unfinished input-method text across SwiftUI updates, and what a paste does with text, images, and files. Pair the Mac with a code from a paired phone (Settings › Server › Pair another device). Global shortcuts over full-screen apps, notifications, and the microphone in voice mode need a check by the owner on the Mac itself.
 
 The Mac icon is drawn from the phone's artwork in the macOS icon shape. Regenerate it after the phone's icon:
 
@@ -712,6 +712,8 @@ npm run build
 `build` is a Wrangler **dry run**, not a deployment. Regression tests use isolated storage and real local processes where needed; they do not use production credentials or a live Telegram bot. The [verification record](../learning/assistant-core-verification.md) distinguishes those tests from the real-model smoke scenario.
 
 For a change to action behavior, also run the local system: send a real model request, inspect the persisted action, perform any required approval, and observe its actual effect and reply. Include restart or disconnect boundaries when changing ownership or scheduling.
+
+Two more checks need only Node. `npm run check:docs` checks relative links, heading anchors, reachability from `README.md`, front matter, and `updated:` dates; `-- --strict` makes its warnings fail. `npm run check:publishable` scans the staged files (`-- --all` scans every tracked and unignored file) for secret shapes, private identifiers, and non-example deployment origins. It also applies the patterns in the ignored `.publishable-deny.local`, one regular expression per line, without printing the matched text. `scripts/pre-commit.sh` runs `typecheck` and these two checks, not the test suite. To make git run it before each commit in this clone, use `git config core.hooksPath scripts/hooks`.
 
 ### Hosted operation
 

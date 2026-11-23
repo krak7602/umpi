@@ -1,7 +1,7 @@
 ---
 title: Subscription-backed model authentication
 aliases: [Claude subscription OAuth, ChatGPT OAuth, model credentials, OpenAI sign-in]
-updated: 2026-10-19
+updated: 2026-11-05
 ---
 
 # Subscription-backed model authentication

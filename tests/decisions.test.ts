@@ -2,7 +2,7 @@ import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import type { Database } from "../src/worker/store.js";
-import { DecisionUnavailable, Decisions, SPOKEN_EFFORT, chooseEffort, decisionTools, type WorkersAi } from "../src/worker/decisions.js";
+import { DecisionUnavailable, Decisions, EffortTally, SPOKEN_EFFORT, chooseEffort, decisionTools, wasCorrection, type WorkersAi } from "../src/worker/decisions.js";
 
 function database(t: TestContext): Database {
   const sqlite = new DatabaseSync(":memory:"); t.after(() => sqlite.close());
@@ -93,4 +93,19 @@ test("owner-message effort drops only on a confident quick or normal answer, and
   assert.equal(await chooseEffort(new Decisions(database(t), { async run() { throw new Error("down"); } }, () => 1_000), "hi", undefined, SPOKEN_EFFORT), "low", "a spoken turn does not wait for a failed decision");
   const slow: WorkersAi = { run: () => new Promise(resolve => setTimeout(() => resolve({}), 300)) };
   assert.equal(await chooseEffort(new Decisions(database(t), slow, () => 1_000), "hi", undefined, { timeoutMs: 20, fallback: "low" }), "low", "a late answer is not waited for");
+});
+
+test("a correction of the previous reply is counted against the effort that reply ran at", async t => {
+  let score = 0.9, seen: unknown;
+  const ai: WorkersAi = { async run(_model, raw) { seen = (raw as { state: unknown }).state; return { answers: { correction: { type: "noul", noul: score } }, usage: { input_tokens: 200 } }; } };
+  const db = database(t), decisions = new Decisions(db, ai, () => Date.parse("2027-03-10T10:00:00Z"));
+  assert.equal(await wasCorrection(decisions, "No, I said Thursday, not Tuesday.", "Booked for Tuesday."), true);
+  assert.deepEqual(seen, { previousReply: "Booked for Tuesday.", message: "No, I said Thursday, not Tuesday." });
+  score = 0.5; assert.equal(await wasCorrection(decisions, "And the week after?", "Booked for Thursday."), false, "an unsure answer is not a correction");
+  assert.equal(await wasCorrection(new Decisions(database(t), undefined, () => 1_000), "No.", "Done."), undefined, "nothing is counted without the model");
+  assert.equal(await wasCorrection(new Decisions(database(t), { async run() { throw new Error("down"); } }, () => 1_000), "No.", "Done."), undefined);
+  const tally = new EffortTally(db, () => Date.parse("2027-03-10T10:00:00Z"));
+  tally.turn("low"); tally.turn("low"); tally.turn("high");
+  tally.followed("low", true); tally.followed("low", false); tally.followed("high", false);
+  assert.deepEqual(tally.status(), [{ month: "2027-03", low: { turns: 2, checked: 2, corrected: 1 }, medium: { turns: 0, checked: 0, corrected: 0 }, high: { turns: 1, checked: 1, corrected: 0 } }]);
 });

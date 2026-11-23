@@ -11,6 +11,8 @@ export interface Database {
   transaction<T>(run: () => T): T;
 }
 export type Channel = "control" | "telegram";
+/** Where a button was pressed: on its Telegram message, or in the app on the chat entry of its message group. */
+export type ButtonBinding = number | { groupId: string };
 export interface OwnerMessageSource {
   /** Telegram or the Umpi app; both reach the owner's shared Telegram conversation. */
   kind: "telegram-text" | "telegram-voice" | "telegram-image" | "telegram-file" | "app-text" | "app-voice" | "app-image" | "app-file";
@@ -52,6 +54,12 @@ export interface Operation {
   surface?: "app";
   /** A spoken reply the owner cut off by talking, with what the phone had read aloud: its end is not a model failure. */
   interrupted?: { heard?: string };
+  /** The reasoning effort this owner turn ran at, to compare how often replies at each effort are corrected. */
+  effort?: "low" | "medium" | "high";
+  /** Set when something other than the owner started this turn: a result, a notice, or a card's prompt. */
+  origin?: "result";
+  /** Tools that brought text the owner did not write into this turn, such as mail or a web page. */
+  outside?: string[];
 }
 export interface Job {
   jobId: string; command: string; cwd: string; timeoutMs: number; createdAt: string;
@@ -271,9 +279,38 @@ export class Store {
         if (previous.text !== text || previous.sessionId !== sessionId || previous.channel !== channel) throw new StateError(409, "Result identity already contains different evidence");
         return previous;
       }
-      const op: Operation = { id, requestId: id, text, channel, sessionId, status: "admitted", createdAt: iso() };
+      const op: Operation = { id, requestId: id, text, channel, sessionId, origin: "result", status: "admitted", createdAt: iso() };
       this.operationWrite(op); return op;
     });
+  }
+  setEffort(id: string, effort: NonNullable<Operation["effort"]>): void {
+    const op = this.operation(id);
+    if (op && op.effort !== effort) this.operationWrite({ ...op, effort });
+  }
+  /** The turns of a conversation that are waiting or running: a tool call belongs to one of them. */
+  private inFlight(sessionId: string): Operation[] { return this.pendingOperations().filter(op => op.sessionId === sessionId); }
+  /** A tool is about to return text the owner did not write. Every turn in flight is marked, since any of them may read it. */
+  markOutsideText(sessionId: string, tool: string): void {
+    this.db.transaction(() => {
+      for (const op of this.inFlight(sessionId)) {
+        if (op.outside?.includes(tool) || (op.outside?.length ?? 0) >= 16) continue;
+        this.operationWrite({ ...op, outside: [...(op.outside ?? []), tool] });
+      }
+    });
+  }
+  /**
+   * Whether a tool call in this conversation acts on the owner's own request: every turn in flight was started by
+   * the owner, and none has read outside text. With no turn in flight the answer is no; an action is never allowed
+   * because its turn could not be found.
+   */
+  ownerDirected(sessionId: string): { ok: true } | { ok: false; why: string } {
+    const turns = this.inFlight(sessionId);
+    if (!turns.length) return { ok: false, why: "no owner message is being answered" };
+    if (turns.some(op => op.background)) return { ok: false, why: "this is a background review, not the owner's conversation" };
+    if (turns.some(op => op.origin === "result")) return { ok: false, why: "this turn was started by a result or notice, not by the owner" };
+    const outside = [...new Set(turns.flatMap(op => op.outside ?? []))];
+    if (outside.length) return { ok: false, why: `this turn read text the owner did not write (${outside.slice(0, 4).join(", ")}) after the owner's message` };
+    return { ok: true };
   }
   admitBackground(id: string, text: string, channel: Channel, sessionId: string, runId: string): Operation {
     identifier(id, "background operation ID"); boundedText(text, 65_536, "background input"); identifier(runId, "review ID");
@@ -481,13 +518,27 @@ export class Store {
     });
   }
   choices(): Choice[] { return this.rows("SELECT data FROM umpi_choices ORDER BY CASE WHEN status='pending' THEN 0 ELSE 1 END, rowid DESC LIMIT 100"); }
+  /**
+   * Whether `token` is a button of the message it was pressed on. A Telegram press names a confirmed send of `groupId`.
+   * An app press comes from the chat entry of the group, which holds the message's whole text; the coordinator checks
+   * that the entry still has the button before it calls a handler. `complete` also needs every part of a Telegram
+   * message confirmed, for a review the owner must read in full.
+   */
+  buttonShown(groupId: string, token: string, binding: ButtonBinding, complete = false): boolean {
+    const deliveries = this.deliveries(groupId);
+    const hasButton = (item: Delivery) => item.channel === "telegram" && !!item.replyMarkup?.inline_keyboard.some(row => row.some(button => button.callback_data === token));
+    if (typeof binding !== "number") return binding.groupId === groupId && deliveries.some(hasButton);
+    if (!Number.isSafeInteger(binding) || binding < 1) return false;
+    if (complete && deliveries.some((item, index) => item.part !== index || item.channel !== "telegram" || item.status !== "sent" || !Number.isSafeInteger(item.messageId) || item.messageId! < 1)) return false;
+    return deliveries.some(item => hasButton(item) && item.status === "sent" && item.messageId === binding);
+  }
   /** A button press, bound to its Telegram message or, from the app, to the message's group. */
-  resolveTelegramCallback(token: string, binding: number | { groupId: string }): { text: string; operationId?: string; replyMarkup: TelegramMarkup } {
+  resolveTelegramCallback(token: string, binding: ButtonBinding): { text: string; operationId?: string; replyMarkup: TelegramMarkup } {
     return this.db.transaction(() => {
       const messageId = typeof binding === "number" ? binding : undefined;
       if (typeof token !== "string" || !token || token.length > 64 || (messageId !== undefined && (!Number.isSafeInteger(messageId) || messageId < 1))) throw new StateError(400, "Invalid button");
       const interaction = this.rows<TelegramInteraction>("SELECT data FROM umpi_telegram_interactions WHERE token=?", token)[0];
-      if (!interaction) throw new StateError(409, messageId === undefined ? "This button can only be answered in Telegram for now" : "This button is no longer available");
+      if (!interaction) throw new StateError(409, "This button is no longer available");
       const hasButton = (item: Delivery) => item.channel === "telegram" && item.replyMarkup?.inline_keyboard.some(row => row.some(button => button.callback_data === token));
       const delivery = typeof binding === "number"
         ? this.deliveries(interaction.groupId).find(item => hasButton(item) && item.status === "sent" && item.messageId === messageId)
@@ -684,7 +735,16 @@ export class Store {
   }
   finishDelivery(id: string, status: "sent" | "failed" | "uncertain", error?: string, messageId?: number): void {
     const delivery = this.delivery(id); if (!delivery || delivery.status !== "sending") return;
-    this.deliveryWrite({ ...delivery, status, ...(error ? { error } : {}), ...(messageId !== undefined ? { messageId } : {}) });
+    this.db.transaction(() => {
+      this.deliveryWrite({ ...delivery, status, ...(error ? { error } : {}), ...(messageId !== undefined ? { messageId } : {}) });
+      if (status === "sent") return;
+      // Later parts can never pass a part that was not confirmed, so they end here and do not stay pending for ever.
+      for (const later of this.deliveries(delivery.groupId)) {
+        if (later.part > delivery.part && (later.status === "pending" || later.status === "held")) {
+          this.deliveryWrite({ ...later, status: "cancelled", error: `Not sent: part ${delivery.part + 1} of this message was not confirmed (${status})` });
+        }
+      }
+    });
   }
   recoverDeliveries(): void {
     for (const delivery of this.rows<Delivery>("SELECT data FROM umpi_outbox WHERE status='sending'")) {

@@ -1,5 +1,5 @@
 import { MailRuntime } from "./mail-runtime.js";
-import { StateError, type TelegramMarkup } from "./store.js";
+import { StateError, type ButtonBinding, type TelegramMarkup } from "./store.js";
 
 type MailButton = { groupId: string; settingsVersion: number } & (
   | { action: "configure"; enabled: boolean; lookbackDays: number; pollMinutes: number }
@@ -73,17 +73,14 @@ export function enqueueMailControls(runtime: MailRuntime, requestId: string): vo
 }
 
 /** Parent performs Telegram owner checks before this version-bound effect. */
-export async function handleMailCallback(runtime: MailRuntime, token: string, messageId: number): Promise<MailCallbackResult | undefined> {
+export async function handleMailCallback(runtime: MailRuntime, token: string, binding: ButtonBinding): Promise<MailCallbackResult | undefined> {
   if (!token.startsWith("mail:")) return;
   table(runtime);
   const { store } = runtime, owner = store.proactive.owner;
   const row = owner.db.all<{ data: string }>("SELECT data FROM umpi_mail_buttons WHERE token=?", token)[0];
   if (!row) throw new StateError(409, "This mail control is no longer available. Open /mail again.");
   const button = JSON.parse(row.data) as MailButton;
-  if (!owner.deliveries(button.groupId).some(delivery => delivery.channel === "telegram" && delivery.status === "sent" && delivery.messageId === messageId
-    && delivery.replyMarkup?.inline_keyboard.some(buttons => buttons.some(item => item.callback_data === token)))) {
-    throw new StateError(409, "This mail control does not belong to that confirmed message.");
-  }
+  if (!owner.buttonShown(button.groupId, token, binding)) throw new StateError(409, "This mail control does not belong to that confirmed message.");
   let wake = false;
   const response = owner.effect<MailCallbackResult>(`mail-button:${token}`, () => {
     if (store.settings().version !== button.settingsVersion) throw new StateError(409, "Mail settings changed. Open /mail again.");

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { InputError, boundedText, record, timestamp } from "../shared/protocol.js";
 import type { ExtractedFact } from "./mail-facts.js";
-import { MAIL_SCREEN_ATTENTION, MAIL_SCREEN_FACTS, type MailScreenInput, type MailScreenVerdict } from "./mail-screen.js";
+import { MAIL_SCREEN_ATTENTION, MAIL_SCREEN_AUDIT_ONE_IN, MAIL_SCREEN_FACTS, mailScreenAudited, type MailScreenInput, type MailScreenVerdict } from "./mail-screen.js";
 import type { GmailCategory, GmailSyncContinuation, GmailSyncRequest, GmailSyncResult, GmailThreadSnapshot } from "./gmail.js";
 import { ProactiveStore, type Commitment, type ProactiveRun } from "./proactive-store.js";
 import type { SituationStore } from "./situation-store.js";
@@ -69,7 +69,9 @@ export interface MailThread {
    */
   replyCheck?: { at: string; factIds: string[]; request: string; reply: string };
   /** The decision-model screen of this content; removed when new mail arrives. Absent while screening is waiting. */
-  screen?: { at: string; passed: boolean; attention?: number; facts?: number; unavailable?: true; extracted?: true };
+  screen?: { at: string; passed: boolean; attention?: number; facts?: number; unavailable?: true; extracted?: true;
+    /** The screen would have skipped this thread; it went to the review anyway, to measure the screen. */
+    audit?: true };
   updatedAt: string;
 }
 export interface MailAccountSync {
@@ -85,6 +87,7 @@ export interface MailAccountSync {
 }
 export interface MailMeta { scanVersion: 3; settings: MailSettings }
 type LegacyMeta = { scanVersion?: number; settings: MailSettings; truncated?: boolean } & Partial<Omit<MailAccountSync, "id">>;
+interface MailAuditTally { reviewed: number; missed: number; factsMissed: number; missScores: { attention: number; facts: number }[] }
 export interface MailTriageDecision {
   id: string;
   expectedVersion: number;
@@ -168,6 +171,7 @@ export class MailStore {
       "CREATE TABLE IF NOT EXISTS umpi_mail_reviews (run_id TEXT PRIMARY KEY, status TEXT NOT NULL, data TEXT NOT NULL)",
       "CREATE INDEX IF NOT EXISTS umpi_mail_status ON umpi_mail_threads(status,received)",
       "CREATE INDEX IF NOT EXISTS umpi_mail_snoozes ON umpi_mail_threads(status,snooze_due)",
+      "CREATE TABLE IF NOT EXISTS umpi_mail_audit (month TEXT PRIMARY KEY, data TEXT NOT NULL)",
     ]) this.db.all(sql);
     this.db.all("INSERT OR IGNORE INTO umpi_mail_meta VALUES (1,?)", JSON.stringify({
       scanVersion: 3, settings: { version: 1, enabled: false, lookbackDays: MAIL_DEFAULT_LOOKBACK_DAYS, pollMinutes: MAIL_DEFAULT_POLL_MINUTES },
@@ -454,8 +458,11 @@ export class MailStore {
       const old = this.thread(id);
       if (!old || old.providerVersion !== providerVersion || old.screen || (old.status !== "pending" && !old.factsPending)) return undefined;
       const triage = old.status === "pending", at = iso(now);
-      const passed = verdict === null || (triage ? old.starred === true || verdict.attention >= MAIL_SCREEN_ATTENTION || verdict.facts >= MAIL_SCREEN_FACTS : verdict.facts >= MAIL_SCREEN_FACTS);
-      const screen: NonNullable<MailThread["screen"]> = verdict === null ? { at, passed, unavailable: true } : { at, passed, attention: verdict.attention, facts: verdict.facts };
+      const clears = verdict === null || (triage ? old.starred === true || verdict.attention >= MAIL_SCREEN_ATTENTION || verdict.facts >= MAIL_SCREEN_FACTS : verdict.facts >= MAIL_SCREEN_FACTS);
+      // A sample of what the screen would skip is reviewed anyway; the review's decision measures the screen.
+      const audit = !clears && triage && mailScreenAudited(old.id, providerVersion);
+      const passed = clears || audit;
+      const screen: NonNullable<MailThread["screen"]> = verdict === null ? { at, passed, unavailable: true } : { at, passed, attention: verdict.attention, facts: verdict.facts, ...(audit ? { audit: true as const } : {}) };
       let next: MailThread = { ...old, version: old.version + 1, screen, updatedAt: at };
       if (!passed && triage) {
         next = { ...next, status: "ignored", messages: [], summary: `Skipped without review: screened as unlikely to need you (${Math.round(verdict!.attention * 100)}%).`, factScan: MAIL_FACT_SCAN_VERSION };
@@ -608,6 +615,7 @@ export class MailStore {
             messages: decision.outcome === "notify" ? old.messages : [], updatedAt: iso(now) };
           if (decision.outcome === "notify") next.notificationPending = true; else delete next.notificationPending;
           delete next.factsPending;
+          if (old.screen?.audit) this.countAudit(old.screen, decision.outcome === "notify", (perThread.get(old.id) ?? 0) > 0, now);
         }
         this.writeThread(next);
       }
@@ -620,6 +628,26 @@ export class MailStore {
       return { committed: true, notification: notification !== null, items: review.items.length, attention: aggregate.count, morePending, factsRecorded: recorded,
         ...(rejected.length ? { rejectedFacts: rejected.slice(0, 20) } : {}) };
     });
+  }
+  /**
+   * One audited thread decided by the review. `missed`: the review found it needs the owner, so the screen would have
+   * lost it. `factsMissed`: the review recorded a fact from it. Only scores are kept, never mail text.
+   */
+  private countAudit(screen: NonNullable<MailThread["screen"]>, missed: boolean, factsMissed: boolean, now: number): void {
+    const month = iso(now).slice(0, 7);
+    const row = this.db.all<{ data: string }>("SELECT data FROM umpi_mail_audit WHERE month=?", month)[0];
+    const tally = row ? JSON.parse(row.data) as MailAuditTally : { reviewed: 0, missed: 0, factsMissed: 0, missScores: [] };
+    tally.reviewed++;
+    if (missed) tally.missed++;
+    if (factsMissed) tally.factsMissed++;
+    if (missed || factsMissed) tally.missScores = [...tally.missScores, { attention: screen.attention ?? 0, facts: screen.facts ?? 0 }].slice(-20);
+    this.db.all("INSERT INTO umpi_mail_audit VALUES (?,?) ON CONFLICT(month) DO UPDATE SET data=excluded.data", month, JSON.stringify(tally));
+    this.db.all("DELETE FROM umpi_mail_audit WHERE month < ?", iso(now - 400 * 86_400_000).slice(0, 7));
+  }
+  /** The screen's measured miss rate by month, newest first. */
+  auditStatus(): object {
+    const months = this.db.all<{ month: string; data: string }>("SELECT month, data FROM umpi_mail_audit ORDER BY month DESC LIMIT 12").map(row => ({ month: row.month, ...JSON.parse(row.data) as MailAuditTally }));
+    return { oneIn: MAIL_SCREEN_AUDIT_ONE_IN, thresholds: { attention: MAIL_SCREEN_ATTENTION, facts: MAIL_SCREEN_FACTS }, months };
   }
   private pendingNotification(): { count: number; threads: MailThread[] } {
     const count = this.db.all<{ count: number }>("SELECT count(*) AS count FROM umpi_mail_threads WHERE status='attention' AND json_extract(data,'$.notificationPending')=1")[0]?.count ?? 0;
@@ -688,7 +716,7 @@ export class MailStore {
     const primary = accounts.find(account => account.id === MAIL_PRIMARY_ACCOUNT);
     return { enabled: settings.enabled, settings, bootstrapAfter: primary?.bootstrapAfter ?? null, bootstrapped: accounts.length > 0 && accounts.every(account => account.bootstrapped),
       scanInProgress: accounts.some(account => account.scanInProgress), lastStatus: primary?.lastStatus ?? null, issue: accounts.find(account => account.issue)?.issue ?? null,
-      accounts, counts: Object.fromEntries(counts.map(row => [row.status, row.count])), factsPending, screen: this.screenStatus() };
+      accounts, counts: Object.fromEntries(counts.map(row => [row.status, row.count])), factsPending, screen: this.screenStatus(), screenAudit: this.auditStatus() };
   }
   /** Screen outcomes among retained threads: passed to review, skipped, or passed because the screen failed. */
   private screenStatus(): object {

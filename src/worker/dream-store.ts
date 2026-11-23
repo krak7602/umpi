@@ -16,6 +16,8 @@ export const DREAM_RETRY: RetryPolicy = { everyMinutes: 60, maxAttempts: 3 };
 const MAX_ACTIVE_LESSONS = 30;
 const MAX_LESSON_EDITS = 5;
 const DIGEST_DAYS_KEPT = 400;
+/** Night records hold the probes, a long-running test set for history search, and cost little: twice the digest time. */
+const NIGHT_DAYS_KEPT = 800;
 /** A conversation part handed to the night at a time; the night reads every part. */
 export const DREAM_PART_CHARS = 60_000;
 const PASSAGE_CHARS = 2_000;
@@ -35,6 +37,42 @@ export function notePassages(text: string): string[] {
   if (current.trim()) passages.push(current.trim());
   return passages;
 }
+
+// Probe re-check -------------------------------------------------------------------------------------------------
+// Old probes are a labelled test set for history search: each is a question whose answer is in one known day. Each
+// night a small sample is searched again and the place of that day in the results is counted, by the age of the day.
+/** Age ranges in days before the re-checked day. The oldest ends where day digests and conversation text are dropped. */
+export const RECHECK_BUCKETS = [{ id: "2-7", from: 2, to: 7 }, { id: "8-30", from: 8, to: 30 }, { id: "31-120", from: 31, to: 120 }, { id: "121+", from: 121, to: DIGEST_DAYS_KEPT }] as const;
+/** Probes searched each night: three for each age range, or more from the others while a range is still empty. */
+export const RECHECK_SAMPLE = 12;
+export type RecheckBucket = typeof RECHECK_BUCKETS[number]["id"];
+/** `full` ran the query embedding and the reranker; `keywordOnly` ran neither. The two are never added together. */
+export type RecheckMode = "full" | "keywordOnly";
+export interface RecheckProbe { day: string; bucket: RecheckBucket; question: string }
+/** `rank` is the place, from 0, of the first passage of the probe's day in the top 10 results; null when none is there. */
+export interface RecheckOutcome { bucket: RecheckBucket; mode: RecheckMode; rank: number | null }
+/** `top1`, `top3`, and `top10` are cumulative: `top1 <= top3 <= top10`, and `count = top10 + missing`. */
+export interface RecheckCounts { count: number; top1: number; top3: number; top10: number; missing: number }
+export type RecheckMonth = Partial<Record<RecheckMode, Partial<Record<RecheckBucket, RecheckCounts>>>>;
+/**
+ * The last re-check. `untallied` probes were searched but not counted: only one of the two model steps ran, or the
+ * question had no word to search for. `unavailable` counts the searches that lacked each step. It holds no probe text.
+ */
+export interface RecheckRun {
+  day: string; at: string; sampled: number; full: number; keywordOnly: number; untallied: number;
+  unavailable: { meaning: number; rerank: number };
+  /** The month's decision budget was used, so nothing was searched. */
+  skipped?: "budget";
+  error?: string;
+}
+/** A fixed pseudo-random order for a key: FNV-1a with a final mix, so keys that differ in one character are far apart. */
+function sampleOrder(key: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < key.length; i++) hash = Math.imul(hash ^ key.charCodeAt(i), 0x01000193);
+  hash ^= hash >>> 16; hash = Math.imul(hash, 0x85ebca6b); hash ^= hash >>> 13; hash = Math.imul(hash, 0xc2b2ae35);
+  return (hash ^ (hash >>> 16)) >>> 0;
+}
+
 /** A day this long is closed early with the anchored summary, before the 550k threshold. */
 export const LONG_DAY_TOKENS = 450_000;
 const LONG_DAY_GAP_MS = 3 * 3_600_000;
@@ -68,10 +106,18 @@ export interface Night {
   /** Reply drafts saved on mail items overnight. */
   drafts?: number;
   compaction: { at: string; sessions: number; failed: number; probesKept: number; probesRepaired: number; error?: string } | null;
+  /** Owner lines the commit could check quotes against. Zero on a day with conversation means no owner input was recognized. */
+  ownerLines?: number;
+  /** What the commit refused because no owner line of the day grounds it: instruction texts and lesson edits, shortened. */
+  dropped?: { instructions: string[]; lessons: string[] };
 }
 export interface Digest { id: string; level: "day" | "week" | "month" | "year"; period: string; text: string; data: DayDigest | null; updatedAt: string }
-/** A day's conversation line; `file` names a document the owner shared, which is read overnight but not indexed raw. */
-export interface TranscriptLine { at: number; text: string; file?: string }
+/**
+ * A day's conversation line; `file` names a document the owner shared, which is read overnight but not indexed raw.
+ * `owner` holds what the owner typed or said in that message. Code sets it from the authenticated message record, so
+ * only these lines can ground a standing instruction or lesson evidence.
+ */
+export interface TranscriptLine { at: number; text: string; file?: string; owner?: string }
 export interface Lesson {
   id: string; version: number; text: string; status: "active" | "retired";
   /** Nights whose evidence confirmed the lesson; a well-supported lesson is kept over a newer one when merging. */
@@ -86,6 +132,48 @@ function texts(value: unknown, max: number, each: number, label: string): string
   if (!Array.isArray(value) || value.length > max) throw new InputError(`${label} must be a list of at most ${max}`);
   return value.map(item => boundedText(item, each, label).trim()).filter(Boolean);
 }
+
+// Quote grounding ------------------------------------------------------------------------------------------------
+// Standing instructions and lessons become prompt content for every later conversation, and the night also reads
+// text other people wrote (mail, web pages, files, task results). So code accepts them only as quotes of the owner.
+//
+// The rule: after normalization, the words of the quote are one contiguous run of the words of one single owner
+// message, and at least MIN_QUOTE_WORDS long unless the quote is that whole message. Normalization is Unicode NFKC,
+// lower case, apostrophes removed, a split at everything that is not a letter, mark, or digit (so case, punctuation,
+// quotation marks, and whitespace do not matter), and a short list of filler words left out on both sides.
+//
+// Why contiguous and in order, not "every content word occurs in the line": a long owner message holds enough words
+// to build a different instruction from them, and a changed order or a left-out "not" reverses the meaning. With
+// this rule every word of a stored instruction is the owner's, in the owner's order, with nothing added, changed, or
+// moved. An honest copy still passes: the night may cut the owner's sentence at the start and the end, change case
+// and punctuation, and leave out fillers. Only words that never carry meaning are fillers, so the list is an allow
+// list, and for a language it does not cover the rule is only stricter.
+//
+// What the rule cannot do: it does not know meaning. A cut at the start or end can leave out a condition, and a
+// sentence the owner said once can be stored as a standing one. Both use only the owner's own words.
+const MIN_QUOTE_WORDS = 3;
+const FILLER_WORDS = new Set("um umm uh uhh erm hm hmm ah oh please pls".split(" "));
+/** The words of a text for quote comparison. */
+export function quoteWords(text: string): string[] {
+  return text.normalize("NFKC").toLowerCase().replace(/['\u2018\u2019\u02bc]/g, "").split(/[^\p{L}\p{M}\p{N}]+/u).filter(word => word && !FILLER_WORDS.has(word));
+}
+/** True when `text` quotes one of the owner lines, given as their `quoteWords`. */
+export function quotesOwner(text: string, ownerLines: string[][]): boolean {
+  const words = quoteWords(text), run = ` ${words.join(" ")} `;
+  if (!words.length) return false;
+  return ownerLines.some(line => line.length === words.length ? line.join(" ") === words.join(" ") : words.length >= MIN_QUOTE_WORDS && ` ${line.join(" ")} `.includes(run));
+}
+/**
+ * True when lesson evidence quotes the owner: one of its spans in double quotation marks is a quote of an owner line,
+ * or, without quotation marks, the whole evidence is.
+ */
+export function evidenceQuotesOwner(evidence: string, ownerLines: string[][]): boolean {
+  const spans = [...evidence.matchAll(/["\u201c\u201d\u00ab\u00bb]([^"\u201c\u201d\u00ab\u00bb]+)["\u201c\u201d\u00ab\u00bb]/g)].map(match => match[1]!);
+  return (spans.length ? spans : [evidence]).some(span => quotesOwner(span, ownerLines));
+}
+export const UNGROUNDED_INSTRUCTION = "not found in an owner message of that day";
+export const UNGROUNDED_EVIDENCE = "the evidence does not quote an owner message of that day";
+
 function keys(body: Record<string, unknown>, allowed: string[], label: string): void {
   const unknown = Object.keys(body).find(key => !allowed.includes(key));
   if (unknown) throw new InputError(`Unknown ${label} field: ${unknown}`);
@@ -120,6 +208,8 @@ export class DreamStore {
       "CREATE INDEX IF NOT EXISTS umpi_digest_level ON umpi_digests(level,period)",
       "CREATE TABLE IF NOT EXISTS umpi_lessons (id TEXT PRIMARY KEY, status TEXT NOT NULL, data TEXT NOT NULL)",
       "CREATE TABLE IF NOT EXISTS umpi_dream_parts (day TEXT NOT NULL, part INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (day, part))",
+      // One row for each month ("2026-11") with its tally, and one row "last" for the last run.
+      "CREATE TABLE IF NOT EXISTS umpi_dream_recheck (id TEXT PRIMARY KEY, data TEXT NOT NULL)",
     ]) this.db.all(sql);
     this.db.all("INSERT OR IGNORE INTO umpi_dream_settings VALUES (1,?)", JSON.stringify({ version: 1, enabled: false, time: DREAM_DEFAULT_TIME } satisfies DreamSettings));
   }
@@ -259,6 +349,24 @@ export class DreamStore {
     });
     return parts.length;
   }
+  /**
+   * What the owner typed or said since `since`, keyed by the exact model input it was submitted as. It reads the
+   * message records `Store.admit` wrote for the authenticated Telegram, app, and control paths. A job, coding, or
+   * browser result, a task report, a tapped answer, and background input have other operation IDs, so they are never
+   * taken for the owner, although the model receives them in the same role. A voice note's caption is owner input;
+   * the app's context note and a shared file's text are not.
+   */
+  ownerInputs(since: number): Map<string, string> {
+    const messages = this.rows<{ text: string; modelInput?: string; background?: object; origin?: string; ownerSource?: { caption?: string } }>(
+      "SELECT data FROM umpi_operations WHERE id LIKE 'message:%' AND json_extract(data,'$.createdAt') >= ?", iso(since - 86_400_000));
+    return new Map(messages.filter(message => !message.background && !message.origin).map(message => [message.modelInput ?? message.text, [message.ownerSource?.caption, message.text].filter(Boolean).join("\n")]));
+  }
+  /** The owner's lines of the day's saved conversation, as words for the quote check. */
+  private ownerLines(day: string): string[][] {
+    const lines: string[][] = [];
+    for (let part = 1; part <= this.partCount(day); part++) for (const line of this.part(day, part)) if (typeof line.owner === "string") lines.push(quoteWords(line.owner));
+    return lines.filter(line => line.length);
+  }
   partCount(day: string): number { return this.db.all<{ n: number }>("SELECT count(*) AS n FROM umpi_dream_parts WHERE day=?", day)[0]!.n; }
   part(day: string, part: number): TranscriptLine[] {
     const row = this.db.all<{ data: string }>("SELECT data FROM umpi_dream_parts WHERE day=? AND part=?", day, part)[0];
@@ -366,6 +474,16 @@ export class DreamStore {
     return this.db.transaction(() => {
       const { run, night } = this.forSession(sessionId, now);
       if (night.status !== "requested") return night;
+      // A standing instruction is kept only when it was already accepted (the last seven digests and any earlier
+      // digest of this day) or it quotes an owner line of the day. Anything else is dropped, not rewritten.
+      const ownerLines = this.ownerLines(night.day), dropped = { instructions: [] as string[], lessons: [] as string[] };
+      const accepted = new Map(this.dayDigests(shiftPlanningDay(night.day, -7), night.day).flatMap(old => old.data?.standingInstructions ?? []).map(text => [quoteWords(text).join(" "), text]));
+      digest.standingInstructions = [...new Set(digest.standingInstructions.flatMap(text => {
+        const key = quoteWords(text).join(" "), carried = key ? accepted.get(key) : undefined;
+        if (carried !== undefined) return [carried];
+        if (quotesOwner(text, ownerLines)) return [text.replace(/\s+/g, " ")];
+        dropped.instructions.push(text.slice(0, 160)); return [];
+      }))];
       // The inputs include any earlier digest of this day, and the model writes the whole day, so this replaces it.
       const updatedAt = iso(now);
       this.saveDigest({ id: `day:${night.day}`, level: "day", period: night.day, text: digest.summary, data: digest, updatedAt });
@@ -376,16 +494,26 @@ export class DreamStore {
       this.index?.prune("conversation", Date.parse(planningDayBounds(shiftPlanningDay(night.day, -DIGEST_DAYS_KEPT), this.timezone).start));
       const drafted = drafts.filter(draft => draft.text && this.saveDraft(draft.mailId, draft.text, now)).length;
       let applied = 0;
-      for (const edit of edits) { try { this.editLesson(edit, "dream", now); applied++; } catch (error) { if (!(error instanceof InputError)) throw error; } }
+      for (const edit of edits) {
+        try {
+          // The night's lesson edits need evidence in the owner's words; the owner's own revert does not pass here.
+          const { op, id, text, evidence } = record(edit);
+          if (typeof evidence !== "string" || !evidenceQuotesOwner(evidence, ownerLines)) { dropped.lessons.push([op, id, text].filter(item => typeof item === "string").join(" ").slice(0, 160)); continue; }
+          this.editLesson(edit, "dream", now); applied++;
+        } catch (error) { if (!(error instanceof InputError)) throw error; }
+      }
       this.db.all("DELETE FROM umpi_digests WHERE level='day' AND period < ?", shiftPlanningDay(night.day, -DIGEST_DAYS_KEPT));
       this.index?.pruneDays(shiftPlanningDay(night.day, -DIGEST_DAYS_KEPT));
-      return this.saveNight({ ...night, version: night.version + 1, status: "committed", runId: run.id, committedAt: updatedAt, probes, overnight, lessonEdits: applied, drafts: drafted });
+      this.db.all("DELETE FROM umpi_dream_nights WHERE day < ?", shiftPlanningDay(night.day, -NIGHT_DAYS_KEPT));
+      return this.saveNight({ ...night, version: night.version + 1, status: "committed", runId: run.id, committedAt: updatedAt, probes, overnight, lessonEdits: applied, drafts: drafted,
+        ownerLines: ownerLines.length, ...(dropped.instructions.length || dropped.lessons.length ? { dropped } : {}) });
     });
   }
   finishInput(sessionId: string, original: unknown, now = Date.now()): Record<string, unknown> {
     const { run, night } = this.forSession(sessionId, now);
     if (night.status === "requested" || night.runId !== run.id) throw new StateError(409, "Commit the nightly result before finishing this review");
-    return { ...record(original), outcome: "advanced", note: `Closed ${night.day}: digest written, ${night.probes.length} probe(s), ${night.lessonEdits} lesson edit(s).`,
+    const ungrounded = (night.dropped?.instructions.length ?? 0) + (night.dropped?.lessons.length ?? 0);
+    return { ...record(original), outcome: "advanced", note: `Closed ${night.day}: digest written, ${night.probes.length} probe(s), ${night.lessonEdits} lesson edit(s)${ungrounded ? `, ${ungrounded} item(s) dropped because they did not quote the owner` : ""}.`,
       nextReviewAt: null, nextAction: "Wait for the next night.", blocker: null, notification: undefined };
   }
 
@@ -400,6 +528,61 @@ export class DreamStore {
   overnightFor(now = Date.now()): Night["overnight"] {
     const night = this.lastNight();
     return night?.overnight && night.committedAt && now - Date.parse(night.committedAt) < 20 * 3_600_000 ? night.overnight : null;
+  }
+
+  // Probe re-check -----------------------------------------------------------------------------------------------
+  private lastRecheck(): RecheckRun | undefined { return this.rows<RecheckRun>("SELECT data FROM umpi_dream_recheck WHERE id='last'")[0]; }
+  /** The day to re-check old probes for: the last night's day, once its own work is done and once for each day. */
+  recheckDue(): string | undefined {
+    const night = this.lastNight(), last = this.lastRecheck();
+    return night?.status === "compacted" && (!last || last.day < night.day) ? night.day : undefined;
+  }
+  /**
+   * The old probes to search again for `day`: at most RECHECK_SAMPLE, taken in turn from each age range, so every
+   * range that has probes is covered equally. The choice depends only on `day` and the stored nights, so a repeated
+   * call returns the same probes. Inside a range, a second probe of one night is taken only after every other night.
+   */
+  recheckSample(day: string): RecheckProbe[] {
+    const nights = this.db.all<{ day: string; probes: string | null }>("SELECT day, json_extract(data,'$.probes') AS probes FROM umpi_dream_nights WHERE day>=? AND day<=? AND json_extract(data,'$.status')<>'requested'",
+      shiftPlanningDay(day, -RECHECK_BUCKETS.at(-1)!.to), shiftPlanningDay(day, -RECHECK_BUCKETS[0].from)).map(row => ({ day: row.day, probes: JSON.parse(row.probes ?? "[]") as Probe[] }));
+    const pools = RECHECK_BUCKETS.map(bucket => {
+      const from = shiftPlanningDay(day, -bucket.to), to = shiftPlanningDay(day, -bucket.from), seen = new Set<string>(), first: RecheckProbe[] = [], rest: RecheckProbe[] = [];
+      const ordered = nights.filter(night => night.day >= from && night.day <= to)
+        .flatMap(night => night.probes.map((probe, index) => ({ day: night.day, bucket: bucket.id, question: probe.question, order: sampleOrder(`${day}|${night.day}|${index}`) })))
+        .sort((a, b) => a.order - b.order || a.day.localeCompare(b.day));
+      for (const { order: _order, ...probe } of ordered) { if (seen.has(probe.day)) rest.push(probe); else { seen.add(probe.day); first.push(probe); } }
+      return [...first, ...rest];
+    });
+    const sample: RecheckProbe[] = [];
+    for (let round = 0; sample.length < RECHECK_SAMPLE && pools.some(pool => pool.length > round); round++) {
+      for (const pool of pools) if (pool[round] && sample.length < RECHECK_SAMPLE) sample.push(pool[round]!);
+    }
+    return sample;
+  }
+  /**
+   * Saves one re-check and adds its outcomes to the month of `run.day`. A day is recorded once: a second record for
+   * the same or an earlier day changes nothing and returns false. Only counts are stored, never a question or answer.
+   */
+  recordRecheck(run: Omit<RecheckRun, "full" | "keywordOnly">, outcomes: RecheckOutcome[] = []): boolean {
+    return this.db.transaction(() => {
+      const last = this.lastRecheck();
+      if (last && last.day >= run.day) return false;
+      const month = run.day.slice(0, 7), tally = this.rows<RecheckMonth>("SELECT data FROM umpi_dream_recheck WHERE id=?", month)[0] ?? {};
+      for (const { bucket, mode, rank } of outcomes) {
+        const counts = (tally[mode] ??= {})[bucket] ??= { count: 0, top1: 0, top3: 0, top10: 0, missing: 0 };
+        counts.count++;
+        if (rank === null) counts.missing++; else { counts.top10++; if (rank < 3) counts.top3++; if (rank === 0) counts.top1++; }
+      }
+      const save = (id: string, data: object) => this.db.all("INSERT INTO umpi_dream_recheck VALUES (?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data", id, JSON.stringify(data));
+      if (outcomes.length) save(month, tally);
+      save("last", { ...run, full: outcomes.filter(outcome => outcome.mode === "full").length, keywordOnly: outcomes.filter(outcome => outcome.mode === "keywordOnly").length } satisfies RecheckRun);
+      return true;
+    });
+  }
+  /** The last run and the last 12 monthly tallies, newest first. `top1 / count` for each age range is the number to compare. */
+  recheckStatus(): { lastRun: RecheckRun | null; months: ({ month: string } & RecheckMonth)[] } {
+    return { lastRun: this.lastRecheck() ?? null,
+      months: this.db.all<{ id: string; data: string }>("SELECT id, data FROM umpi_dream_recheck WHERE id<>'last' ORDER BY id DESC LIMIT 12").map(row => ({ month: row.id, ...JSON.parse(row.data) as RecheckMonth })) };
   }
 
   /**
@@ -430,8 +613,9 @@ export class DreamStore {
     const settings = this.settings(), last = this.lastNight();
     const counts = this.db.all<{ level: string; n: number }>("SELECT level, count(*) AS n FROM umpi_digests GROUP BY level");
     return { settings, nextAt: this.nextDue(now) === undefined ? null : iso(this.nextDue(now)!),
-      lastNight: last ? { day: last.day, status: last.status, manual: last.manual, committedAt: last.committedAt, probes: last.probes.length, lessonEdits: last.lessonEdits, drafts: last.drafts ?? 0, compaction: last.compaction } : null,
-      digests: Object.fromEntries(counts.map(row => [row.level, row.n])), lessons: this.lessons().length, history: this.index?.status() ?? null };
+      lastNight: last ? { day: last.day, status: last.status, manual: last.manual, committedAt: last.committedAt, probes: last.probes.length, lessonEdits: last.lessonEdits, drafts: last.drafts ?? 0,
+        ownerLines: last.ownerLines ?? null, ungrounded: { instructions: last.dropped?.instructions.length ?? 0, lessons: last.dropped?.lessons.length ?? 0 }, compaction: last.compaction } : null,
+      digests: Object.fromEntries(counts.map(row => [row.level, row.n])), lessons: this.lessons().length, history: this.index?.status() ?? null, recheck: this.recheckStatus() };
   }
 }
 

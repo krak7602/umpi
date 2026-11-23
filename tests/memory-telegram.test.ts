@@ -10,7 +10,8 @@ import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { sourceRevision, type CoreBlock } from "../src/shared/core-context.js";
 import { coreContextTools, proposeMemoryUpdate, readCoreContext, readMemoryHistory, readMemoryReview, readMemoryReviews, replaceCoreContext } from "../src/worker/core-context.js";
-import { enqueueMemoryOverview, handleMemoryTelegramCallback, reconcileMemoryTelegram } from "../src/worker/memory-telegram.js";
+import { deviceMemoryReviews, enqueueMemoryOverview, handleMemoryTelegramCallback, memoryDecisionButton, reconcileMemoryTelegram } from "../src/worker/memory-telegram.js";
+import { companionRole } from "../src/worker/companion-routes.js";
 import { StateError, Store, type Database, type Delivery } from "../src/worker/store.js";
 
 const context = BACKGROUND_CONTEXT;
@@ -306,4 +307,59 @@ test("history stays readable but cannot offer restoration for a remapped topic",
   assert.ok(actions.every(action => action.kind !== "restore" && action.kind !== "decision"));
   assert.deepEqual(await readCoreContext(f.harness, context), current);
   assert.equal((await readMemoryReviews(f.harness, context)).length, 0);
+});
+
+test("a review card leads with the changed lines, then the whole topic before and after", async t => {
+  const f = await fixture(t);
+  const before = await block("Use short summaries.\nAnswer in English.\nNo emoji.");
+  await replaceCoreContext(f.harness, context, { expectedRevision: 0, blocks: [before] });
+  const review = await proposeMemoryUpdate(f.harness, context, { id: "lines", expectedRevision: 1, blockId: before.id, text: "Use short summaries.\nAnswer in plain English.\nNo emoji.\nPrefer worked examples.", reason: "Owner asked for examples.", conversationId: "control-session" });
+  await reconcileMemoryTelegram(f.harness, context, f.store);
+  const text = f.store.deliveries(`memory:review:${review.id}`).map(part => part.text).join("");
+  assert.ok(text.includes("− Answer in English.\n+ Answer in plain English.\n+ Prefer worked examples."), text);
+  assert.ok(!text.includes("− Use short summaries."), "an unchanged line is not listed as a change");
+  const order = ["Topic", "Reason", "What changes", "Whole topic before", "Whole topic after", "Source"].map(label => text.indexOf(`\n\n${label}`));
+  assert.deepEqual(order, [...order].sort((a, b) => a - b));
+  assert.ok(order.every(position => position > 0));
+  assert.ok(text.includes(before.text) && text.includes(review.afterText), "the complete before and after text is still shown");
+});
+
+test("a review that never reached Telegram is decided from the app, bound to its own chat entry", async t => {
+  const f = await fixture(t);
+  const review = await proposed(f);
+  const group = `memory:review:${review.id}`;
+  // Telegram is turned off: the card is discarded there, and the app's chat entry is the only copy the owner reads.
+  f.store.discardDeliveryGroup(group, "Telegram is turned off; this message is in the app's chat.");
+  const card = f.store.deliveries(group).at(-1)!;
+  assert.equal(card.status, "cancelled");
+  const approve = button(card, "Approve");
+  await assert.rejects(handleMemoryTelegramCallback(f.harness, context, f.store, approve, 100), StateError, "no Telegram message carries the button");
+  await assert.rejects(handleMemoryTelegramCallback(f.harness, context, f.store, approve, { groupId: "memory:review:another" }), StateError, "another message's chat entry cannot press it");
+  assert.equal((await readMemoryReview(f.harness, context, review.id)).status, "pending");
+  const result = await handleMemoryTelegramCallback(f.harness, context, f.store, approve, { groupId: group });
+  assert.match(result!.text, /Approved as memory revision 2/);
+  assert.equal((await readCoreContext(f.harness, context)).blocks[0]!.text, "Prefer examples.");
+  assert.deepEqual(await handleMemoryTelegramCallback(f.harness, context, f.store, approve, { groupId: group }), result, "a repeated press does not apply twice");
+  assert.equal((await readCoreContext(f.harness, context)).revision, 2);
+});
+
+test("the app's review card reads pending reviews and decides through the card's own button", async t => {
+  const f = await fixture(t);
+  const review = await proposed(f);
+  const cards = await deviceMemoryReviews(f.harness, context, f.store);
+  assert.equal(cards.length, 1);
+  assert.deepEqual({ id: cards[0]!.id, status: cards[0]!.status, topic: cards[0]!.topic, reason: cards[0]!.reason, changes: cards[0]!.changes, entry: cards[0]!.entry },
+    { id: review.id, status: "pending", topic: "preferences", reason: "Explicit owner correction.", changes: [{ op: "remove", text: "Use short summaries." }, { op: "add", text: "Prefer examples." }], entry: `umpi:memory:review:${review.id}` });
+  assert.throws(() => memoryDecisionButton(f.store, "missing", "approve"), StateError);
+  const reject = memoryDecisionButton(f.store, review.id, "reject");
+  assert.notEqual(reject.data, memoryDecisionButton(f.store, review.id, "approve").data);
+  const result = await handleMemoryTelegramCallback(f.harness, context, f.store, reject.data, { groupId: reject.groupId });
+  assert.match(result!.text, /Rejected/);
+  const decided = await deviceMemoryReviews(f.harness, context, f.store);
+  assert.deepEqual(decided.map(card => [card.id, card.status, typeof card.decidedAt]), [[review.id, "rejected", "string"]], "a decided review stays listed, so its card shows the outcome");
+  assert.equal((await readCoreContext(f.harness, context)).blocks[0]!.text, "Use short summaries.");
+  assert.equal(companionRole("/api/device/memory/reviews", "GET"), "device");
+  assert.equal(companionRole(`/api/device/memory/reviews/${review.id}/approve`, "POST"), "device");
+  assert.equal(companionRole(`/api/device/memory/reviews/${review.id}/approve`, "GET"), undefined);
+  assert.equal(companionRole(`/api/device/memory/reviews/${review.id}/restore`, "POST"), undefined);
 });

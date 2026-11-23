@@ -4,6 +4,7 @@ import { VaultAgent } from "@obsy/agent";
 import { initVault, webEnvironment } from "@obsy/core";
 import { R2Storage, type R2BucketLike } from "@obsy/storage-r2";
 import { ObsyVaultClient } from "../src/worker/obsy-vault.js";
+import { editNoteLine } from "../src/shared/note-edit.js";
 import { DEFAULT_VAULT_SCOPE, parseVaultApply, vaultNoteRevision } from "../src/shared/vault-planning.js";
 
 const PREFIX = "library/", DAY = "2026-10-21", PATH = `journals/${DAY}.md`;
@@ -17,7 +18,11 @@ class FakeR2 implements R2BucketLike {
     const object = this.objects.get(key);
     return object ? { etag: object.etag, arrayBuffer: async () => object.bytes.slice().buffer } : null;
   }
+  /** Runs once before the next write, to place another device's commit between a read and a write. */
+  beforeNextPut?: () => Promise<void>;
   async put(key: string, value: Uint8Array, options?: { onlyIf?: { etagMatches?: string; etagDoesNotMatch?: string } }) {
+    const hook = this.beforeNextPut;
+    if (hook) { this.beforeNextPut = undefined; await hook(); }
     const current = this.objects.get(key);
     if (options?.onlyIf?.etagDoesNotMatch === "*" && current) return null;
     if (options?.onlyIf?.etagMatches !== undefined && current?.etag !== options.onlyIf.etagMatches) return null;
@@ -118,4 +123,30 @@ test("a kept reader still sees edits made elsewhere since its last read", async 
   const current = (await device.read(PATH))!;
   assert.equal((await device.replaceIfUnchanged(PATH, "# Day\n- [ ] One\n- [ ] Two\n", { baseRev: current.rev })).status, "committed");
   assert.equal((await client.readDay(DAY)).text, "# Day\n- [ ] One\n- [ ] Two\n", "the next read catches up");
+});
+
+test("an owner-requested line edit rewrites only that line, by what it says, and survives a change made meanwhile", async () => {
+  const note = "# Nov 3\n\n## Tasks\n- [ ] Buy oats\n- [x] Buy dal\nPlain line\n";
+  const { client, device, bucket } = await vault({ [PATH]: note });
+  const reworded = await client.editDay(DAY, "edit-1", text => editNoteLine(text, { line: "Buy oats", action: "replace", text: "Buy rolled oats" }));
+  assert.equal(reworded.status, "synced");
+  assert.equal((await device.read(PATH))!.text, note.replace("Buy oats", "Buy rolled oats"));
+  const removed = await client.editDay(DAY, "edit-2", text => editNoteLine(text, { line: "Plain line", action: "remove" }));
+  assert.equal(removed.status, "synced");
+  const current = (await device.read(PATH))!;
+  assert.equal(current.text, "# Nov 3\n\n## Tasks\n- [ ] Buy rolled oats\n- [x] Buy dal\n");
+  // Another device commits between this edit's read and its write: the edit is made again on the new text.
+  let reads = 0;
+  bucket.beforeNextPut = async () => {
+    assert.equal((await device.replaceIfUnchanged(PATH, current.text! + "Added on the phone\n", { baseRev: current.rev })).status, "committed");
+  };
+  const raced = await client.editDay(DAY, "edit-3", text => { reads++; return editNoteLine(text, { line: "Buy dal", action: "uncheck" }); });
+  assert.equal(raced.status, "synced");
+  assert.equal(reads, 2, "the note changed under the first attempt, so it was read and edited once more");
+  const final = (await device.read(PATH))!.text!;
+  assert.equal(final, "# Nov 3\n\n## Tasks\n- [ ] Buy rolled oats\n- [ ] Buy dal\nAdded on the phone\n");
+  const missing = await client.editDay(DAY, "edit-4", text => editNoteLine(text, { line: "Water the plants", action: "remove" }));
+  assert.deepEqual(missing, { status: "synced", result: { status: "not_found" } });
+  assert.equal((await device.read(PATH))!.text, final, "an edit that finds no line writes nothing");
+  assert.deepEqual(await client.editDay("2026-10-22", "edit-5", text => editNoteLine(text, { line: "Anything", action: "remove" })), { status: "missing" });
 });

@@ -6,6 +6,7 @@ import {
   MAX_NOTE_BYTES, parseVaultApply, parseVaultScope, vaultDayPath, vaultNoteRevision,
   type VaultPlanningApply, type VaultPlanningResult, type VaultPlanningScope, type VaultPlanningSnapshot,
 } from "../shared/vault-planning.js";
+import type { NoteLineResult } from "../shared/note-edit.js";
 import type { VaultPlanningClient } from "./planning-runtime.js";
 
 const MAX_INPUT_BYTES = 1024 * 1024;
@@ -94,6 +95,27 @@ export class ObsyVaultClient implements VaultPlanningClient {
     if (result.status === "committed" || result.status === "unchanged") return { status: "synced", text, revision: vaultNoteRevision(text) };
     const latest = await agent.read(path);
     return { status: "conflict", text: latest?.text ?? null, revision: vaultNoteRevision(latest?.text ?? null) };
+  }
+
+  /**
+   * One owner-requested edit of a day's note. `edit` finds its line by what it says in the note as it is now, and the
+   * write is a compare-and-swap; a note that changed between the read and the write is read and edited once more.
+   * `synced` carries what `edit` did, which may be nothing (line not found, or already as asked).
+   */
+  async editDay(day: string, run: string, edit: (text: string) => NoteLineResult): Promise<{ status: "synced"; result: NoteLineResult } | { status: "missing" | "conflict" }> {
+    shiftPlanningDay(day, 0);
+    const path = vaultDayPath(this.scope, day);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const agent = this.agent(run);
+      const current = await agent.read(path);
+      if (!current || current.text === null) return { status: "missing" };
+      const result = edit(current.text);
+      if (result.status !== "edited") return { status: "synced", result };
+      if (new TextEncoder().encode(result.text).length > MAX_NOTE_BYTES) throw new Error("The edited note exceeds its byte limit");
+      const written = await agent.replaceIfUnchanged(path, result.text, { baseRev: current.rev ?? null, toolCall: run });
+      if (written.status === "committed" || written.status === "unchanged") return { status: "synced", result };
+    }
+    return { status: "conflict" };
   }
 
   async applyNote(value: VaultPlanningApply): Promise<VaultPlanningResult> {

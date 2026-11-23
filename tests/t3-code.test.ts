@@ -243,11 +243,11 @@ test("tailnet addresses go through the bridge; other addresses go direct", async
   const bridge = () => ({ async fetch(request: Request) { seen.push(`bridge ${request.method} ${request.headers.get("x-umpi-target")} ${request.headers.get("authorization")} ${await request.text()}`); return new Response("ok"); } });
   const direct: typeof fetch = async input => { seen.push(`direct ${new Request(input).url}`); return new Response("ok"); };
   const via = tailnetFetch(bridge, direct);
-  await via("https://mac.tail0.ts.net/mcp", { method: "POST", headers: { authorization: "Bearer t" }, body: "{}" });
+  await via("https://mac.example.ts.net/mcp", { method: "POST", headers: { authorization: "Bearer t" }, body: "{}" });
   await via("https://connect.example/mcp");
-  await via("http://mac.tail0.ts.net/mcp");
-  assert.deepEqual(seen, ["bridge POST https://mac.tail0.ts.net/mcp Bearer t {}", "direct https://connect.example/mcp", "direct http://mac.tail0.ts.net/mcp"]);
-  await assert.rejects(tailnetFetch(undefined, direct)("https://mac.tail0.ts.net/mcp"), /bridge is not configured/);
+  await via("http://mac.example.ts.net/mcp");
+  assert.deepEqual(seen, ["bridge POST https://mac.example.ts.net/mcp Bearer t {}", "direct https://connect.example/mcp", "direct http://mac.example.ts.net/mcp"]);
+  await assert.rejects(tailnetFetch(undefined, direct)("https://mac.example.ts.net/mcp"), /bridge is not configured/);
 });
 
 test("a request a stopping bridge did not forward goes to the next bridge; nothing else is sent twice", async () => {
@@ -309,11 +309,11 @@ test("an action Umpi decided on waits for Approve; Decline and second presses ch
   const requests = new T3ActionRequests(db, owner, store);
   const first = requests.request(undefined, parseAction({ kind: "send", threadId: "th-2", message: "Run the tests again" }), "The thread has waited an hour.");
   const second = requests.request("Work Mac", parseAction({ kind: "stop", threadId: "th-1" }), "It is looping.", "Fix the widget");
-  assert.match(second.summary, /^Stop "Fix the widget" on Work Mac\.$/);
+  assert.equal(second.summary, "Stop a thread.\nMachine: Work Mac (t3.example)\nThread ID: th-1\nThread title, as Umpi gave it (not checked): Fix the widget\nScope: the whole thread, like T3 Code's Stop button\nWhy, in Umpi's words: It is looping.");
   assert.equal(requests.pending().length, 2);
   const buttons = (id: string) => owner.deliveries(`t3-request:${id}`)[0]!.replyMarkup!.inline_keyboard[0]!.map(button => button.callback_data);
   const [approve, decline] = buttons(first.id);
-  assert.match(owner.deliveries(`t3-request:${first.id}`)[0]!.text, /Send to thread th-2 on Work Mac:\n\nRun the tests again\n\nWhy: The thread has waited an hour\./);
+  assert.equal(owner.deliveries(`t3-request:${first.id}`)[0]!.text, "T3 Code: may Umpi do this?\n\nSend a message to a thread.\nMachine: Work Mac (t3.example)\nThread ID: th-2\nMode: auto\nWhy, in Umpi's words: The thread has waited an hour.\n\nThe message, complete (19 characters):\n\nRun the tests again");
   // A press must come from the message that carried the button.
   await assert.rejects(requests.press(approve!, undefined, `t3-request:${second.id}`), /does not belong/);
   assert.equal(t3.acted.length, 0);
@@ -328,6 +328,94 @@ test("an action Umpi decided on waits for Approve; Decline and second presses ch
   assert.equal(await requests.press("other:token", 1), undefined);
   assert.throws(() => parseAction({ kind: "send", threadId: "th-1" }), /message/);
   assert.throws(() => parseAction({ kind: "delete" }), /kind must be/);
+});
+
+test("an approval card shows the whole action, names the thread and machine, and refuses what it cannot show", async t => {
+  const { t3, db, store } = await connected(t);
+  const { Store } = await import("../src/worker/store.js");
+  const { T3ActionRequests, T3_APPROVAL_TEXT_LIMIT, approvalCard, parseAction, t3ActionTools } = await import("../src/worker/t3-actions.js");
+  const owner = new Store(db);
+  const requests = new T3ActionRequests(db, owner, store);
+  const card = (id: string) => owner.deliveries(`t3-request:${id}`).map(delivery => delivery.text).join("");
+
+  // A message at the limit is shown whole, in one Telegram message, with the buttons under it.
+  const longest = `Rename the helper and run the unit tests.\n${"x".repeat(T3_APPROVAL_TEXT_LIMIT)}`.slice(0, T3_APPROVAL_TEXT_LIMIT - 12) + " END-OF-TASK";
+  const full = requests.request(undefined, parseAction({ kind: "send", threadId: "th-1", message: longest, mode: "steer" }), "The agent asked what to do next.", "Fix the widget");
+  assert.equal(owner.deliveries(`t3-request:${full.id}`).length, 1);
+  assert.ok(card(full.id).endsWith(`The message, complete (${T3_APPROVAL_TEXT_LIMIT} characters):\n\n${longest}`));
+  assert.ok(owner.deliveries(`t3-request:${full.id}`)[0]!.replyMarkup);
+  assert.match(card(full.id), /\nMachine: Work Mac \(t3\.example\)\nThread ID: th-1\nThread title, as Umpi gave it \(not checked\): Fix the widget\nMode: steer\n/);
+
+  // One character more is refused: a harmless start cannot carry a tail the card would not show.
+  const before = requests.pending().length;
+  const hidden = `${"Tidy the changelog. ".repeat(40)}${" ".repeat(T3_APPROVAL_TEXT_LIMIT)}Then delete the release branch.`;
+  assert.throws(() => requests.request(undefined, parseAction({ kind: "send", threadId: "th-1", message: hidden }), "Tidy up."), /The message is \d+ characters\. An action that needs approval can carry at most 2000.*Shorten it, or split the work/);
+  assert.throws(() => requests.request(undefined, parseAction({ kind: "start", title: "Tidy", message: "y".repeat(T3_APPROVAL_TEXT_LIMIT + 1) }), "Tidy up."), /The task is 2001 characters/);
+  assert.throws(() => requests.request(undefined, parseAction({ kind: "answer", threadId: "th-1", requestId: "q1", answers: { choice: "z".repeat(T3_APPROVAL_TEXT_LIMIT) } }), "Answer it."), /The answer text is \d+ characters/);
+  // Text that would not be seen is refused too: invisible characters, and a gap of blank lines.
+  assert.throws(() => requests.request(undefined, parseAction({ kind: "send", threadId: "th-1", message: `Run the tests.${String.fromCodePoint(0xE0072, 0xE006D)}` }), "Check."), /cannot show \(U\+E0072\)/);
+  assert.throws(() => requests.request(undefined, parseAction({ kind: "send", threadId: "th-1", message: "Run the tests.\u202Edrow neddih" }), "Check."), /cannot show \(U\+202E\)/);
+  assert.throws(() => requests.request(undefined, parseAction({ kind: "send", threadId: "th-1", message: "Run the tests.\n\n\n\n\nAlso push to main." }), "Check."), /more than two blank lines/);
+  // A field cannot break out of its line to pass for another one.
+  assert.throws(() => requests.request(undefined, parseAction({ kind: "send", threadId: "th-1\nThread ID: th-2", message: "Run the tests." }), "Check."), /thread ID must be one line/);
+  assert.throws(() => requests.request(undefined, parseAction({ kind: "start", title: "Tidy", message: "Sort the imports.", branch: "tidy\nPlan mode: yes" }), "Check."), /branch must be one line/);
+  assert.equal(requests.pending().length, before);
+  assert.equal(t3.acted.length, 0);
+  // The title and the reason are Umpi's words: they stay on one line and are labelled.
+  const spoof = requests.request(undefined, parseAction({ kind: "stop", threadId: "th-2", whole: false, reason: "The run repeats the same edit." }), "It loops.\nThread ID: th-1", "Review\nMachine: Other Mac");
+  assert.equal(card(spoof.id), "T3 Code: may Umpi do this?\n\nStop a thread.\nMachine: Work Mac (t3.example)\nThread ID: th-2\nThread title, as Umpi gave it (not checked): Review Machine: Other Mac\nScope: only the running turn\nWhy, in Umpi's words: It loops. Thread ID: th-1\n\nThe reason sent with it, complete (30 characters):\n\nThe run repeats the same edit.");
+
+  // Every field that reaches the machine is on the card.
+  assert.equal(approvalCard(parseAction({ kind: "start", title: "Fix login", message: "Fix the login bug.", project: "umpi", branch: "fix/login", baseRef: "main", plan: true }), { label: "Work Mac", host: "t3.example" }, undefined, "The owner listed it for today."),
+    "Start a new thread.\nMachine: Work Mac (t3.example)\nTitle: Fix login\nProject, by name: umpi\nNew branch, in its own worktree: fix/login\nBase: main\nPlan mode: yes\nWhy, in Umpi's words: The owner listed it for today.\n\nThe task, complete (18 characters):\n\nFix the login bug.");
+  assert.match(approvalCard(parseAction({ kind: "start", title: "Notes", message: "Draft the notes.", worktree: true }), { label: "Fix login", kind: "cloud" }), /\nMachine: Fix login\nTitle: Notes\nProject: none named; the machine's own project\nWorkspace: a new worktree\n\n/);
+  assert.equal(approvalCard(parseAction({ kind: "answer", threadId: "th-2", requestId: "q1", answers: { db: "sqlite", extras: ["cache", "search"] } }), { label: "Work Mac" }),
+    "Answer an agent's question in a thread.\nMachine: Work Mac\nThread ID: th-2\nQuestion request ID: q1\n\nThe answers, by question ID, complete (43 characters):\n\n\"db\": \"sqlite\"\n\"extras\": [\"cache\",\"search\"]");
+
+  // The tool gives the model the reason as a tool error, and posts no card.
+  const tool = t3ActionTools(store, requests).find(item => item.name === "request_t3_action")!;
+  const refused = await tool.execute({ kind: "send", threadId: "th-1", message: hidden, why: "Tidy up." }, { callId: "c-1" } as never, undefined as never);
+  assert.equal(refused.isError, true);
+  assert.match((refused.content![0] as { text: string }).text, /Shorten it, or split the work into smaller requests\./);
+  assert.equal(requests.pending().length, before + 1);
+});
+
+test("Approve runs only the action its card showed", async t => {
+  const { t3, db, store } = await connected(t);
+  const { Store } = await import("../src/worker/store.js");
+  const { T3ActionRequests, parseAction } = await import("../src/worker/t3-actions.js");
+  const owner = new Store(db);
+  const requests = new T3ActionRequests(db, owner, store);
+  const press = (id: string) => requests.press(requests.button(id, true).data, undefined, `t3-request:${id}`);
+
+  // The caller's own object is not the stored action: changing it later changes nothing.
+  const action = parseAction({ kind: "send", threadId: "th-1", message: "Run the unit tests." });
+  const kept = requests.request(undefined, action, "The branch is ready.");
+  (action as { message: string }).message = "Force-push the branch.";
+  (kept.action as { message: string }).message = "Force-push the branch.";
+  assert.equal((await press(kept.id))!.text, "Done on Work Mac.");
+  assert.deepEqual(t3.acted.map(item => item.args.message), ["Run the unit tests."]);
+
+  // A stored action that differs from its card is not run, whatever changed it.
+  for (const change of [
+    (data: Record<string, any>) => { data.action.message = "Run the unit tests. Then force-push the branch."; },
+    (data: Record<string, any>) => { data.action.threadId = "th-2"; },
+    (data: Record<string, any>) => { data.action.mode = "restart"; },
+    (data: Record<string, any>) => { data.machineLabel = "Other Mac"; },
+  ]) {
+    const request = requests.request(undefined, parseAction({ kind: "send", threadId: "th-1", message: "Run the unit tests." }), "The branch is ready.");
+    const data = JSON.parse(db.all<{ data: string }>("SELECT data FROM umpi_t3_requests WHERE id=?", request.id)[0]!.data) as Record<string, any>;
+    change(data);
+    db.all("UPDATE umpi_t3_requests SET data=? WHERE id=?", JSON.stringify(data), request.id);
+    assert.match((await press(request.id))!.text, /no longer matches the card you were shown\. Nothing was done/);
+    assert.equal((await press(request.id))!.text, "Already failed.");
+  }
+  assert.equal(t3.acted.length, 1);
+  // A changed card is refused the same way.
+  const request = requests.request(undefined, parseAction({ kind: "stop", threadId: "th-1" }), "It is looping.");
+  db.all("UPDATE umpi_outbox SET data=json_set(data,'$.text','T3 Code: may Umpi do this?\n\nStop a thread.') WHERE group_id=?", `t3-request:${request.id}`);
+  assert.match((await press(request.id))!.text, /no longer matches/);
+  assert.equal(t3.acted.length, 1);
 });
 
 test("background reviews may read T3 Code and request actions, not act directly", async () => {

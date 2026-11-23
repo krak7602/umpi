@@ -147,6 +147,25 @@ test("forged, unconfirmed and cross-message buttons cannot approve; exact click 
   assert.deepEqual(f.store.requireTask("task"), queued);
 });
 
+test("a long reviewed coding task is posted whole, and Approve waits until all of it arrived", async t => {
+  const f = fixture(t), prohibition = "Change only the parser module; do not touch the release scripts.";
+  let task = f.task();
+  for (let i = 0; i < 12; i++) task = f.store.correct(task.taskId, task.version, "x".repeat(7_900) + (i === 11 ? prohibition : `Owner instruction ${i}`));
+  enqueueCodingApproval(f.runtime, task);
+  const review = f.owner.deliveries(`coding-approval:${task.taskId}:${task.version}`), text = review.map(delivery => delivery.text).join("");
+  // The outbox's default budget would have cut this card at 65,536 characters, before the last correction and the folder.
+  assert.ok(text.length > 65_536);
+  assert.ok(text.includes(prohibition));
+  assert.ok(text.includes(`\n\nFolder\n${cwd}\n`) && text.endsWith("external effects are not contained or rolled back."));
+  const approve = callback(review.at(-1)!, "Approve");
+  for (const item of review.slice(0, -1)) { assert.ok(f.owner.beginDelivery(item.id)); f.owner.finishDelivery(item.id, "sent", undefined, 500 + item.part); }
+  await assert.rejects(handleCodingCallback(f.runtime, approve, 500 + review.length - 1), StateError);
+  assert.equal(f.store.requireTask(task.taskId).status, "pending_approval");
+  const last = review.at(-1)!; assert.ok(f.owner.beginDelivery(last.id)); f.owner.finishDelivery(last.id, "sent", undefined, 500 + last.part);
+  await handleCodingCallback(f.runtime, approve, 500 + last.part);
+  assert.equal(f.store.requireTask(task.taskId).status, "queued");
+});
+
 test("stale cards and unconfirmed sends fail closed while an explicit overview supplies current controls", async t => {
   const f = fixture(t); f.task();
   const old = f.confirm("coding-approval:task:1");

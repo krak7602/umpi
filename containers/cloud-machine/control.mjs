@@ -1,5 +1,5 @@
 // The control server of a cloud machine. Only the machine's Durable Object reaches this port.
-//   POST /restore   unpack saved state (tar.zst) into the home folder
+//   POST /restore   unpack saved state (tar.zst) into the home folder; reports the bytes received
 //   POST /start     write credentials and settings for this run, start T3 Code, return Umpi's MCP token
 //   /t3/*           relay to T3 Code's server on 127.0.0.1:3773
 //   POST /snapshot  stop T3 Code and pack the home folder (without credentials or rebuildable folders)
@@ -148,10 +148,17 @@ createServer(async (req, res) => {
     if (path === "/ready") return json(res, 200, { ok: true, t3: !!t3 && t3.exitCode === null, stopping });
     if (path === "/restore" && req.method === "POST") {
       const tar = spawn("tar", ["--zstd", "-xf", "-", "-C", HOME], { stdio: ["pipe", "ignore", "pipe"] });
-      let errors = ""; tar.stderr.on("data", chunk => { errors += chunk; });
+      let errors = "", bytes = 0, whole = false;
+      tar.stderr.on("data", chunk => { errors += chunk; });
+      tar.stdin.on("error", () => {});
+      req.on("data", chunk => { bytes += chunk.length; });
+      req.on("end", () => { whole = true; });
+      // A request cut short must fail the restore, not leave tar waiting: Umpi saves only a home restored in full.
+      req.on("close", () => { if (!whole) tar.kill("SIGKILL"); });
       req.pipe(tar.stdin);
       const code = await new Promise(resolve => tar.on("close", resolve));
-      return code === 0 ? json(res, 200, { restored: true }) : json(res, 500, { error: `restore failed: ${errors.slice(0, 300)}` });
+      // Umpi compares `bytes` with the size of the saved state.
+      return code === 0 && whole ? json(res, 200, { restored: true, bytes }) : json(res, 500, { error: `restore failed: ${errors.slice(0, 300) || "the saved state was cut short"}` });
     }
     if (path === "/start" && req.method === "POST") {
       if (stopping) return json(res, 503, { error: "This machine is stopping" });
@@ -169,7 +176,10 @@ createServer(async (req, res) => {
       await rm(file, { force: true });
       await run("tar", ["--zstd", "-cf", file, ...EXCLUDE.flatMap(item => ["--exclude", item]), "-C", HOME, "."], { timeout: 600_000, maxBuffer: 1 << 20 });
       const { size } = await stat(file);
-      res.writeHead(200, { "content-type": "application/zstd", "content-length": String(size) });
+      // Umpi checks what it receives against this before the new saved state replaces the old one.
+      const sha256 = createHash("sha256");
+      for await (const chunk of createReadStream(file)) sha256.update(chunk);
+      res.writeHead(200, { "content-type": "application/zstd", "content-length": String(size), "x-umpi-sha256": sha256.digest("hex") });
       return void createReadStream(file).pipe(res);
     }
     if (path === "/pairing" && req.method === "POST") {

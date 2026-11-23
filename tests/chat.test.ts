@@ -34,7 +34,7 @@ function fixture(t: TestContext) {
   const appended: ChatEntry[] = []; chat.appended = entry => { appended.push(entry); };
   const companion = new CompanionStore(owner);
   const interrupted: [string, boolean][] = [];
-  const context: CompanionHttpContext = { companion, config, chat, speechWords: new SpeechWordStore(db), t3: new T3CodeStore(db), t3Requests: () => [], async t3Act() { return {}; }, async decideT3() { return { text: "" }; }, async cloud() { return {}; }, async wake() {}, async requireModel() {},
+  const context: CompanionHttpContext = { companion, config, chat, speechWords: new SpeechWordStore(db), t3: new T3CodeStore(db), t3Requests: () => [], async memoryReviews() { return []; }, async decideMemory() { return { text: "" }; }, async t3Act() { return {}; }, async decideT3() { return { text: "" }; }, async cloud() { return {}; }, async wake() {}, async requireModel() {},
     async interrupt(operationId, heard) {
       interrupted.push([operationId, owner.interrupt(operationId, interruptedReply, heard)]);
       return owner.operation(operationId)?.ownerSource?.spoken ? cutOffNote(heard ?? "") : undefined;
@@ -195,7 +195,19 @@ test("a button pressed in the app answers the same approval as Telegram's, and t
   const other = f.chat.page().entries.at(-1)!;
   await assert.rejects(companionRequest(request("/api/device/chat/press", token, { seq: other.seq, data: approve.data }), f.context), /no longer available|does not belong/, "a button is bound to its own message");
   f.owner.enqueue("proactive:x", "telegram", "Mail", { inline_keyboard: [[{ text: "Draft", callback_data: "mail:draft:1" }]] });
-  await assert.rejects(companionRequest(request("/api/device/chat/press", token, { seq: f.chat.latest(), data: "mail:draft:1" }), f.context), /only be answered in Telegram/);
+  await assert.rejects(companionRequest(request("/api/device/chat/press", token, { seq: f.chat.latest(), data: "mail:draft:1" }), f.context), /no longer available/, "a button no record knows is refused");
+});
+
+test("Telegram's panels stay out of the chat, unless Telegram is turned off and the chat is the only place to show one", t => {
+  const f = fixture(t);
+  f.owner.enqueue("memory:view:first", "telegram", "Memory history");
+  assert.ok(!f.chat.page().entries.some(entry => entry.id === "umpi:memory:view:first"));
+  f.chat.telegramOff = true;
+  f.owner.enqueue("memory:view:second", "telegram", "Memory history", { inline_keyboard: [[{ text: "Older", callback_data: "memory:older" }]] });
+  const panel = f.chat.page().entries.find(entry => entry.id === "umpi:memory:view:second")!;
+  assert.equal(panel.kind, "reply");
+  assert.equal(panel.buttons![0]![0]!.label, "Older");
+  assert.equal(f.db.all("SELECT seq FROM umpi_chat_push WHERE seq=?", panel.seq).length, 0, "a panel the owner opened is not announced");
 });
 
 test("a knock scheduled on the phone is the alert: the reminder message is silent, not pushed, and the phone answers it", async t => {
@@ -313,4 +325,13 @@ test("Telegram turned off: the app carries alerts, the webhook is refused, and a
   const { code } = record(await created!.json()) as { code: string };
   const claimed = f.companion.claimPairing({ code, token: randomBytes(32).toString("base64url"), deviceId: "mac-1", label: "Mac", capabilities });
   assert.equal(claimed.deviceId, "mac-1", "the code pairs the next device");
+});
+
+test("only the owner's own messages count as what the owner wrote", t => {
+  const f = fixture(t);
+  f.owner.admit("m1", "Read example.org/docs/setup for me", "telegram", "telegram-session", { kind: "app-text" });
+  f.owner.enqueue("answer:m1", "telegram", "I found EXAMPLE.org/pricing as well.");
+  assert.deepEqual(f.chat.ownerTexts("Example.org"), ["Read example.org/docs/setup for me"]);
+  assert.deepEqual(f.chat.ownerTexts("pricing"), [], "a link only Umpi wrote is not the owner's");
+  assert.deepEqual(f.chat.ownerTexts(""), []);
 });

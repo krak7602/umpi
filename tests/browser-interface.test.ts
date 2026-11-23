@@ -10,6 +10,7 @@ import { BrowserSnapshots } from "../src/worker/browser-snapshots.js";
 import { BrowserRuntime } from "../src/worker/browser-runtime.js";
 import { browserExecutorRequest, browserRequest, browserSyncRequest } from "../src/worker/browser-http.js";
 import { enqueueBrowserApproval, handleBrowserCallback } from "../src/worker/browser-telegram.js";
+import { browserOwnerTools } from "../src/worker/browser-tools.js";
 import { Store } from "../src/worker/store.js";
 import type { Database } from "../src/worker/store.js";
 import { authorize } from "../src/worker/transport.js";
@@ -134,6 +135,24 @@ test("a large reviewed task cannot hide the owner's final prohibition behind a l
   for (let index = 0; index < review.length; index++) { f.owner.beginDelivery(review[index]!.id); f.owner.finishDelivery(review[index]!.id, "sent", undefined, 100 + index); }
   await handleBrowserCallback(f.runtime, token, 100 + review.length - 1);
   assert.equal(f.store.requireTask(task.taskId).status, "queued");
+});
+test("a correction to a claimed browser run reaches the owner at once, whole, as a notice", async t => {
+  const f = fixture(t); enqueueBrowserApproval(f.runtime, f.task());
+  const tool = browserOwnerTools(f.runtime).find(item => item.name === "correct_browser_task")!;
+  const correct = (taskId: string, expectedVersion: number, text: string, call: number) => tool.execute({ taskId, expectedVersion, text }, { conversationId: "owner-telegram", taskId: call } as never, undefined as never);
+  const notice = (version: number) => f.owner.deliveries(`browser-correction:task:${version}`).map(delivery => delivery.text).join("");
+  // Not claimed yet: a new approval card, and no notice.
+  assert.equal((await correct("task", 1, "Read the pricing page only.", 1)).isError, undefined);
+  assert.equal(notice(2), "");
+  assert.ok(f.owner.deliveries("browser-approval:task:2").map(delivery => delivery.text).join("").includes("Owner corrections\nRead the pricing page only."));
+  // Claimed: the text joins the run without a card, so the owner is sent all of it.
+  const run = f.claim();
+  const tail = "Do not submit the contact form.", long = `${"x".repeat(7_900)} ${tail}`;
+  assert.equal((await correct("task", f.store.requireTask("task").version, long, 2)).isError, undefined);
+  const version = f.store.requireTask("task").version;
+  assert.equal(notice(version), `Browser · correction sent to the approved task\n\n${long}\n\nThis text joined the approved task without a new approval. The task keeps its sites and time limit. To stop it, open /browse.`);
+  assert.equal(f.store.requireTask("task").run!.runId, run.runId);
+  assert.equal(f.owner.deliveries(`browser-approval:task:${version}`).length, 0);
 });
 test("Telegram browser approval is tied to confirmed message and current reviewed scope", async t => {
   const f = fixture(t); enqueueBrowserApproval(f.runtime, f.task());

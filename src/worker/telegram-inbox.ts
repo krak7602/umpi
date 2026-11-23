@@ -11,6 +11,8 @@ export const IMAGE_WITHOUT_CAPTION = "[Image without a caption]";
 export const FILE_WITHOUT_CAPTION = "[File without a caption]";
 /** Text keeps retrying admission. An image stops after this many tries so it cannot hold up later messages. */
 const MAX_IMAGE_DELIVERY_ATTEMPTS = 3;
+/** How long each phase may take. A claim's deadline is set from the same number, so `nextDue` is never before the phase ends. */
+const DOWNLOAD_MS = 60_000, FILE_READ_MS = 90_000, DELIVER_MS = 30_000;
 import { StateError, type Database } from "./store.js";
 
 export interface TelegramInboxOptions {
@@ -246,7 +248,7 @@ export class TelegramInbox {
     this.working = { id: entry.input.id, attemptId };
     const next = { ...entry, attemptId, status: entry.status === "queued" ? "downloading" : "delivering" } as InboxEntry;
     next.updatedAt = new Date().toISOString();
-    next.deadline = Date.now() + (next.status === "downloading" ? 60_000 : 30_000);
+    next.deadline = Date.now() + (next.status !== "downloading" ? DELIVER_MS : next.input.kind === "file" ? FILE_READ_MS : DOWNLOAD_MS);
     this.write(next);
     // Start callbacks in a microtask after the durable claim, never inside the drive/admission transaction.
     const work = Promise.resolve().then(() => this.process(next)).finally(async () => {
@@ -289,7 +291,7 @@ export class TelegramInbox {
   private async process(entry: InboxEntry): Promise<void> {
     let media: { images: TelegramImage[]; omitted: number } | undefined;
     if (entry.status === "downloading" && entry.input.kind === "image") {
-      try { media = await this.phase(signal => this.downloadAlbum(entry, signal), 60_000); }
+      try { media = await this.phase(signal => this.downloadAlbum(entry, signal), DOWNLOAD_MS); }
       catch (error) {
         const current = this.current(entry, "downloading");
         if (current) this.fail(current, error instanceof VoiceNoteError && error.code === "image_too_large" ? "image_too_large" : "image_download_failed");
@@ -303,7 +305,7 @@ export class TelegramInbox {
     }
     if (entry.status === "downloading" && entry.input.kind === "file") {
       let document: TelegramDocument;
-      try { document = await this.phase(signal => this.options.readFile((entry.input as TelegramFileMessage).file, signal), 90_000); }
+      try { document = await this.phase(signal => this.options.readFile((entry.input as TelegramFileMessage).file, signal), FILE_READ_MS); }
       catch (error) {
         const current = this.current(entry, "downloading");
         if (current) this.fail(current, error instanceof VoiceNoteError && error.code === "file_too_large" ? "file_too_large" : "file_unreadable");
@@ -323,7 +325,7 @@ export class TelegramInbox {
           const result = await this.options.download(entry.input as TelegramVoiceNote, signal);
           if (signal.aborted) { result.bytes.fill(0); throw new VoiceNoteError("download_failed"); }
           return result;
-        }, 60_000);
+        }, DOWNLOAD_MS);
       } catch (error) {
         const current = this.current(entry, "downloading");
         if (current) this.fail(current, error instanceof VoiceNoteError ? error.code : "download_failed");
@@ -359,7 +361,7 @@ export class TelegramInbox {
     if (current.input.kind === "file" && !current.document) { this.write({ ...current, status: "queued", due: Date.now(), updatedAt: new Date().toISOString() }); return; }
     if (current.input.kind === "image" && !media) { this.write({ ...current, status: "queued", due: Date.now(), updatedAt: new Date().toISOString() }); return; }
     const delivering: InboxEntry = { ...current, status: "delivering", deliveryAttempts: current.deliveryAttempts + 1,
-      updatedAt: new Date().toISOString(), deadline: Date.now() + 30_000 };
+      updatedAt: new Date().toISOString(), deadline: Date.now() + DELIVER_MS };
     this.write(delivering);
     const input = delivering.input;
     const fileText = input.kind === "file" ? input.caption ?? FILE_WITHOUT_CAPTION : undefined;
@@ -374,7 +376,7 @@ export class TelegramInbox {
       ...(media ? { images: media.images, ...(media.omitted ? { omittedImages: media.omitted } : {}) } : {}),
     };
     try {
-      const operationId = await this.phase(() => this.options.deliver(delivery), 30_000);
+      const operationId = await this.phase(() => this.options.deliver(delivery), DELIVER_MS);
       if (typeof operationId !== "string" || !operationId.length || operationId.length > 256 || operationId.includes("\0")) throw new Error();
       const current = this.current(delivering, "delivering");
       // The document text now lives in the conversation; the inbox keeps only the record.

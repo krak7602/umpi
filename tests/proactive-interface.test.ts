@@ -135,6 +135,35 @@ test("held notification groups do not block unrelated deliveries; discarded chun
   assert.equal(store.readyDeliveries()[0]?.groupId, "proactive:0");
 });
 
+test("a button is pressed on its own message: a confirmed Telegram send, or the app's chat entry of the same group", t => {
+  const { store, proactive } = fixture(t);
+  enqueueScheduleControls(proactive, "app");
+  const card = store.deliveries("schedule-menu:app")[0]!;
+  const token = card.replyMarkup!.inline_keyboard[0]![0]!.callback_data;
+  assert.equal(store.buttonShown("schedule-menu:app", token, 17), false, "not sent to Telegram yet");
+  assert.equal(store.buttonShown("schedule-menu:app", token, { groupId: "schedule-menu:other" }), false, "another group's entry");
+  assert.equal(store.buttonShown("schedule-menu:app", "sch:unknown", { groupId: "schedule-menu:app" }), false, "a button the message does not carry");
+  assert.equal(store.buttonShown("schedule-menu:app", token, { groupId: "schedule-menu:app" }), true);
+  // Telegram turned off discards the send; the app's entry still carries the button.
+  store.discardDeliveryGroup("schedule-menu:app", "Telegram is turned off; this message is in the app's chat.");
+  assert.throws(() => handleScheduleCallback(proactive, token, { groupId: "schedule-menu:other" }), StateError);
+  assert.equal(proactive.settings().enabled, false);
+  handleScheduleCallback(proactive, token, { groupId: "schedule-menu:app" });
+  assert.equal(proactive.settings().enabled, true);
+  // A review that must be read in full needs every Telegram part confirmed.
+  store.enqueue("long", "telegram", "x".repeat(9_000), { inline_keyboard: [[{ text: "Approve", callback_data: "long-token" }]] });
+  const parts = store.deliveries("long");
+  assert.ok(parts.length > 1);
+  const last = parts.at(-1)!;
+  for (const part of parts.slice(0, -1)) { store.beginDelivery(part.id); store.finishDelivery(part.id, "sent", undefined, 30 + part.part); }
+  store.beginDelivery(last.id); store.finishDelivery(last.id, "sent", undefined, 40);
+  assert.equal(store.buttonShown("long", "long-token", 40, true), true);
+  const first = store.delivery(parts[0]!.id)!;
+  store.db.all("UPDATE umpi_outbox SET status='uncertain',data=? WHERE id=?", JSON.stringify({ ...first, status: "uncertain" }), first.id);
+  assert.equal(store.buttonShown("long", "long-token", 40, true), false);
+  assert.equal(store.buttonShown("long", "long-token", 40), true);
+});
+
 test("scheduler controls require confirmed exact-message binding and reject stale settings without changing them", t => {
   const { store, proactive } = fixture(t);
   enqueueScheduleControls(proactive, "first");

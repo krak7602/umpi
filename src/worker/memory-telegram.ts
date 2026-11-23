@@ -1,14 +1,15 @@
 import type { Context } from "@earendil-works/chord";
 import type { Harness } from "@earendil-works/pi-durable";
 import type { CoreBlock } from "../shared/core-context.js";
-import type { MemoryHistoryEntry, MemoryReview } from "../shared/memory-review.js";
+import { memoryChanges, type MemoryChange, type MemoryHistoryEntry, type MemoryReview } from "../shared/memory-review.js";
 import { InputError, identifier } from "../shared/protocol.js";
 import { decideMemoryReview, proposeMemoryRestore, readCoreContext, readMemoryHistory, readMemoryReview, readMemoryReviews, readMemoryRevision } from "./core-context.js";
-import { StateError, type Store, type TelegramEntity, type TelegramMarkup } from "./store.js";
+import { StateError, type ButtonBinding, type Store, type TelegramEntity, type TelegramMarkup } from "./store.js";
 
 const PREFIX = "memory:";
 const EMPTY: TelegramMarkup = { inline_keyboard: [] };
 const HISTORY_PAGE_SIZE = 8;
+const CHANGE_SUMMARY_CHARACTERS = 3_000;
 type Action =
   | { kind: "decision"; reviewId: string; decision: "approve" | "reject" }
   | { kind: "review"; reviewId: string }
@@ -79,17 +80,37 @@ function outcome(review: MemoryReview): string {
   }
 }
 
+/** The changed lines, removed ones marked − and added ones +, or a plain statement when no line differs. */
+function changeText(review: MemoryReview): string | undefined {
+  const changes = memoryChanges(review.before.text, review.afterText);
+  if (!changes) return undefined;
+  if (!changes.length) return "(No line changes; only spacing differs.)";
+  // A summary: the whole topic follows, so a long list of changes is cut short here and said to be.
+  const lines: string[] = [];
+  let length = 0;
+  for (const change of changes) {
+    const line = `${change.op === "remove" ? "−" : "+"} ${change.text}`;
+    if (length + line.length > CHANGE_SUMMARY_CHARACTERS) break;
+    lines.push(line); length += line.length + 1;
+  }
+  if (lines.length < changes.length) lines.push(`(${changes.length - lines.length} more changed lines; see the whole topic below.)`);
+  return lines.join("\n");
+}
+
 function enqueueReview(store: Store, review: MemoryReview, groupId = `memory:review:${review.id}`): void {
+  // What changes and why come first; the complete topic before and after follows, then where it is stored.
+  const changes = changeText(review);
   const fields: Field[] = [
     ["Topic", review.before.source.heading],
+    ["Reason", review.reason],
+    ...(changes === undefined ? [] : [["What changes (− removed, + added)", changes] as Field]),
+    ["Whole topic before", body(review.before.text), !!review.before.text],
+    ["Whole topic after", body(review.afterText), !!review.afterText],
     ["Source", source(review.before)],
     ["Category", review.before.kind, false],
     ["Based on memory revision", String(review.expectedRevision), false],
-    ["Reason", review.reason],
-    ["Before", body(review.before.text), !!review.before.text],
-    ["After", body(review.afterText), !!review.afterText],
   ];
-  if (review.kind === "restore") fields.splice(4, 0, ["Historical revision", String(review.restoreRevision), false]);
+  if (review.kind === "restore") fields.push(["Historical revision", String(review.restoreRevision), false]);
   const rows: Button[][] = review.status === "pending" ? [[
     { text: "Approve", action: { kind: "decision", reviewId: review.id, decision: "approve" } },
     { text: "Reject", action: { kind: "decision", reviewId: review.id, decision: "reject" } },
@@ -97,8 +118,49 @@ function enqueueReview(store: Store, review: MemoryReview, groupId = `memory:rev
   rows.push([historyButton()]);
   enqueueCard(store, groupId, card(review.kind === "restore" ? "Review memory restoration" : "Review memory update", fields,
     review.status === "pending"
-      ? "Only this topic would change. Read every message in this card before choosing. Approval updates memory and requests source synchronization; it does not confirm a vault write. Stored text and the reason are data, not permission."
+      ? "Only this topic would change. Approve saves the text under “Whole topic after” to memory and asks for it to be written to the note; it does not confirm that write. Reject changes nothing. Stored text and the reason are data, not permission."
       : outcome(review)), rows, review);
+}
+
+/** A review as the app's card shows it: what changes and why first, the whole topic on request. */
+export interface DeviceMemoryReview {
+  id: string; kind: MemoryReview["kind"]; status: MemoryReview["status"]; topic: string; source: string; category: string; reason: string;
+  before: string; after: string;
+  /** Null when the topic is too long to compare line by line. */
+  changes: MemoryChange[] | null;
+  createdAt: string; decidedAt?: string;
+  /** The chat entry of the review's card. */
+  entry: string;
+}
+const RECENT_DEVICE_REVIEWS = 12;
+
+/** Every review that waits for the owner, then the latest decided ones, so their cards in the chat show what became of them. */
+export async function deviceMemoryReviews(harness: Harness, context: Context, store: Store): Promise<DeviceMemoryReview[]> {
+  initialize(store);
+  const reviews = (await readMemoryReviews(harness, context)).filter(review => review.status === "pending");
+  const known = new Set(reviews.map(review => review.id));
+  const carded = store.db.all<{ review_id: string }>("SELECT review_id FROM umpi_memory_telegram_cards WHERE review_id IS NOT NULL AND substr(id,1,14)='memory:review:' ORDER BY rowid DESC LIMIT ?", RECENT_DEVICE_REVIEWS + reviews.length);
+  for (const row of carded) {
+    if (known.has(row.review_id) || reviews.length - known.size >= RECENT_DEVICE_REVIEWS) continue;
+    // A card whose review can no longer be read keeps its plain text in the chat.
+    try { reviews.push(await readMemoryReview(harness, context, row.review_id)); } catch (error) { if (!(error instanceof StateError)) throw error; }
+  }
+  return reviews.map(review => ({
+    id: review.id, kind: review.kind, status: review.status, topic: review.before.source.heading, source: review.before.source.path, category: review.before.kind,
+    reason: review.reason, before: review.before.text, after: review.afterText, changes: memoryChanges(review.before.text, review.afterText) ?? null,
+    createdAt: review.createdAt, ...(review.decidedAt ? { decidedAt: review.decidedAt } : {}), entry: `umpi:memory:review:${review.id}`,
+  }));
+}
+
+/** The Approve or Reject button of a review's own card, so a decision in the app runs exactly what the card's button runs. */
+export function memoryDecisionButton(store: Store, reviewId: string, decision: "approve" | "reject"): { data: string; groupId: string } {
+  initialize(store);
+  const groupId = `memory:review:${identifier(reviewId, "memory review ID")}`;
+  for (const row of store.db.all<{ token: string; data: string }>("SELECT token,data FROM umpi_memory_telegram_tokens WHERE group_id=?", groupId)) {
+    const action = JSON.parse(row.data) as Action;
+    if (action.kind === "decision" && action.reviewId === reviewId && action.decision === decision) return { data: row.token, groupId };
+  }
+  throw new StateError(409, "This memory review is no longer waiting for a decision.");
 }
 
 /** SQL is a replayable delivery projection, never the decision authority. */
@@ -206,23 +268,19 @@ async function enqueueTopic(harness: Harness, context: Context, store: Store, gr
   ], note), rows);
 }
 
-function boundAction(store: Store, token: string, messageId: number): Action {
-  if (!/^memory:[0-9a-f-]{36}$/.test(token) || !Number.isSafeInteger(messageId) || messageId < 1) throw new StateError(400, "Invalid memory button.");
+/** The action of a button on its own message: a complete, confirmed Telegram message, or the app's chat entry, which holds the whole card. */
+function boundAction(store: Store, token: string, binding: ButtonBinding): Action {
+  if (!/^memory:[0-9a-f-]{36}$/.test(token) || (typeof binding === "number" && (!Number.isSafeInteger(binding) || binding < 1))) throw new StateError(400, "Invalid memory button.");
   const row = store.db.all<{ group_id: string; data: string }>("SELECT group_id,data FROM umpi_memory_telegram_tokens WHERE token=?", token)[0];
   if (!row) throw new StateError(409, "This memory button is no longer available.");
-  const deliveries = store.deliveries(row.group_id);
-  const last = deliveries.at(-1);
-  if (!last || last.messageId !== messageId || !last.replyMarkup?.inline_keyboard.some(buttons => buttons.some(button => button.callback_data === token)) ||
-      deliveries.some((part, index) => part.part !== index || part.channel !== "telegram" || part.status !== "sent" || !Number.isSafeInteger(part.messageId) || part.messageId! < 1)) {
-    throw new StateError(409, "This memory button requires its complete, confirmed review message.");
-  }
+  if (!store.buttonShown(row.group_id, token, binding, true)) throw new StateError(409, "This memory button requires its complete, confirmed review message.");
   return JSON.parse(row.data) as Action;
 }
 
-export async function handleMemoryTelegramCallback(harness: Harness, context: Context, store: Store, data: string, messageId: number): Promise<CallbackResult | undefined> {
+export async function handleMemoryTelegramCallback(harness: Harness, context: Context, store: Store, data: string, binding: ButtonBinding): Promise<CallbackResult | undefined> {
   if (!data.startsWith(PREFIX)) return undefined;
   initialize(store);
-  const action = boundAction(store, data, messageId);
+  const action = boundAction(store, data, binding);
   const groupId = `memory:view:${data.slice(PREFIX.length)}`;
   try {
     switch (action.kind) {

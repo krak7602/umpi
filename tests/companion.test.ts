@@ -43,7 +43,7 @@ function fixture(t: TestContext) {
   const companion = new CompanionStore(owner);
   t.after(() => { sqlite.close(); rmSync(directory, { recursive: true, force: true }); });
   const chat = new ChatLog(db); owner.chat = chat;
-  const context: CompanionHttpContext = { companion, config, chat, speechWords: new SpeechWordStore(db), t3: new T3CodeStore(db), t3Requests: () => [], async t3Act() { return {}; }, async decideT3() { return { text: "" }; }, async cloud() { return {}; }, async wake() {}, async requireModel() {}, async interrupt() { return undefined; },
+  const context: CompanionHttpContext = { companion, config, chat, speechWords: new SpeechWordStore(db), t3: new T3CodeStore(db), t3Requests: () => [], async memoryReviews() { return []; }, async decideMemory() { return { text: "" }; }, async t3Act() { return {}; }, async decideT3() { return { text: "" }; }, async cloud() { return {}; }, async wake() {}, async requireModel() {}, async interrupt() { return undefined; },
     async admitApp(id, deviceId, message) {
       companion.requireDevice(deviceId);
       return owner.admit(id, message.text || "[attachment]", "telegram", "2", { kind: message.images ? "app-image" : message.document ? "app-file" : "app-text",

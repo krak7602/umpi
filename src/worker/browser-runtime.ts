@@ -36,11 +36,24 @@ export class BrowserRuntime {
       observations: task.run ? this.store.recentObservations(task.run.runId) : [] };
   }
   status() { return { settings: this.store.settings(), cloudAvailable: this.cloudAvailable(), snapshotStorageAvailable: this.snapshots.available(), sites: this.store.sites().map(site => ({ siteId: site.siteId, title: site.title, version: site.version, origins: site.origins, domain: site.domain ?? null, policyDigest: site.policyDigest })), snapshots: this.store.snapshots(), executors: this.store.executors(), tasks: this.store.tasks().slice(0, 20).map(task => ({ taskId: task.taskId, version: task.version, status: task.status, target: task.target, prompt: task.prompt.slice(0, 300), issue: task.issue ?? null })) }; }
+  /**
+   * The coordinator polls only what it must drive itself: a cloud run, and the model turn of a running task. A Mac
+   * run otherwise waits for the Mac's poll and reports, which wake the coordinator; the one time the coordinator acts
+   * alone is the deadline. After that the task waits in `cancel_requested` with its issue ("waiting for actual stop")
+   * in `/browse` and status, and the Mac's offline notice covers a long absence.
+   */
   nextDue(now = Date.now()): number | undefined {
-    const tasks = this.store.active();
-    const browserDue = tasks.some(task => task.status === "queued" && task.target === "cloud" || task.run && !task.run.stoppedAt && !terminal.has(task.status)) ? now + 2000
-      : tasks.some(task => task.status === "uncertain" && task.run?.target === "cloud" && !task.run.stoppedAt) ? now + 10_000 : Infinity;
-    const due = Math.min(browserDue, this.snapshots.nextDue(now) ?? Infinity);
+    const turns = new Set(this.store.inputs().map(input => input.runId));
+    let due = this.snapshots.nextDue(now) ?? Infinity;
+    for (const task of this.store.active()) {
+      const run = task.run;
+      if (task.status === "queued") { if (task.target === "cloud") due = Math.min(due, now + 2000); continue; }
+      if (!run || run.stoppedAt) continue;
+      if (task.status === "uncertain") { if (run.target === "cloud") due = Math.min(due, now + 10_000); continue; }
+      if (run.target === "cloud" || task.status === "running" && turns.has(run.runId)) due = Math.min(due, now + 2000);
+      // `expire` acts at the deadline, once.
+      else if (!task.timedOut) due = Math.min(due, Math.max(Date.parse(run.assignment.deadlineAt), now + 2000));
+    }
     return Number.isFinite(due) ? due : undefined;
   }
   private launch(taskId: string, action: () => Promise<void>): void {

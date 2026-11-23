@@ -124,6 +124,32 @@ function decoded(result: ToolExecutionResult): Record<string, unknown> {
   return JSON.parse(content.text) as Record<string, unknown>;
 }
 
+test("a correction to a claimed run reaches the owner at once, whole, as a notice", async t => {
+  const f = fixture(t);
+  const task = f.store.create(f.request, "control", "owner-control");
+  f.store.approve(task.taskId, task.version);
+  const assignment = f.store.poll(f.poll()).assignment!;
+  const notice = (version: number) => f.owner.deliveries(`coding-correction:${task.taskId}:${version}`).map(delivery => delivery.text).join("");
+  // Before the copy is ready, the correction joins the first input.
+  assert.equal(decoded(await f.ownerExecute("correct_coding_task", { taskId: task.taskId, expectedVersion: 1, text: "Keep the trailing newline." }, 1)).status, "preparing");
+  assert.equal(notice(2), `Coding · correction sent to the approved task\n\nKeep the trailing newline.\n\nFolder\n${f.cwd}\nThis text joined the approved task without a new approval. The task keeps its folder, tools and time limit. To stop it, open /code.`);
+  // While it runs, the correction goes to the run; a long one is not cut.
+  await f.openCopy(assignment);
+  const tail = "Do not delete the fixtures directory.", long = `${"x".repeat(7_900)} ${tail}`;
+  assert.equal(decoded(await f.ownerExecute("correct_coding_task", { taskId: task.taskId, expectedVersion: 2, text: long }, 2)).status, "running");
+  assert.ok(notice(3).includes(`\n\n${long}\n\nFolder\n`));
+  assert.ok(f.store.inputs().some(input => input.kind === "correction" && input.text === long));
+  // A replayed tool call posts nothing more.
+  const before = f.owner.deliveries().length;
+  await f.ownerExecute("correct_coding_task", { taskId: task.taskId, expectedVersion: 2, text: long }, 2);
+  assert.equal(f.owner.deliveries().length, before);
+  // A task that is not claimed gets a new approval card instead, and no notice.
+  const waiting = f.store.create({ ...f.request, taskId: "coding-later" }, "control", "owner-control");
+  await f.ownerExecute("correct_coding_task", { taskId: waiting.taskId, expectedVersion: 1, text: "Use two spaces." }, 3);
+  assert.equal(f.owner.deliveries(`coding-correction:${waiting.taskId}:2`).length, 0);
+  assert.match(f.owner.deliveries(`coding-approval:${waiting.taskId}:2`).map(delivery => delivery.text).join(""), /Owner corrections, in order\nUse two spaces\./);
+});
+
 test("owned first-party writes cannot replay into a freshly approved native continuation", async t => {
   const f = fixture(t);
   const task = f.store.create(f.request, "control", "owner-control");

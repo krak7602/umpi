@@ -82,11 +82,25 @@ export class CodingRuntime {
     return { cloudAvailable: this.cloudAvailable(), archiveAvailable: this.host.archive() !== undefined,
       executors: this.store.executors(), sources: this.store.sources(), tasks: this.store.tasks().slice(0, 20).map(task => ({ taskId: task.taskId, version: task.version, status: task.status, target: task.target, cwd: task.cwd, prompt: task.prompt.slice(0, 400), issue: task.issue ?? null })) };
   }
+  /**
+   * The coordinator polls only what it must drive itself: a cloud run, and the model turn of a running task. A Mac
+   * run otherwise waits for the Mac's poll and reports, which wake the coordinator. For such a run the one time the
+   * coordinator must act alone is the deadline. After that the task waits in `cancel_requested` with its issue
+   * ("waiting for the execution owner") in `/code` and status, and the Mac's offline notice covers a long absence.
+   */
   nextDue(now = Date.now()): number | undefined {
-    const tasks = this.store.active();
-    if (tasks.some(task => task.status === "queued" && task.target === "cloud" || task.run && !task.run.stoppedAt && task.status !== "queued" && task.status !== "uncertain")) return now + 2_000;
-    if (tasks.some(task => task.status === "uncertain" && task.run?.target === "cloud" && !task.run.stoppedAt)) return now + 10_000;
-    return undefined;
+    const turns = new Set(this.store.inputs().map(input => input.runId));
+    let due = Infinity;
+    for (const task of this.store.active()) {
+      const run = task.run;
+      if (task.status === "queued") { if (task.target === "cloud") due = Math.min(due, now + 2_000); continue; }
+      if (!run || run.stoppedAt) continue;
+      if (task.status === "uncertain") { if (run.target === "cloud") due = Math.min(due, now + 10_000); continue; }
+      if (run.target === "cloud" || task.status === "running" && turns.has(run.runId)) due = Math.min(due, now + 2_000);
+      // `expire` acts at the deadline, once.
+      else if (!task.timedOut) due = Math.min(due, Math.max(Date.parse(run.assignment.deadlineAt), now + 2_000));
+    }
+    return Number.isFinite(due) ? due : undefined;
   }
   private launch(key: string, work: () => Promise<void>): void {
     if (this.working.has(key)) return;

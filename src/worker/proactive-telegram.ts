@@ -1,5 +1,5 @@
 import { ProactiveStore } from "./proactive-store.js";
-import { StateError, type TelegramMarkup } from "./store.js";
+import { StateError, type ButtonBinding, type TelegramMarkup } from "./store.js";
 
 interface ScheduleButton { groupId: string; expectedVersion: number; enabled: boolean; }
 
@@ -26,7 +26,7 @@ export function enqueueScheduleControls(proactive: ProactiveStore, requestId: st
   });
 }
 
-export function handleScheduleCallback(proactive: ProactiveStore, token: string, messageId: number): { text: string; replyMarkup: TelegramMarkup } | undefined {
+export function handleScheduleCallback(proactive: ProactiveStore, token: string, binding: ButtonBinding): { text: string; replyMarkup: TelegramMarkup } | undefined {
   if (!token.startsWith("sch:")) return;
   const { owner } = proactive;
   owner.db.all("CREATE TABLE IF NOT EXISTS umpi_schedule_buttons (token TEXT PRIMARY KEY, data TEXT NOT NULL)");
@@ -34,8 +34,7 @@ export function handleScheduleCallback(proactive: ProactiveStore, token: string,
     const row = owner.db.all<{ data: string }>("SELECT data FROM umpi_schedule_buttons WHERE token=?", token)[0];
     if (!row) throw new StateError(409, "This schedule control is no longer available. Open /schedule again.");
     const button = JSON.parse(row.data) as ScheduleButton;
-    if (!owner.deliveries(button.groupId).some(delivery => delivery.channel === "telegram" && delivery.status === "sent" && delivery.messageId === messageId
-      && delivery.replyMarkup?.inline_keyboard.some(buttons => buttons.some(item => item.callback_data === token)))) throw new StateError(409, "This control does not belong to that message.");
+    if (!owner.buttonShown(button.groupId, token, binding)) throw new StateError(409, "This control does not belong to that message.");
     return owner.effect(`schedule-button:${token}`, () => {
       proactive.configure({ expectedVersion: button.expectedVersion, enabled: button.enabled, quietHours: proactive.settings().quietHours });
       return { text: button.enabled ? "Follow-through enabled." : "Follow-through paused. Existing text reminders and device alarms are unchanged.", replyMarkup: { inline_keyboard: [] } };

@@ -1,7 +1,7 @@
 ---
 title: Browser access and authentication snapshots
 aliases: [Aside integration, offline browsing, cloud browser access]
-updated: 2026-10-14
+updated: 2026-11-23
 ---
 
 # Browser access and authentication snapshots
@@ -60,7 +60,9 @@ Neither the model nor scheduling can approve work, register exact policies, gran
 Mac access, export credentials, or authorize cloud execution.
 
 Corrections update the existing task. Active work keeps its owner, tabs, chosen
-snapshot versions, and original deadline. A settled continuation needs fresh
+snapshot versions, and original deadline. A correction from `correct_browser_task`
+joins active work without a new card, so the owner is sent its whole text at once
+as a notice. A settled continuation needs fresh
 approval. A correction cannot widen the fixed sites or undo an earlier website
 effect; changed site scope needs a new reviewed task. Purchases, posts, messages,
 and account changes require explicit intent in the approved goal. Website content,

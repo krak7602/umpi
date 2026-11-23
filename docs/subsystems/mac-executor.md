@@ -1,7 +1,7 @@
 ---
 title: Mac executor
 aliases: [native execution, execution journal, outbound Mac connection]
-updated: 2026-10-14
+updated: 2026-11-23
 ---
 
 # Mac executor
@@ -64,7 +64,7 @@ Run `service-install` again after updating the code or Node; it replaces the run
 
 The SQLite journal uses WAL and full synchronization. It records start intent before spawn and the terminal result before contacting the coordinator. An identical repeated assignment cannot repeat the command's filesystem effects. Conflicting assignments or completions are rejected.
 
-A command has a detached process group. Cancellation and timeouts send TERM and then KILL after a bounded grace period. Descendants that retain output pipes are also cleaned up after shell exit. Combined captured stdout and stderr are capped at 32,768 bytes, with truncation recorded. Timeouts are failures even if a signal handler exits with code zero. `UMPI_*` and `TELEGRAM_*` variables are removed from command children; other command configuration remains the owner's responsibility.
+A command has a detached process group. A stop (cancellation, a timeout, or the shell's own exit) runs as a pass in `src/mac/command.ts`: it reads the process table (`ps`), sends TERM, sends KILL after 500 ms, and reads again every 100 ms until nothing of the command is left, for at most 3 seconds. Every later stop request runs another pass, also after the shell has exited. A pass covers the group's members and descendants that left the group, found through their parent while the parent lives. After the shell exits, a process outside the group that still holds the command's output is found with `lsof` and stopped the same way. A stop is reported only when it is proven: if processes remain after a pass, or the output is still held by a process that cannot be found, the output pipes are closed so the job ends, and the result is `uncertain`, which pauses execution. A descendant that left the group, closed the output, and lost its parent cannot be found; macOS gives no containment for that. Combined captured stdout and stderr are capped at 32,768 bytes, with truncation recorded. Timeouts are failures even if a signal handler exits with code zero. `UMPI_*` and `TELEGRAM_*` variables are removed from command children; other command configuration remains the owner's responsibility.
 
 SIGINT and SIGTERM cancel active execution, preserve the actual result, and make a bounded delivery attempt. A coordinator disconnect alone does not stop the command. Unacknowledged completions are resent without rerunning work.
 
@@ -126,3 +126,4 @@ The [reminder contract](assistant-runtime.md#reminders) owns retries and what Do
 - 2026-10-24: Added the wake socket and state-based polling, after one-second polling of every lane kept the coordinator awake. Added the launchd login item after an executor started from a terminal session stopped with that session and was not restarted for two days.
 - 2026-10-30: Added the knock lane: due reminders chime and prompt on the Mac when the owner is at it.
 - 2026-10-24: Moved the browser login exporter into the executor as a lane, so one login item runs everything and snapshot requests arrive by wake instead of minute polling.
+- 2026-11-23: A stop request acts again until the command is proven stopped. Before, the stop ran once: after the shell exited, a later cancel or timeout did nothing, and a child outside the process group that held the output kept the job open.

@@ -19,7 +19,10 @@
     "setup": "tsx src/cli/setup.ts",
     "telegram": "node --env-file-if-exists=.dev.vars --import tsx src/cli/telegram.ts",
     "typecheck": "tsc -p tsconfig.worker.json --noEmit && tsc -p tsconfig.mac.json --noEmit",
+    "check:docs": "node scripts/check-docs.ts",
+    "check:publishable": "node scripts/check-publishable.ts",
     "test": "tsx --test tests/*.test.ts",
+    "test:mutants": "node scripts/mutate-authority.mjs",
     "build": "wrangler deploy --dry-run --outdir dist",
     "deploy": "node --env-file-if-exists=.dev.vars --import tsx src/cli/deploy.ts"
   },

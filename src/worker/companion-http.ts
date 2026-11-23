@@ -41,6 +41,10 @@ export interface CompanionHttpContext {
   t3Act(machine: string, action: T3Action, requestId: string): Promise<{ result?: unknown; held?: object }>;
   /** Approves or declines a request the way its message's button does, so Telegram's copy changes too. */
   decideT3(id: string, approve: boolean): Promise<{ text: string }>;
+  /** Memory updates waiting for the owner, for the app's review cards. */
+  memoryReviews(): Promise<object[]>;
+  /** Approves or rejects a memory review the way its message's button does, so the chat's copy changes too. */
+  decideMemory(id: string, decision: "approve" | "reject"): Promise<{ text: string }>;
   /** Umpi's cloud machines: wake, sleep, delete. */
   cloud(id: string, action: "wake" | "sleep" | "delete"): Promise<object>;
 }
@@ -155,6 +159,7 @@ export async function companionRequest(request: Request, context: CompanionHttpC
     catch (error) { if (error instanceof T3Error) throw new StateError(502, error.message); throw error; }
   }
   if (path === "/api/device/t3/requests") return Response.json({ requests: context.t3Requests() });
+  if (path === "/api/device/memory/reviews") return Response.json({ reviews: await context.memoryReviews() });
   if (path === "/api/device/t3/questions") {
     const query = new URL(request.url).searchParams;
     try { return Response.json(await context.t3.questions(identifier(query.get("machine"), "machine ID"), identifier(query.get("id"), "thread ID"))); }
@@ -209,6 +214,11 @@ export async function companionRequest(request: Request, context: CompanionHttpC
   }
   const t3Decision = /^\/api\/device\/t3\/requests\/([^/]+)\/(approve|decline)$/.exec(path);
   if (t3Decision) return Response.json(await context.decideT3(t3Decision[1]!, t3Decision[2] === "approve"));
+  const memoryDecision = /^\/api\/device\/memory\/reviews\/([^/]+)\/(approve|reject)$/.exec(path);
+  if (memoryDecision) {
+    exactKeys(record(body), []);
+    return Response.json(await context.decideMemory(identifier(memoryDecision[1], "memory review ID"), memoryDecision[2] as "approve" | "reject"));
+  }
   const t3Connect = /^\/api\/device\/t3\/machines\/([^/]+)\/connect$/.exec(path);
   if (t3Connect) return Response.json(await context.t3.connect(t3Connect[1]!, new URL(request.url).origin));
   if (path === "/api/device/knocks") return Response.json(companion.owner.recordPhoneKnocks(device.id, body));

@@ -1,7 +1,7 @@
 import { InputError, record } from "../shared/protocol.js";
 import { BriefStore } from "./brief-store.js";
 import type { SituationStore } from "./situation-store.js";
-import { StateError, type TelegramMarkup } from "./store.js";
+import { StateError, type ButtonBinding, type TelegramMarkup } from "./store.js";
 import { readJson } from "./transport.js";
 
 type BriefButton = { groupId: string; settingsVersion: number } & ({ action: "now" } | { action: "configure"; enabled: boolean });
@@ -34,17 +34,14 @@ export function enqueueBriefControls(store: BriefStore, requestId: string): void
 }
 
 /** Parent performs owner webhook checks first. */
-export async function handleBriefCallback(store: BriefStore, token: string, messageId: number, wake: () => Promise<void>): Promise<BriefCallbackResult | undefined> {
+export async function handleBriefCallback(store: BriefStore, token: string, binding: ButtonBinding, wake: () => Promise<void>): Promise<BriefCallbackResult | undefined> {
   if (!token.startsWith("brf:")) return;
   table(store);
   const owner = store.proactive.owner;
   const row = owner.db.all<{ data: string }>("SELECT data FROM umpi_brief_buttons WHERE token=?", token)[0];
   if (!row) throw new StateError(409, "This brief control is no longer available. Open /brief again.");
   const button = JSON.parse(row.data) as BriefButton;
-  if (!owner.deliveries(button.groupId).some(delivery => delivery.channel === "telegram" && delivery.status === "sent" && delivery.messageId === messageId
-    && delivery.replyMarkup?.inline_keyboard.some(buttons => buttons.some(item => item.callback_data === token)))) {
-    throw new StateError(409, "This brief control does not belong to that confirmed message.");
-  }
+  if (!owner.buttonShown(button.groupId, token, binding)) throw new StateError(409, "This brief control does not belong to that confirmed message.");
   const result = owner.effect<BriefCallbackResult>(`brief-button:${token}`, () => {
     if (store.settings().version !== button.settingsVersion) throw new StateError(409, "Brief settings changed. Open /brief again.");
     if (button.action === "now") {

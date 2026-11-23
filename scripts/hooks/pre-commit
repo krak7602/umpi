@@ -1,0 +1,3 @@
+#!/bin/sh
+# Git runs this file when `core.hooksPath` is `scripts/hooks`. See scripts/pre-commit.sh.
+exec "$(git rev-parse --show-toplevel)/scripts/pre-commit.sh" "$@"

@@ -17,6 +17,8 @@ export interface BrowserTask {
   prompt: string; sites: BrowserSiteScope[]; timeoutMs: number; corrections: string[];
   channel: Channel; parentSessionId: string; sessionId?: string; createdAt: string; updatedAt: string;
   selectedSnapshots: BrowserSnapshotMetadata[]; run?: BrowserRun; finish?: BrowserResult; result?: BrowserResult; issue?: string; stopOutcome?: "cancelled" | "failed";
+  /** Set when the deadline passed with the run not stopped, so that expiry acts once. */
+  timedOut?: boolean;
 }
 export interface BrowserRpcRecord { taskId: string; runId: string; request: BrowserRequest; dispatched: boolean; receipt?: BrowserReceipt }
 export interface BrowserInput { operationId: string; taskId: string; runId: string; text: string; initial: boolean; status: "pending" | "submitted" | "done" }
@@ -264,7 +266,7 @@ export class BrowserStore {
   }
   private begin(task: BrowserTask, executorId: string): BrowserTask {
     const runId = randomUUID(), assignment = { taskId: task.taskId, runId, deadlineAt: iso(Date.now() + task.timeoutMs), sites: task.sites };
-    return this.save({ ...task, status: "preparing", finish: undefined, result: undefined, issue: undefined, stopOutcome: undefined, updatedAt: iso(), run: { runId, target: task.target, executorId, assignment, snapshots: task.selectedSnapshots } });
+    return this.save({ ...task, status: "preparing", finish: undefined, result: undefined, issue: undefined, stopOutcome: undefined, timedOut: undefined, updatedAt: iso(), run: { runId, target: task.target, executorId, assignment, snapshots: task.selectedSnapshots } });
   }
   claimCloud(): BrowserTask | undefined {
     return this.owner.db.transaction(() => { if (this.active().some(task => task.run?.target === "cloud" && (!task.run.stoppedAt || task.status === "uncertain" && !task.run.reconciledAt))) return; const task = this.active().find(task => task.target === "cloud" && task.status === "queued"); return task ? this.begin(task, `browser-cloud:${task.taskId}`) : undefined; });
@@ -364,7 +366,13 @@ export class BrowserStore {
     });
   }
   reconcile(taskId: string, expectedVersion: unknown): BrowserTask { return this.owner.db.transaction(() => { const task = this.requireTask(taskId); this.version(task, expectedVersion); if (task.status !== "uncertain" || !task.run?.stoppedAt) throw new StateError(409, "Reconciliation requires the retained owner's actual stop receipt"); const next = this.save({ ...task, status: "failed", run: { ...task.run, reconciledAt: iso() }, issue: "Prior browser owner is confirmed stopped; uncertain effects were not replayed", updatedAt: iso() }); return next; }); }
-  expire(now = Date.now()): void { for (const task of this.active()) if (task.run && !task.run.stoppedAt && active.has(task.status) && Date.parse(task.run.assignment.deadlineAt) <= now) this.fail(task.taskId, "Approved browser deadline expired; waiting for actual stop"); }
+  expire(now = Date.now()): void {
+    for (const task of this.active()) {
+      if (!task.run || task.run.stoppedAt || task.timedOut || !active.has(task.status) || Date.parse(task.run.assignment.deadlineAt) > now) continue;
+      // Once per run: a task that waits for its stop is not written again on every drive.
+      this.owner.db.transaction(() => { this.fail(task.taskId, "Approved browser deadline expired; waiting for actual stop"); this.save({ ...this.requireTask(task.taskId), timedOut: true }); });
+    }
+  }
   private feedback(task: BrowserTask): void {
     const key = `browser-feedback:${task.taskId}:${task.run?.runId ?? `version-${task.version}`}:${task.status}`;
     const result = task.result ? { outcome: task.result.outcome, summary: task.result.summary, evidenceCount: task.result.evidence.length } : null;

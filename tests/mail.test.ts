@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { GMAIL_SCOPES, MAIL_SYNC_MESSAGE_BATCH_LIMIT, readGmailChanges, type GmailSyncContinuation, type GmailSyncResult, type GmailThreadSnapshot } from "../src/worker/gmail.js";
 import { MailStore } from "../src/worker/mail-store.js";
 import { MailRuntime } from "../src/worker/mail-runtime.js";
-import { mailScreen, type MailScreenInput, type MailScreenVerdict } from "../src/worker/mail-screen.js";
+import { mailScreen, mailScreenAudited, MAIL_SCREEN_AUDIT_ONE_IN, type MailScreenInput, type MailScreenVerdict } from "../src/worker/mail-screen.js";
 import { Decisions } from "../src/worker/decisions.js";
 import { enqueueMailControls, handleMailCallback } from "../src/worker/mail-telegram.js";
 import { ProactiveStore } from "../src/worker/proactive-store.js";
@@ -313,6 +313,36 @@ test("a decision-model screen skips unlikely mail before the review, and a faile
   await runtime.drive(NOW);
   const resolved = f.mail.thread(`mail-${createHash("sha256").update("screen-0").digest("hex").slice(0, 32)}`)!;
   assert.equal(resolved.status, "resolved"); assert.equal(resolved.factsPending, undefined); assert.deepEqual(resolved.messages, []);
+});
+
+test("one in twenty threads the screen would skip is reviewed anyway, and the review's decision measures the screen", async t => {
+  const f = fixture(t), settingsVersion = f.mail.settings().version;
+  const stored = (source: string) => `mail-${createHash("sha256").update(source).digest("hex").slice(0, 32)}`;
+  // The sample is fixed by the thread and its content version: find two sampled threads and one that is not.
+  const sources = Array.from({ length: 400 }, (_, index) => `audit-${index}`);
+  const sampled = sources.filter(source => mailScreenAudited(stored(source), `in-${source}:none`));
+  assert.ok(sampled.length > 400 / MAIL_SCREEN_AUDIT_ONE_IN / 3 && sampled.length < 400 / MAIL_SCREEN_AUDIT_ONE_IN * 3, `about one in ${MAIL_SCREEN_AUDIT_ONE_IN}: ${sampled.length} of 400`);
+  const plain = sources.find(source => !sampled.includes(source))!;
+  const chosen = [sampled[0]!, sampled[1]!, plain];
+  const runtime = new MailRuntime(f.mail, undefined, async () => undefined, async () => ({ attention: 0.04, facts: 0.02 }));
+  const threads = chosen.map(source => snapshot({ id: source, versionKey: `in-${source}:none`, subject: `Notice ${source}`, messages: [{ ...snapshot().messages[0]!, id: `in-${source}`, subject: `Notice ${source}` }] }));
+  f.mail.applySync("primary", settingsVersion, { ...syncResult(threads[0]!), threads }, NOW);
+  await runtime.drive(NOW);
+  assert.equal(f.mail.thread(stored(plain))!.status, "ignored", "an unsampled low score is skipped as before");
+  for (const source of sampled.slice(0, 2)) {
+    const thread = f.mail.thread(stored(source))!;
+    assert.equal(thread.status, "pending"); assert.deepEqual([thread.screen!.passed, thread.screen!.audit], [true, true]);
+  }
+  const { input } = openReview(f);
+  assert.equal(input.threads.length, 2, "the review sees the sampled threads like any others");
+  // The review finds one of them needs the owner: the screen would have lost it.
+  f.mail.commitReview("mail-review", input.threads.map((thread, index) => index === 0
+    ? { id: thread.id, expectedVersion: thread.version, outcome: "notify" as const, summary: "The account will close.", reason: "A reply is needed.", suggestedAction: "Answer it." }
+    : { id: thread.id, expectedVersion: thread.version, outcome: "ignore" as const, summary: "A routine notice." }), [], NOW);
+  const audit = (f.mail.status() as { screenAudit: { oneIn: number; thresholds: object; months: object[] } }).screenAudit;
+  assert.deepEqual(audit, { oneIn: MAIL_SCREEN_AUDIT_ONE_IN, thresholds: { attention: 0.2, facts: 0.3 },
+    months: [{ month: new Date(NOW).toISOString().slice(0, 7), reviewed: 2, missed: 1, factsMissed: 0, missScores: [{ attention: 0.04, facts: 0.02 }] }] });
+  assert.ok(!JSON.stringify(audit).includes("Notice"), "the tally holds scores, never mail text");
 });
 
 test("the mail screen asks the decision service two yes/no questions about bounded mail", async t => {
