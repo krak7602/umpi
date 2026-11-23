@@ -75,7 +75,10 @@ actor KokoroVoice {
         let result = try await manager.synthesizeDetailed(text: text, voice: voice, speed: max(0.7, min(1.6, speed)))
         let seconds = Double(result.samples.count) / Double(result.sampleRate)
         let took = Date().timeIntervalSince(started)
-        voiceLog(String(format: "kokoro made %.1f s of speech in %.2f s (%.1fx real time)", seconds, took, seconds / max(took, 0.001)))
+        // Sizes and rates only, never the text. A stretch that sounds rushed or slurred shows as few milliseconds per
+        // character (about 60 at speed 1 is normal); a peak near 1 means the sound is clipped.
+        voiceLog(String(format: "kokoro made %.1f s of speech from %d characters in %.2f s (%.1fx real time): %.0f ms per character at speed %.2f, peak %.2f",
+                        seconds, text.count, took, seconds / max(took, 0.001), 1000 * seconds / Double(max(1, text.count)), speed, result.samples.reduce(0) { max($0, abs($1)) }))
         return result.samples
     }
 

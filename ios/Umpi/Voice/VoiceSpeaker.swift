@@ -53,10 +53,9 @@ final class VoiceSpeaker: @unchecked Sendable {
 
     private func writeNext() {
         guard !writing, !pending.isEmpty else { return }
-        // The first sentence goes alone so speech starts soon; after that, everything waiting is spoken as one stretch,
-        // so there are fewer seams between sentences.
-        let text = written == 0 ? pending.removeFirst() : pending.joined(separator: " ")
-        if written > 0 { pending.removeAll() }
+        // Only Kokoro's stretches are capped; an iOS voice reads any length the same.
+        let (text, taken) = Self.nextStretch(of: pending, first: written == 0, limit: voice.kokoro != nil ? Self.stretchLimit : .max)
+        pending.removeFirst(taken)
         written += 1
         writing = true
         let number = next; next += 1
@@ -65,6 +64,28 @@ final class VoiceSpeaker: @unchecked Sendable {
         unplayed[number] = 0
         if let kokoro = voice.kokoro { speakWithKokoro(text, voice: kokoro, number: number, generation: generation); return }
         writeWithApple(text, number: number, generation: generation)
+    }
+
+    /// The most characters Kokoro speaks as one stretch. Kokoro talks faster the longer its input is, and swallows short
+    /// words: measured on six invented replies, a stretch of up to 250 characters was heard as well as single sentences,
+    /// and a whole reply as one stretch had about 2.5 times the word errors at 10% less time per character. Past about
+    /// 510 phonemes FluidAudio also cuts the input at a space, which can fall mid-sentence.
+    static let stretchLimit = 250
+
+    /// The next stretch to speak from the waiting sentences, and how many of them it takes. A reply's first sentence
+    /// goes alone, so speech starts soon. After that, waiting sentences join into one stretch, so there are fewer
+    /// seams, up to `limit` characters: always whole sentences, and the rest stay waiting for the next stretch. A
+    /// sentence longer than the limit goes alone.
+    static func nextStretch(of pending: [String], first: Bool, limit: Int = stretchLimit) -> (text: String, taken: Int) {
+        guard var text = pending.first else { return ("", 0) }
+        var taken = 1
+        guard !first else { return (text, taken) }
+        for sentence in pending.dropFirst() {
+            guard sentence.count < limit - text.count else { break }
+            text += " " + sentence
+            taken += 1
+        }
+        return (text, taken)
     }
 
     /// Kokoro makes the whole stretch at once, then it plays; if it fails, this stretch uses the iOS voice instead.

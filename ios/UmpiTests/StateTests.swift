@@ -37,6 +37,8 @@ private actor StateTestServer: CompanionTransport {
             workflows: [workflow], actions: [], jobs: [], reminders: [], choices: [], operations: [])
     }
     func setOffline(_ value: Bool) { offline = value }
+    /// A later read of the same state: only the times the coordinator stamps on each answer differ.
+    func laterRead() { snapshot.serverTime = "2026-01-01T12:00:12Z"; snapshot.device.lastSeenAt = "2026-01-01T12:00:12Z" }
     func loseMutationReply() { dropMutationReply = true }
     func loseMessageReply() { dropMessageReply = true }
     func losePairReply() { dropPairReply = true }
@@ -162,6 +164,9 @@ private actor StateTestServer: CompanionTransport {
     }
 }
 
+/// Set when something observed changes, which is when SwiftUI would draw again.
+private final class Redraw: @unchecked Sendable { var asked = false }
+
 @MainActor
 final class StateTests: XCTestCase {
     private func directory() throws -> URL {
@@ -252,6 +257,86 @@ final class StateTests: XCTestCase {
         XCTAssertEqual(restored.conflicts.count, 1)
         XCTAssertEqual(restored.displayedValues(for: changed.id)["title"], .string("Offline input"))
         XCTAssertEqual(restored.displayedValues(for: changed.id)["ready"], .bool(true))
+    }
+
+    func testAReadThatChangesNothingRedrawsNothingAndWritesNothing() async throws {
+        let folder = try directory()
+        let vault = vault()
+        let server = StateTestServer(workflow: fixture())
+        let store = makeStore(server: server, directory: folder, vault: vault)
+        await store.refresh()
+        let file = folder.appendingPathComponent("companion-state.json")
+        let saved = try Data(contentsOf: file)
+        let firstRead = try XCTUnwrap(store.lastSyncedAt)
+        let redraw = Redraw()
+        withObservationTracking { _ = (store.workflows, store.jobs, store.choices, store.pendingMessages.count) } onChange: { redraw.asked = true }
+
+        await server.laterRead()
+        await store.refresh()
+        XCTAssertFalse(redraw.asked, "the same state must not draw the app again")
+        XCTAssertEqual(try Data(contentsOf: file), saved, "nor write the state file again")
+        XCTAssertGreaterThan(try XCTUnwrap(store.lastSyncedAt), firstRead)
+        XCTAssertEqual(store.statusMessage, "Up to date")
+
+        var updated = fixture(); updated.revision = 2; updated.values["title"] = .string("Changed elsewhere")
+        await server.replaceWorkflow(updated)
+        await store.refresh()
+        XCTAssertTrue(redraw.asked)
+        XCTAssertEqual(store.workflows.first?.values["title"], .string("Changed elsewhere"))
+        let restored = makeStore(server: server, directory: folder, vault: vault)
+        XCTAssertEqual(restored.workflows.first?.revision, 2)
+        XCTAssertEqual(restored.lastSyncedAt, store.lastSyncedAt, "a change saves the time of the latest read with it")
+    }
+
+    func testAChatMessageIsSavedBeforeItIsReportedQueued() async throws {
+        let folder = try directory()
+        let vault = vault()
+        let server = StateTestServer(workflow: fixture())
+        let store = makeStore(server: server, directory: folder, vault: vault)
+        await store.refresh()
+        await server.setOffline(true)
+        XCTAssertTrue(store.queueChat(text: "Order more seed trays"))
+        XCTAssertEqual(store.pendingMessages.map(\.message.text), ["Order more seed trays"])
+        // Nothing was delivered and nothing else ran: the message is in the state file already.
+        let restored = makeStore(server: server, directory: folder, vault: vault)
+        XCTAssertEqual(restored.pendingMessages.map(\.message.text), ["Order more seed trays"])
+        XCTAssertEqual(restored.queuedCount, 1)
+        let sent = await server.messageLog()
+        XCTAssertTrue(sent.isEmpty)
+
+        // Where the state cannot be saved, the message is not reported queued, so the chat keeps it in the field.
+        let blocked = folder.appendingPathComponent("not-a-folder")
+        try Data().write(to: blocked)
+        let unsaved = makeStore(server: server, directory: blocked.appendingPathComponent("state"), vault: vault)
+        XCTAssertFalse(unsaved.queueChat(text: "Order more seed trays"))
+        XCTAssertNotNil(unsaved.errorMessage)
+    }
+
+    func testStateTheChatDoesNotShowDoesNotRedrawIt() async throws {
+        let folder = try directory()
+        let server = StateTestServer(workflow: fixture())
+        let store = makeStore(server: server, directory: folder, vault: vault())
+        await store.refresh()
+        let chat = Redraw(), badge = Redraw()
+        withObservationTracking { _ = store.pendingMessages.count } onChange: { chat.asked = true }
+        withObservationTracking { _ = (store.jobs, store.choices) } onChange: { badge.asked = true }
+
+        var updated = fixture(); updated.revision = 2; updated.values["ready"] = .bool(true)
+        await server.replaceWorkflow(updated)
+        await store.refresh()
+        XCTAssertEqual(store.workflows.first?.revision, 2)
+        XCTAssertFalse(chat.asked, "a workflow change is not the chat's")
+        XCTAssertFalse(badge.asked, "nor the tab bar's")
+
+        await server.addQuestion()
+        await store.refresh()
+        XCTAssertEqual(store.choices.map(\.id), ["question"])
+        XCTAssertTrue(badge.asked, "a new question changes the badge")
+        XCTAssertFalse(chat.asked)
+
+        await server.setOffline(true)
+        XCTAssertTrue(store.queueChat(text: "Which trays fit the shelf?"))
+        XCTAssertTrue(chat.asked, "a queued message shows in the chat at once")
     }
 
     func testConflictKeepLocalRequiresNewExplicitRevisionBoundOperation() async throws {

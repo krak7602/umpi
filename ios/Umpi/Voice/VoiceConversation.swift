@@ -63,6 +63,8 @@ final class VoiceConversation {
     private var cutWhileSending = false
     /// The last owner turn the recognizer gave final words for.
     private var finalTurn = 0
+    /// Watches a reply that is expected, so voice mode does not wait for ever when its frames stop.
+    private var replyWatch: Task<Void, Never>?
 
     private final class Reply {
         let id: String
@@ -74,6 +76,12 @@ final class VoiceConversation {
         var loggedText = false
         var filter = SpokenFilter()
         var finished = false
+        /// When a frame for this reply last arrived (or the reply was first expected).
+        var lastFrame = Date()
+        /// The voice socket closed since the last frame: frames may have been lost.
+        var socketDropped = false
+        /// The text that arrived to be spoken: all of it, and the current part's.
+        var received = "", receivedPart = ""
         init(id: String) { self.id = id }
     }
 
@@ -411,6 +419,7 @@ final class VoiceConversation {
                 if cutWhileSending { cutWhileSending = false; interrupted = (operation.id, ""); early.removeValue(forKey: operation.id); return }
                 let reply = Reply(id: operation.id)
                 self.reply = reply
+                watch(reply)
                 voiceLog("sent; waiting for the reply (\(early[operation.id]?.count ?? 0) speech frames already here)")
                 for frame in early.removeValue(forKey: operation.id) ?? [] { apply(frame, to: reply) }
                 early.removeAll()
@@ -431,16 +440,21 @@ final class VoiceConversation {
     }
 
     private func apply(_ frame: Frame, to reply: Reply) {
-        guard !reply.finished else { return }
+        guard !reply.finished, !reply.done else { return }
+        reply.lastFrame = Date()
+        reply.socketDropped = false
         if let part = frame.part, part != reply.part {
             // A new message of the answer, such as after a tool: finish the last sentence first.
             flush(reply, all: true)
             reply.part = part
+            reply.receivedPart = ""
         }
         if let text = frame.text {
             if !reply.loggedText { reply.loggedText = true; voiceLog("reply: first words arrived") }
             // What Umpi shows in the chat is not read aloud.
-            reply.pendingText += reply.filter.feed(text)
+            let spoken = reply.filter.feed(text)
+            reply.pendingText += spoken
+            reply.received += spoken; reply.receivedPart += spoken
             if reply.filter.sawShown { showsInChat = true }
             flush(reply, all: false)
         }
@@ -486,6 +500,97 @@ final class VoiceConversation {
         if self.reply === reply { finishReply() }
     }
 
+    // MARK: A reply whose frames stop
+
+    /// A frame is expected at least this often while a reply is written; after it, the chat is read for the reply.
+    nonisolated static let replyQuiet: TimeInterval = 15
+    /// How often the chat is read for a reply whose frames stopped.
+    nonisolated static let replyReadEvery: TimeInterval = 5
+    /// With no frame and no chat entry for this long, voice mode stops waiting.
+    nonisolated static let replyLimit: TimeInterval = 180
+
+    enum ReplyCheck: Equatable { case wait, readChat, giveUp }
+
+    /// What to do about a reply that is expected and not written in full yet. `quiet` is the time since its last frame.
+    /// Frames stop for good when the voice socket closes mid-reply or the coordinator restarts, and the "done" frame
+    /// then never comes. The finished reply is still kept as a chat entry, so the chat is read for it: at once when the
+    /// socket closed, after `replyQuiet` otherwise (a tool can run that long with no frame), then every
+    /// `replyReadEvery`. After `replyLimit` with nothing, voice mode listens again.
+    nonisolated static func replyCheck(quiet: TimeInterval, socketDropped: Bool, sinceRead: TimeInterval) -> ReplyCheck {
+        if quiet >= replyLimit { return .giveUp }
+        guard socketDropped || quiet >= replyQuiet else { return .wait }
+        return sinceRead >= replyReadEvery ? .readChat : .wait
+    }
+
+    /// What is left to say of `full` (the reply's spoken part as the chat keeps it) after `received` (the text that
+    /// arrived in frames), compared without white space, which the two copies do not share. Empty when everything
+    /// arrived. Nil when `received` is not how `full` begins: then what was said cannot be placed in it.
+    nonisolated static func unspoken(of full: String, after received: String) -> String? {
+        var index = full.startIndex
+        for character in received where !character.isWhitespace {
+            while index < full.endIndex, full[index].isWhitespace { index = full.index(after: index) }
+            // More arrived than the chat's copy holds: nothing is left.
+            guard index < full.endIndex else { return "" }
+            guard full[index] == character else { return nil }
+            index = full.index(after: index)
+        }
+        return String(full[index...])
+    }
+
+    private func watch(_ reply: Reply) {
+        replyWatch?.cancel()
+        replyWatch = Task { [weak self] in
+            var lastRead = Date.distantPast
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self, !Task.isCancelled, self.started, self.reply === reply, !reply.finished, !reply.done else { return }
+                let quiet = Date().timeIntervalSince(reply.lastFrame)
+                switch Self.replyCheck(quiet: quiet, socketDropped: reply.socketDropped, sinceRead: Date().timeIntervalSince(lastRead)) {
+                case .wait:
+                    continue
+                case .readChat:
+                    lastRead = Date()
+                    let text = await self.chatEntry(reply)
+                    // The "done" frame may have come meanwhile.
+                    guard self.started, self.reply === reply, !reply.finished, !reply.done else { return }
+                    guard let text else { continue }
+                    voiceLog(String(format: "reply: no frame for %.0f s (socket closed: %@); reading the rest from the chat", quiet, reply.socketDropped ? "yes" : "no"))
+                    self.finishFromChat(reply, text: text)
+                    return
+                case .giveUp:
+                    voiceLog(String(format: "reply: no frame and no chat entry for %.0f s; listening again", quiet))
+                    self.showsInChat = true
+                    self.finishReply()
+                    return
+                }
+            }
+        }
+    }
+
+    /// The reply's chat entry, once the reply is written in full.
+    private func chatEntry(_ reply: Reply) async -> String? {
+        guard let transport = store?.chatTransport,
+              let data = try? await transport.send(path: "/api/device/chat?limit=10", method: "GET", body: nil),
+              let page = try? JSONDecoder().decode(ChatPage.self, from: data) else { return nil }
+        return page.entries.first { $0.id == "umpi:answer:\(reply.id)" }?.text
+    }
+
+    /// The reply is written in full, but its last frames did not arrive: speaks what is left of it from the chat entry.
+    private func finishFromChat(_ reply: Reply, text: String) {
+        reply.done = true
+        let lead = Self.spokenLead(text)
+        if lead != text.trimmingCharacters(in: .whitespacesAndNewlines) { showsInChat = true }
+        // An answer after a tool can be all the chat keeps, so the current part alone is tried too.
+        if let rest = Self.unspoken(of: lead, after: reply.received) ?? Self.unspoken(of: lead, after: reply.receivedPart) {
+            reply.pendingText += rest
+        } else {
+            // What was said cannot be placed in the chat's copy: nothing is repeated, and the chat has it all.
+            showsInChat = true
+        }
+        flush(reply, all: true)
+        if !reply.spokeAnything || !speaker.isBusy { finishReply() }
+    }
+
     private func finishReply() {
         guard let reply, !reply.finished else { return }
         voiceLog("reply finished (spoke anything: \(reply.spokeAnything)); listening")
@@ -522,7 +627,10 @@ final class VoiceConversation {
                     delay = 1
                     if case .string(let text) = message, let data = text.data(using: .utf8), let frame = try? JSONDecoder().decode(Frame.self, from: data) { receive(frame) }
                 }
-            } catch {}
+            } catch {
+                // Frames sent while the socket is closed are lost; the reply is then read from the chat (`watch`).
+                if let reply, !reply.finished, !reply.done, !Task.isCancelled { reply.socketDropped = true; voiceLog("voice socket closed while a reply was expected") }
+            }
             task.cancel(with: .goingAway, reason: nil)
             try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
             delay = min(delay * 2, 8)
@@ -569,12 +677,14 @@ final class VoiceConversation {
         return kept.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// What to say aloud: Markdown marks and links are not read out.
+    /// What to say aloud: Markdown marks and links are not read out. An underscore inside a name, such as a tool's or a
+    /// file's, becomes a space: run together, the parts are read as one unknown word and come out slurred.
     nonisolated static func speakable(_ sentence: String) -> String {
         var text = sentence
         text = text.replacingOccurrences(of: #"\[([^\]]+)\]\([^)]+\)"#, with: "$1", options: .regularExpression)
         text = text.replacingOccurrences(of: #"https?://\S+"#, with: "the link", options: .regularExpression)
         text = text.replacingOccurrences(of: #"(^|\s)(#{1,6}|[-*•]|\d+\.)\s+"#, with: "$1", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"(?<=[\p{L}\p{N}])_+(?=[\p{L}\p{N}])"#, with: " ", options: .regularExpression)
         text = text.replacingOccurrences(of: #"[*_`~>|]"#, with: "", options: .regularExpression)
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }

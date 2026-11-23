@@ -4,7 +4,9 @@ import Observation
 
 @MainActor @Observable
 final class CompanionStore {
-    private var state = CompanionDiskState()
+    /// Everything kept on disk. A view that reads any part of it through this property is drawn again on every change
+    /// to it; see `jobs`, `choices`, and `pendingMessages` for the parts that are observed on their own.
+    private var state = CompanionDiskState() { didSet { mirror() } }
     private(set) var isPaired = false
     private(set) var hasPendingPairing = false
     private(set) var serverURL = ""
@@ -13,6 +15,9 @@ final class CompanionStore {
     private(set) var errorMessage: String?
     private(set) var statusMessage = "Not paired"
     private(set) var capabilities: [Capability] = []
+    /// When the coordinator's state was last read. Observed on its own, not as part of `state`: it changes on every
+    /// read, every few seconds while the app is open, and must not redraw every view that shows other state.
+    private(set) var lastSyncedAt: Date?
 
     @ObservationIgnored private let vault: any CredentialVault
     @ObservationIgnored private let persistence: CompanionPersistence?
@@ -55,6 +60,7 @@ final class CompanionStore {
                     state = saved
                 }
                 state.deviceID = credentials.deviceID
+                lastSyncedAt = state.lastSyncedAt
                 capabilities = state.snapshot?.device.capabilities ?? []
                 statusMessage = hasPendingPairing ? "Pairing needs recovery" : "Cached state — refresh to synchronize"
             }
@@ -62,16 +68,33 @@ final class CompanionStore {
             storageReady = false
             errorMessage = "Stored pairing or local state could not be read. Unlock the device before trying again."
         }
+        // Property observers do not run during initialization.
+        mirror()
     }
 
     var workflows: [Workflow] { state.snapshot?.workflows ?? [] }
-    var jobs: [Job] { state.snapshot?.jobs ?? [] }
-    var choices: [Choice] { state.snapshot?.choices ?? [] }
+    /// The snapshot's jobs and choices, and the outbox's app messages, each observed on its own and set only when it
+    /// changes. The tab bar's badge and the chat read these, and they are always on screen: read through `state`, any
+    /// change to it (a reminder, a finished operation, an acknowledgment) redrew the whole conversation.
+    private(set) var jobs: [Job] = []
+    private(set) var choices: [Choice] = []
+    /// App messages still waiting in the durable outbox, oldest first, for the chat to show as sending.
+    private(set) var pendingMessages: [(message: MessageRequest, failed: Bool)] = []
+    private func mirror() {
+        let jobs = state.snapshot?.jobs ?? []
+        if jobs != self.jobs { self.jobs = jobs }
+        let choices = state.snapshot?.choices ?? []
+        if choices != self.choices { self.choices = choices }
+        let pending: [(message: MessageRequest, failed: Bool)] = state.outbox.compactMap { entry in
+            if case .message(let message) = entry.payload { return (message, entry.status != "queued") }
+            return nil
+        }
+        if !pending.elementsEqual(pendingMessages, by: { $0 == $1 }) { pendingMessages = pending }
+    }
     var reminders: [Reminder] { state.snapshot?.reminders ?? [] }
     var operations: [Operation] { state.snapshot?.operations ?? [] }
     var conflicts: [WorkflowConflict] { state.conflicts }
     var runs: [WorkflowRun] { state.runs }
-    var lastSyncedAt: Date? { state.lastSyncedAt }
     var queuedCount: Int { state.outbox.count }
     var remoteEffectsAllowed: Bool {
         get { state.remoteEffectsAllowed }
@@ -86,13 +109,6 @@ final class CompanionStore {
         return byID.values.filter { state.effectOutcomes[$0.id] == nil }.sorted { $0.createdAt < $1.createdAt }
     }
 
-    /// App messages still waiting in the durable outbox, oldest first, for the chat to show as sending.
-    var pendingMessages: [(message: MessageRequest, failed: Bool)] {
-        state.outbox.compactMap { entry in
-            if case .message(let message) = entry.payload { return (message, entry.status != "queued") }
-            return nil
-        }
-    }
     /// The operation the coordinator gives an app message, known before it answers. The chat entry can arrive over
     /// the socket while the send is still in flight, since the coordinator answers only once Umpi's turn has started;
     /// knowing it lets the chat show that entry in the message's place rather than beside it. Mirrors `admitApp` in
@@ -349,6 +365,7 @@ final class CompanionStore {
             deviceID = pending.deviceID
             hasPendingPairing = true
             state = CompanionDiskState(deviceID: pending.deviceID)
+            lastSyncedAt = nil
             guard persist() else { return }
             isPairing = false
             await recoverPendingPairing()
@@ -418,6 +435,7 @@ final class CompanionStore {
         deviceID = ""
         capabilities = []
         state = CompanionDiskState()
+        lastSyncedAt = nil
         stateEpoch += 1
         do { try persistence?.clear(); storageReady = true }
         catch { storageReady = false; report("Disconnected, but local storage could not be removed.") }
@@ -437,17 +455,28 @@ final class CompanionStore {
         do {
             let data = try await client.send(path: "/api/device/state", method: "GET", body: nil)
             guard generation == sessionGeneration else { return }
-            let snapshot = try JSONDecoder().decode(DeviceSnapshot.self, from: data)
+            // Decoded off the main actor: the snapshot is some hundred kilobytes, and it is read every few seconds.
+            let snapshot = try await Task.detached(priority: .userInitiated) { try JSONDecoder().decode(DeviceSnapshot.self, from: data) }.value
+            guard generation == sessionGeneration else { return }
             guard snapshot.protocolVersion == 1, snapshot.device.id == deviceID, !snapshot.device.revoked,
                   snapshot.revision >= 0 else { throw CompanionClientError.invalidResponse }
             // A reply started before a local accepted mutation must not replace its newer result.
             guard epoch == stateEpoch, snapshot.revision >= (state.snapshot?.revision ?? 0) else { return }
-            state.snapshot = snapshot
-            state.lastSyncedAt = Date()
-            for i in state.conflicts.indices {
-                state.conflicts[i].current = snapshot.workflows.first { $0.id == state.conflicts[i].workflowID }
+            let conflictsCurrent = state.conflicts.allSatisfy { conflict in
+                conflict.current == snapshot.workflows.first { $0.id == conflict.workflowID }
             }
-            guard persist() else { return }
+            if conflictsCurrent, state.snapshot?.hasSameContent(as: snapshot) == true {
+                // Nothing changed since the last read: `state` is left alone, so no view is drawn again and the state
+                // file is not written again. The time of this read is saved with the next change.
+                lastSyncedAt = Date()
+            } else {
+                state.snapshot = snapshot
+                lastSyncedAt = Date()
+                for i in state.conflicts.indices {
+                    state.conflicts[i].current = snapshot.workflows.first { $0.id == state.conflicts[i].workflowID }
+                }
+                guard persist() else { return }
+            }
             successfulRefreshCount += 1
             statusMessage = state.outbox.isEmpty ? "Up to date" : "\(state.outbox.count) changes need synchronization"
             errorMessage = nil
@@ -480,7 +509,7 @@ final class CompanionStore {
 
     func register(capabilities: [Capability], apnsToken: String? = nil, apnsEnvironment: String? = nil,
                   activityTokens: [ActivityToken]? = nil, activityJobIds: [String]? = nil) async {
-        self.capabilities = capabilities
+        if self.capabilities != capabilities { self.capabilities = capabilities }
         guard let client else { return }
         let generation = sessionGeneration
         do {
@@ -602,7 +631,9 @@ final class CompanionStore {
     }
     @discardableResult private func persist() -> Bool {
         guard let persistence, storageReady else { report("Local storage is unavailable. No changes will be sent."); return false }
-        do { try persistence.save(state); return true }
+        var saved = state
+        saved.lastSyncedAt = lastSyncedAt
+        do { try persistence.save(saved); return true }
         catch { report("Could not save local state. No new network request or device effect will start."); return false }
     }
     private func report(_ message: String) { errorMessage = message }

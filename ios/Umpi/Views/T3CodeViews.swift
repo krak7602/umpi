@@ -157,13 +157,21 @@ struct T3ApprovalCard: View {
                     Text(request.headline).font(.body.weight(.semibold)).lineLimit(2)
                 }
             }
-            Text(request.place).font(.footnote).foregroundStyle(.secondary)
-            if let quoted = request.quoted, !quoted.isEmpty {
-                Text(quoted).lineLimit(8).textSelection(.enabled)
+            if request.summary.isEmpty {
+                Text(request.place).font(.footnote).foregroundStyle(.secondary)
+                if let quoted = request.quoted, !quoted.isEmpty {
+                    Text(quoted).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 12).padding(.vertical, 9).frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                if let why = request.why { (Text("Why  ").fontWeight(.semibold).foregroundStyle(.primary) + Text(why)).font(.footnote).foregroundStyle(.secondary) }
+            } else {
+                // The coordinator's own card text: the machine, the thread ID, every field, Umpi's reason, and the whole
+                // message. Approve runs exactly this, so none of it is cut or left out here.
+                Text(request.summary).font(.footnote).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 12).padding(.vertical, 9).frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
-            if let why = request.why { (Text("Why  ").fontWeight(.semibold).foregroundStyle(.primary) + Text(why)).font(.footnote).foregroundStyle(.secondary) }
             state
         }
         .padding(14)

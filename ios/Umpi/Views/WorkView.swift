@@ -26,7 +26,8 @@ struct WorkView: View {
     private var pendingRequests: [T3Request] {
         t3.pendingRequests.filter { request in machineFilter == nil || t3.machines.first { $0.id == machineFilter }?.label == request.machineLabel }
     }
-    private var nothingWaiting: Bool { waitingJobs.isEmpty && openQuestions.isEmpty && effects.pendingReview.isEmpty && waitingThreads.isEmpty && pendingRequests.isEmpty }
+    private var memoryReviews: [MemoryReview] { MemoryReviewModel.shared.pending }
+    private var nothingWaiting: Bool { waitingJobs.isEmpty && openQuestions.isEmpty && effects.pendingReview.isEmpty && waitingThreads.isEmpty && pendingRequests.isEmpty && memoryReviews.isEmpty }
     private var multipleMachines: Bool { t3.machines.count > 1 }
 
     var body: some View {
@@ -38,6 +39,11 @@ struct WorkView: View {
                 Section { Label("Nothing is waiting on you", systemImage: "checkmark.circle").foregroundStyle(.secondary) }
             } else {
                 Section("Needs you") {
+                    ForEach(memoryReviews) { review in
+                        NavigationLink { MemoryReviewView(id: review.id) } label: {
+                            WorkRow(symbol: "brain", tint: .orange, title: review.headline, detail: "Memory update · Umpi's idea")
+                        }
+                    }
                     ForEach(pendingRequests) { request in
                         NavigationLink { T3RequestView(id: request.id) } label: {
                             WorkRow(symbol: "hand.raised.fill", tint: .orange, title: request.headline, detail: "Umpi's idea · \(request.machineLabel)")
@@ -96,7 +102,7 @@ struct WorkView: View {
         .softScrollEdges()
         .readableWidth()
         .refreshable { await reload() }
-        .onAppear { Task { async let threads: Void = t3.loadThreads(store); async let requests: Void = t3.loadRequests(store); _ = await (threads, requests) } }
+        .onAppear { Task { async let threads: Void = t3.loadThreads(store); async let requests: Void = t3.loadRequests(store); async let memory: Void = MemoryReviewModel.shared.load(store); _ = await (threads, requests, memory) } }
         .navigationTitle("Work")
         .navigationBarTitleDisplayMode(.inline)
         #if os(macOS)
@@ -124,7 +130,8 @@ struct WorkView: View {
 
     private func reload() async {
         async let sync: Void = store.synchronize(); async let threads: Void = t3.loadThreads(store); async let requests: Void = t3.loadRequests(store)
-        _ = await (sync, threads, requests)
+        async let memory: Void = MemoryReviewModel.shared.load(store)
+        _ = await (sync, threads, requests, memory)
     }
 
     /// All machines, or one: a quiet row of chips above the lists.

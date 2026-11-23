@@ -72,6 +72,8 @@ final class VoiceTests: XCTestCase {
         XCTAssertEqual(VoiceConversation.speakable("- Buy `milk`"), "Buy milk")
         XCTAssertEqual(VoiceConversation.speakable("Details at https://example.com/x?y=1 today"), "Details at the link today")
         XCTAssertEqual(VoiceConversation.speakable("### Summary"), "Summary")
+        XCTAssertEqual(VoiceConversation.speakable("I ran `list_reminders` and read _all_ of daily_note.md."), "I ran list reminders and read all of daily note.md.",
+                       "an underscore inside a name is a space, so its parts are read as words")
     }
 
     func testToolsBecomePlainWords() {
@@ -103,6 +105,66 @@ final class VoiceTests: XCTestCase {
         XCTAssertEqual(plain.feed("Costs < 5 dollars"), "Costs < 5 dollars", "a lone < is not held forever")
         XCTAssertEqual(plain.feed("x <", end: false), "x ", "a possible tag start waits for the next text")
         XCTAssertEqual(plain.feed("", end: true), "<")
+    }
+
+    func testWaitingSentencesJoinIntoStretchesUpToALimit() {
+        let waiting = ["It is dry until six.", "Take the bike.", "The parcel office closes at five.", "Anything else?"]
+        XCTAssertEqual(VoiceSpeaker.nextStretch(of: waiting, first: true, limit: 45).text, "It is dry until six.", "a reply's first sentence goes alone")
+        XCTAssertEqual(VoiceSpeaker.nextStretch(of: waiting, first: true, limit: 45).taken, 1)
+        let next = VoiceSpeaker.nextStretch(of: Array(waiting.dropFirst()), first: false, limit: 50)
+        XCTAssertEqual(next.text, "Take the bike. The parcel office closes at five.")
+        XCTAssertEqual(next.taken, 2, "the rest stays waiting")
+        XCTAssertEqual(VoiceSpeaker.nextStretch(of: waiting, first: false, limit: .max).taken, 4, "an iOS voice takes everything waiting")
+        XCTAssertEqual(VoiceSpeaker.nextStretch(of: waiting, first: false, limit: 10).text, "It is dry until six.", "a sentence over the limit goes alone")
+        XCTAssertEqual(VoiceSpeaker.nextStretch(of: [], first: false).taken, 0)
+        // Whatever the limit, every sentence is spoken once and in order, in whole sentences.
+        for limit in [10, 35, 50, 250] {
+            var left = waiting, stretches: [String] = []
+            while !left.isEmpty {
+                let (text, taken) = VoiceSpeaker.nextStretch(of: left, first: stretches.isEmpty, limit: limit)
+                XCTAssertGreaterThan(taken, 0)
+                XCTAssertEqual(text, left.prefix(taken).joined(separator: " "))
+                XCTAssertTrue(taken == 1 || text.count <= limit, "limit \(limit)")
+                stretches.append(text)
+                left.removeFirst(taken)
+            }
+            XCTAssertEqual(stretches.joined(separator: " "), waiting.joined(separator: " "))
+        }
+        // Sentences come in at no more than about 230 characters, so Kokoro's limit always holds a whole one.
+        XCTAssertGreaterThanOrEqual(VoiceSpeaker.stretchLimit, 230)
+    }
+
+    func testASpeechWordGoesInOnlyWhereTheWordsReadLikeIt() {
+        XCTAssertEqual(PhononTranscriber.likeness("Brandwell", "Brantwell"), 0.889, accuracy: 0.001)
+        XCTAssertEqual(PhononTranscriber.likeness("Quill and", "Quillon"), 0.75, accuracy: 0.001, "spaces do not count")
+        XCTAssertEqual(PhononTranscriber.likeness("twelve minutes.", "Dremm"), 0.154, accuracy: 0.001)
+        XCTAssertEqual(PhononTranscriber.likeness("PLYNE.", "Plyne"), 1, "nor do case and punctuation")
+        XCTAssertEqual(PhononTranscriber.likeness("", "Vexo"), 0)
+        XCTAssertEqual(PhononTranscriber.likeness("?", "Vexo"), 0)
+        XCTAssertTrue(PhononTranscriber.plausible([(heard: "Brandwell", word: "Brantwell"), (heard: "Zolo", word: "Zerlo")]))
+        XCTAssertFalse(PhononTranscriber.plausible([(heard: "Brandwell", word: "Brantwell"), (heard: "twelve minutes.", word: "Dremm")]),
+                       "one word put where the text reads nothing like it refuses the spotter's text")
+        XCTAssertTrue(PhononTranscriber.plausible([]))
+    }
+
+    func testAReplyWhoseFramesStopIsReadFromTheChatAndTheWaitEnds() {
+        typealias V = VoiceConversation
+        XCTAssertEqual(V.replyCheck(quiet: 3, socketDropped: false, sinceRead: .infinity), .wait, "frames are still coming")
+        XCTAssertEqual(V.replyCheck(quiet: 3, socketDropped: true, sinceRead: .infinity), .readChat, "the socket closed: read at once")
+        XCTAssertEqual(V.replyCheck(quiet: 4, socketDropped: true, sinceRead: 1), .wait, "then every few seconds")
+        XCTAssertEqual(V.replyCheck(quiet: V.replyQuiet, socketDropped: false, sinceRead: .infinity), .readChat)
+        XCTAssertEqual(V.replyCheck(quiet: 60, socketDropped: false, sinceRead: V.replyReadEvery), .readChat, "a long tool run keeps being checked")
+        XCTAssertEqual(V.replyCheck(quiet: V.replyLimit, socketDropped: false, sinceRead: 1), .giveUp)
+        XCTAssertEqual(V.replyCheck(quiet: V.replyLimit + 5, socketDropped: true, sinceRead: .infinity), .giveUp)
+    }
+
+    func testOnlyWhatDidNotArriveIsReadFromTheChat() {
+        let full = "It is dry until six.\n\nTake the bike, though."
+        XCTAssertEqual(VoiceConversation.unspoken(of: full, after: ""), full, "nothing arrived: all of it")
+        XCTAssertEqual(VoiceConversation.unspoken(of: full, after: "It is dry until six. Take"), " the bike, though.", "white space differs between the copies")
+        XCTAssertEqual(VoiceConversation.unspoken(of: full, after: "It is dry until six. Take the bike, though."), "")
+        XCTAssertEqual(VoiceConversation.unspoken(of: full, after: "It is dry until six. Take the bike, though. Anything else?"), "", "more arrived than the chat's lead holds")
+        XCTAssertNil(VoiceConversation.unspoken(of: full, after: "Let me check the forecast."), "not how the chat's copy begins: nothing is repeated")
     }
 
     func testTheChatsCopySpeaksOnlyItsLead() {

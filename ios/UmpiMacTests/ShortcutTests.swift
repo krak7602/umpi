@@ -79,6 +79,8 @@ final class ChatNoticeTests: XCTestCase {
     func testAnApprovalsOutcomeNoteIsNotAnnounced() {
         let entries = [Entry(seq: 9, role: "umpi", id: "umpi:t3-request:r1:outcome"), Entry(seq: 10, role: "umpi", id: "umpi:t3-request:r1")]
         XCTAssertEqual(fresh(entries, after: 0), [10])
+        let memory = [Entry(seq: 11, role: "umpi", id: "umpi:memory:review:m1"), Entry(seq: 12, role: "umpi", id: "umpi:memory:outcome:m1:approved")]
+        XCTAssertEqual(fresh(memory, after: 0), [11], "a memory review is announced; its outcome note is not, the card shows it")
     }
 
     func testTheBaselineOnlyMovesForward() {

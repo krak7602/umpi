@@ -59,7 +59,7 @@ private struct RootView: View {
                     Tab("Work", systemImage: "tray.full", value: 2) {
                         NavigationStack { WorkView() }
                     }
-                    .badge(t3.needsYou + store.jobs.filter { $0.status == "pending_approval" }.count + store.choices.filter { $0.status == "pending" }.count)
+                    .badge(t3.needsYou + MemoryReviewModel.shared.pending.count + store.jobs.filter { $0.status == "pending_approval" }.count + store.choices.filter { $0.status == "pending" }.count)
                     Tab("Settings", systemImage: "gear", value: 3) {
                         NavigationStack { SettingsView() }
                     }
@@ -100,7 +100,7 @@ private struct RootView: View {
         }
         .onChange(of: scenePhase) { _, phase in if phase == .active, let action = UmpiRoute.take() { route(action) } }
         // The Work badge counts approvals; reading them needs no machine, so it is done on every return to the app.
-        .task(id: scenePhase) { if scenePhase == .active, store.isPaired { await t3.loadRequests(store) } }
+        .task(id: scenePhase) { if scenePhase == .active, store.isPaired { await t3.loadRequests(store); await MemoryReviewModel.shared.load(store) } }
         .onAppear { if let action = UmpiRoute.take() { route(action) } }
         .modifier(IntentRoutes(route: route))
         .alert("Pairing link", isPresented: Binding(get: { linkMessage != nil }, set: { if !$0 { linkMessage = nil } })) {

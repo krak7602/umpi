@@ -19,7 +19,8 @@ actor PhononTranscriber {
     private var manager: AsrManager?
     private var preparing: Task<Void, Error>?
     /// The owner's speech words, and FluidAudio's word spotter (Parakeet CTC 110M, about 100 MB, downloaded once when
-    /// there are words), which checks Phonon-2's text against the turn's audio and puts in the words it hears.
+    /// there are words), which checks Phonon-2's text against the turn's audio and puts in a word where the text reads
+    /// like it and the audio fits it (`spotterConfig`).
     private var words: [String] = []
     private var spotterModels: CtcModels?
     private var boosting: (words: [String], session: VocabularyBoostingSession)?
@@ -172,7 +173,7 @@ actor PhononTranscriber {
                 }
                 spotterModels = models
                 let vocabulary = CustomVocabularyContext(terms: wanted.map { CustomVocabularyTerm(text: $0) })
-                boosting = (wanted, try await VocabularyBoostingSession(vocabulary: vocabulary, ctcModels: models))
+                boosting = (wanted, try await VocabularyBoostingSession(vocabulary: vocabulary, ctcModels: models, config: Self.spotterConfig, thresholds: Self.spotterThresholds))
                 voiceLog("word spotter ready for \(wanted.count) speech words")
             } catch {
                 voiceLog("word spotter could not load: \(error.localizedDescription)")
@@ -184,6 +185,42 @@ actor PhononTranscriber {
     }
 
     nonisolated static var spotterDirectory: URL { CtcModels.defaultCacheDirectory(for: .ctc110m) }
+
+    /// How the word spotter decides. FluidAudio's defaults favour putting a word in, and in dictation they put speech
+    /// words where ordinary words were said. Three of its settings are changed:
+    /// - `spotterRescueEnabled: false`. The "acoustic rescue" (lists of up to 10 words only) replaces a span on sound
+    ///   alone, however unlike the word it reads, and caused nearly all wrong replacements.
+    /// - `minSimilarity: 0.6` (FluidAudio: 0.50 up to 10 words, 0.55 up to 100). A word goes in only where Phonon-2's
+    ///   text reads this much like it.
+    /// - `shortTermCbwTaperPivot: 5` with exponent 2. A word of fewer than 5 tokens (a short name) gets less of the
+    ///   bonus FluidAudio gives speech words, so it must fit the audio better than the common word Phonon-2 wrote.
+    /// A short name one sound away from a common word ("Tark" for "park") can still replace it now and then.
+    /// Measured with invented words and system voices: `docs/subsystems/phone-companion.md`, "Speech words".
+    private static let spotterConfig = VocabularyRescorer.Config(shortTermCbwTaperPivot: 5, shortTermCbwTaperExponent: 2, spotterRescueEnabled: false)
+    private static let spotterThresholds = VocabularyBoostingSession.Thresholds(minSimilarity: 0.6)
+
+    /// A speech word goes in only where the words it replaces read at least this much like it (`likeness`).
+    static let leastLikeness = 0.5
+
+    /// How alike two texts read, from 0 to 1, by their letters and digits alone: 1 less the edit distance over the
+    /// longer length. "Brandwell" and "Brantwell" give 0.89; "twelve minutes" and "Dremm" give 0.15.
+    static func likeness(_ first: String, _ second: String) -> Double {
+        let a = Array(first.lowercased().filter { $0.isLetter || $0.isNumber }), b = Array(second.lowercased().filter { $0.isLetter || $0.isNumber })
+        guard !a.isEmpty, !b.isEmpty else { return a.isEmpty && b.isEmpty ? 1 : 0 }
+        var previous = Array(0...b.count), current = [Int](repeating: 0, count: b.count + 1)
+        for i in 1...a.count {
+            current[0] = i
+            for j in 1...b.count { current[j] = min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1)) }
+            swap(&previous, &current)
+        }
+        return 1 - Double(previous[b.count]) / Double(max(a.count, b.count))
+    }
+
+    /// True when every speech word went where the words it replaced read like it. One that did not (a word put in on
+    /// sound alone) means the spotter's text is not trusted, and Phonon-2's goes as written.
+    static func plausible(_ replacements: [(heard: String, word: String)]) -> Bool {
+        replacements.allSatisfy { likeness($0.heard, $0.word) >= leastLikeness }
+    }
 
     /// The words in `audio` (mono, any sample rate), or nil when the model is not loaded yet or fails.
     func transcribe(_ audio: TurnAudio) async -> String? {
@@ -203,12 +240,17 @@ actor PhononTranscriber {
     }
 
     /// Phonon-2's text with the speech words the spotter heard put in. At most 2 s: past that the text goes as written,
-    /// and the spotter finishes on its own.
+    /// and the spotter finishes on its own. The text also goes as written when a word went where the words read
+    /// nothing like it, which the spotter's settings should already prevent.
     private static func corrected(_ text: String, timings: [TokenTiming], samples: [Float], session: VocabularyBoostingSession) async -> String {
         let started = Date()
         let output = await firstOf(seconds: 2) { await session.rescore(text: text, tokenTimings: timings, audioSamples: samples) }
         guard let output else { voiceLog("word spotter took over 2 s; sending phonon's words as written"); return text }
         guard let result = output, result.wasModified else { return text }
+        guard plausible(result.replacements.map { ($0.originalWord, $0.replacementWord ?? "") }) else {
+            voiceLog("word spotter put a speech word where the words read unlike it (\(result.replacements.count) put in); sending phonon's words as written")
+            return text
+        }
         voiceLog(String(format: "word spotter put in %d speech words in %.2f s", result.replacements.count, Date().timeIntervalSince(started)))
         return result.text
     }

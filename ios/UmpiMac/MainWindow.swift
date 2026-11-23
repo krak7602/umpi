@@ -187,7 +187,7 @@ struct MacRootView: View {
         .environment(\.openVoiceMode) { app.talkInMain() }
         .onChange(of: store.isPaired) { _, paired in app.mainWindow.transition(paired: paired) }
         // The Work badge counts approvals; reading them needs no machine, so it is done whenever the window opens.
-        .task { if store.isPaired { await t3.loadRequests(store) } }
+        .task { if store.isPaired { await t3.loadRequests(store); await MemoryReviewModel.shared.load(store) } }
         .onChange(of: app.section) { _, section in
             // Voice mode listens only while it shows: leaving the Chat ends it.
             if section != .chat { app.mainTalking = false }
@@ -228,7 +228,7 @@ struct MacRootView: View {
     }
 
     private var workBadge: Int {
-        t3.needsYou + store.jobs.filter { $0.status == "pending_approval" }.count + store.choices.filter { $0.status == "pending" }.count
+        t3.needsYou + MemoryReviewModel.shared.pending.count + store.jobs.filter { $0.status == "pending_approval" }.count + store.choices.filter { $0.status == "pending" }.count
     }
 
     /// Each section in its own stack, so its title shows in the window's toolbar and its pages push there. Forms are

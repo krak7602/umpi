@@ -1,4 +1,6 @@
 import Foundation
+import SwiftUI
+import UIKit
 import XCTest
 @testable import Umpi
 
@@ -6,6 +8,19 @@ import XCTest
 final class ChatTests: XCTestCase {
     private func entry(_ seq: Int, role: String, surface: String = "app", operation: String? = nil, at: String = "2026-11-03T10:00:00.000Z") -> ChatEntry {
         ChatEntry(seq: seq, id: "e\(seq)", at: at, role: role, surface: surface, kind: role == "owner" ? "text" : "reply", text: "t\(seq)", operationId: operation)
+    }
+
+    func testAMemoryReviewDecodesWithItsChangedLinesAndSaysWhatBecameOfIt() throws {
+        let json = #"{"reviews":[{"id":"r1","kind":"update","status":"pending","topic":"Preferences","source":"Topics/Example.md","category":"preferences","reason":"You asked for examples.","before":"Use short summaries.","after":"Prefer examples.","changes":[{"op":"remove","text":"Use short summaries."},{"op":"add","text":"Prefer examples."}],"createdAt":"2026-11-03T10:00:00.000Z","entry":"umpi:memory:review:r1"},{"id":"r2","kind":"restore","status":"stale","topic":"Routine","source":"Topics/Example.md","category":"routines","reason":"","before":"a","after":"b","changes":null,"createdAt":"2026-11-02T10:00:00.000Z","decidedAt":"2026-11-02T11:00:00.000Z","entry":"umpi:memory:review:r2"}]}"#
+        struct List: Decodable { var reviews: [MemoryReview] }
+        let reviews = try JSONDecoder().decode(List.self, from: Data(json.utf8)).reviews
+        XCTAssertEqual(reviews[0].changes?.map(\.op), ["remove", "add"])
+        XCTAssertTrue(reviews[0].pending)
+        XCTAssertEqual(reviews[0].headline, "Update “Preferences”")
+        XCTAssertNil(reviews[1].changes, "a topic too long to compare has no changed lines")
+        XCTAssertFalse(reviews[1].pending)
+        XCTAssertEqual(reviews[1].headline, "Restore “Routine”")
+        XCTAssertTrue(reviews[1].outcome.hasPrefix("Out of date"))
     }
 
     func testDecodesTheCoordinatorsPage() throws {
@@ -179,5 +194,106 @@ final class NoteMarkupTests: XCTestCase {
         guard case .list(_, _, let marked) = MarkdownBlock.parse("## Tasks\n\n- [ ] \n\n- [ ] Ask <!-- umpi-plan:a -->")[1] else { return XCTFail("marked tasks") }
         XCTAssertEqual(marked.count, 1)
         XCTAssertEqual(marked.first?.checkbox, false)
+    }
+}
+
+/// Set when something observed changes, which is when SwiftUI would draw again.
+private final class Redraw: @unchecked Sendable { var asked = false }
+
+private struct FieldHost: View {
+    let draft: ChatDraft
+    let placeholder: String
+    var body: some View {
+        ComposerTextView(draft: draft, revision: draft.revision, focused: draft.focused, placeholder: placeholder) { _ in }
+    }
+}
+
+@MainActor
+final class ComposerTests: XCTestCase {
+    private func watch(_ draft: ChatDraft) -> Redraw {
+        let redraw = Redraw()
+        withObservationTracking { _ = (draft.isEmpty, draft.hasWords, draft.revision, draft.focused) } onChange: { redraw.asked = true }
+        return redraw
+    }
+    /// Shows the field in the test host's window and returns its container.
+    private func show(_ draft: ChatDraft) async throws -> (UIHostingController<FieldHost>, ComposerField) {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        let host = UIHostingController(rootView: FieldHost(draft: draft, placeholder: "Message"))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        addTeardownBlock { @MainActor in window.isHidden = true }
+        try await Task.sleep(for: .milliseconds(300))
+        func find(_ view: UIView) -> ComposerField? { view as? ComposerField ?? view.subviews.lazy.compactMap(find).first }
+        return (host, try XCTUnwrap(find(window)))
+    }
+
+    func testTypingRedrawsNothingUntilTheComposerMustChange() {
+        let draft = ChatDraft()
+        var redraw = watch(draft)
+        draft.typed("W")
+        XCTAssertEqual(draft.text, "W", "the draft has the text at once")
+        XCTAssertTrue(redraw.asked, "the first character brings the send button")
+        XCTAssertTrue(draft.hasWords)
+
+        redraw = watch(draft)
+        for text in ["Wa", "Water", "Water the ferns", "Water the ferns\non Friday"] {
+            draft.typed(text)
+            XCTAssertEqual(draft.text, text)
+        }
+        draft.focused = false
+        XCTAssertFalse(redraw.asked, "more text, and focus that does not change, draw nothing again")
+        XCTAssertEqual(draft.revision, 0, "typing is not the app replacing the text")
+        XCTAssertEqual(draft.edits, 5)
+
+        draft.set("")
+        XCTAssertTrue(redraw.asked)
+        XCTAssertEqual(draft.revision, 1)
+        XCTAssertTrue(draft.isEmpty)
+        XCTAssertFalse(draft.hasWords)
+
+        draft.typed("  \n ")
+        XCTAssertFalse(draft.isEmpty)
+        XCTAssertFalse(draft.hasWords, "spaces and line breaks alone cannot be sent")
+    }
+
+    func testTheFieldKeepsABurstOfTextAndTakesOnlyWhatTheAppSets() async throws {
+        let draft = ChatDraft()
+        let (host, field) = try await show(draft)
+        let view = field.textView
+
+        // A burst, such as dictation or a paste in pieces: all of it arrives before SwiftUI runs again.
+        for piece in ["Buy ", "two bags ", "of compost"] { view.insertText(piece) }
+        XCTAssertEqual(draft.text, "Buy two bags of compost", "the draft is never older than the field")
+
+        // SwiftUI updates the field for another reason. It has no older text to write back.
+        host.rootView = FieldHost(draft: draft, placeholder: "Message Umpi")
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(view.text, "Buy two bags of compost")
+
+        // The app replaces the text; the field takes it once.
+        draft.set("Remind me ")
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(view.text, "Remind me ")
+        view.insertText("to prune the roses")
+        host.rootView = FieldHost(draft: draft, placeholder: "Message")
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(view.text, "Remind me to prune the roses", "a later update does not bring the set text back")
+        XCTAssertEqual(draft.text, view.text)
+    }
+
+    func testTypingWithinALineAsksForNoNewSize() async throws {
+        let (_, field) = try await show(ChatDraft())
+        let view = field.textView
+        let height = field.bounds.height
+        let asked = field.sizeRequests
+
+        for character in "Feed the cat at six" { view.insertText(String(character)) }
+        XCTAssertEqual(field.sizeRequests, asked, "SwiftUI is not asked to lay out again while the height stays")
+
+        view.insertText("\nand again at nine")
+        XCTAssertGreaterThan(field.sizeRequests, asked, "a new line needs a taller field")
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertGreaterThan(field.bounds.height, height)
     }
 }

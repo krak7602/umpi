@@ -10,9 +10,9 @@ struct ChatView: View {
     @State private var chat: ChatModel
     /// The chat keeps its own live connection; false when the app keeps one for every chat it shows (the Mac).
     private let ownsConnection: Bool
-    /// What is typed. Only the composer reads it while drawing, so a keystroke redraws the field, not the conversation.
+    /// What is typed, and whether the field has the keyboard. Only the composer reads them while drawing, so typing
+    /// and focus do not redraw the conversation.
     @State private var draft = ChatDraft()
-    @State private var composing = false
     @State private var attachment: PreparedAttachment?
     @State private var preparing: String?
     @State private var photoItems: [PhotosPickerItem] = []
@@ -67,7 +67,10 @@ struct ChatView: View {
                         } else if let previous, !previous.fromOwner, !entry.fromOwner {
                             Divider().padding(.horizontal, 40).opacity(0.6)
                         }
-                        ChatBubble(entry: entry, status: row.status) { data in Task { await chat.press(store, seq: entry.seq, data: data) } }
+                        // Drawn again only when its entry or status changes (`ChatBubble` is `Equatable`), not whenever the
+                        // conversation is: each drawing parses the message's Markdown again.
+                        ChatBubble(entry: entry, status: row.status) { [chat, store] data in Task { await chat.press(store, seq: entry.seq, data: data) } }
+                            .equatable()
                             // A sent message grows out of the corner nearest the field, as in Messages and Telegram.
                             .transition(entry.fromOwner ? .scale(scale: 0.4, anchor: .bottomTrailing).combined(with: .opacity) : .opacity)
                     }
@@ -106,7 +109,7 @@ struct ChatView: View {
             .scrollDismissesKeyboard(.interactively)
             #if os(iOS)
             // A tap anywhere in the conversation puts the keyboard away; buttons and links in messages still work.
-            .simultaneousGesture(TapGesture().onEnded { composing = false })
+            .simultaneousGesture(TapGesture().onEnded { draft.focused = false })
             #endif
             .softScrollEdges()
             .onChange(of: chat.entries.last?.seq) { old, _ in
@@ -178,6 +181,7 @@ struct ChatView: View {
         // Approval cards change in place: read the requests again whenever the chat changes and holds one.
         .task(id: chat.entries.map(\.buttons).description.hashValue) {
             if chat.entries.contains(where: { $0.id.hasPrefix("umpi:t3-request:") }) { await t3.loadRequests(store) }
+            if chat.entries.contains(where: { $0.id.hasPrefix("umpi:memory:review:") }) { await MemoryReviewModel.shared.load(store) }
         }
         // On screen only when this tab shows and the app is in front; another tab keeps the view alive but hidden.
         .onAppear { onScreen = true; requests.chatVisible = scenePhase == .active }
@@ -204,8 +208,8 @@ struct ChatView: View {
         .onChange(of: requests.draft, initial: true) { _, text in
             guard let text else { return }
             requests.draft = nil
-            if draft.text.isEmpty { draft.text = text }
-            composing = true
+            if draft.isEmpty { draft.set(text) }
+            draft.focused = true
         }
         .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: MediaPrep.maxImages, matching: .any(of: [.images, .videos]))
         .onChange(of: photoItems) { _, items in
@@ -220,8 +224,9 @@ struct ChatView: View {
         .refreshable { await chat.refresh(store) }
     }
 
-    /// Drawn in a body of its own: the draft it reads then redraws only the composer. Read in the chat's body, each
-    /// keystroke rebuilt every message and parsed its Markdown again, and typing lagged in a long conversation.
+    /// Drawn in a body of its own: what it reads of the draft then redraws only the composer, not every message. It
+    /// reads only what changes rarely (empty or not, sendable or not, focus), never the text: drawing the composer on
+    /// each keystroke made SwiftUI check the layout of the whole conversation again, and typing lagged in a long one.
     private var composer: some View {
         SeparatelyDrawn {
             composerRow
@@ -237,10 +242,10 @@ struct ChatView: View {
 
     /// Inserts Markdown the owner would otherwise type by hand; the text stays plain Markdown.
     @ViewBuilder private var formatButtons: some View {
-        Button { draft.text += draft.text.isEmpty || draft.text.hasSuffix(" ") || draft.text.hasSuffix("\n") ? "****" : " ****" } label: { Label("Bold", systemImage: "bold") }
-        Button { draft.text += draft.text.isEmpty || draft.text.hasSuffix("\n") ? "- " : "\n- " } label: { Label("List item", systemImage: "list.bullet") }
-        Button { draft.text += draft.text.isEmpty || draft.text.hasSuffix("\n") ? "- [ ] " : "\n- [ ] " } label: { Label("Checklist item", systemImage: "checklist") }
-        Button { draft.text += draft.text.isEmpty || draft.text.hasSuffix("\n") ? "```\n\n```" : "\n```\n\n```" } label: { Label("Code block", systemImage: "chevron.left.forwardslash.chevron.right") }
+        Button { draft.set(draft.text + (draft.text.isEmpty || draft.text.hasSuffix(" ") || draft.text.hasSuffix("\n") ? "****" : " ****")) } label: { Label("Bold", systemImage: "bold") }
+        Button { draft.set(draft.text + (draft.text.isEmpty || draft.text.hasSuffix("\n") ? "- " : "\n- ")) } label: { Label("List item", systemImage: "list.bullet") }
+        Button { draft.set(draft.text + (draft.text.isEmpty || draft.text.hasSuffix("\n") ? "- [ ] " : "\n- [ ] ")) } label: { Label("Checklist item", systemImage: "checklist") }
+        Button { draft.set(draft.text + (draft.text.isEmpty || draft.text.hasSuffix("\n") ? "```\n\n```" : "\n```\n\n```")) } label: { Label("Code block", systemImage: "chevron.left.forwardslash.chevron.right") }
     }
 
     /// A centred time before a message that starts a new stretch: the first one, a new day, or 10 minutes after the last.
@@ -260,13 +265,13 @@ struct ChatView: View {
     /// typed, since the Mac's field is usually focused and its attach button should stay a +.
     private var formatting: Bool {
         #if os(macOS)
-        !draft.text.isEmpty
+        !draft.isEmpty
         #else
-        composing || !draft.text.isEmpty
+        draft.focused || !draft.isEmpty
         #endif
     }
 
-    private var canSend: Bool { !draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || attachment != nil }
+    private var canSend: Bool { draft.hasWords || attachment != nil }
 
     private var composerRow: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -315,12 +320,17 @@ struct ChatView: View {
                 // A UIKit text view, so pasted photos, videos, and files arrive as attachments. Its insets keep the
                 // measured centring: a little more space above the text, and one line as tall as the + button.
                 #if os(macOS)
-                // The Mac's field: Return sends, Shift-Return starts a new line.
-                ComposerTextView(text: Bindable(draft).text, focused: $composing, placeholder: "Message Umpi", onReturn: { if canSend, preparing == nil { send() } }) { providers in
+                // The Mac's field: Return sends, Shift-Return starts a new line. It takes the text as a binding, whose
+                // value SwiftUI copies when this row is drawn. Reading `edits` draws the row on every change, so that copy
+                // is never older than the field's own text.
+                let _ = draft.edits
+                ComposerTextView(text: Binding(get: { draft.text }, set: { draft.typed($0) }), focused: Bindable(draft).focused, placeholder: "Message Umpi", onReturn: { if canSend, preparing == nil { send() } }) { providers in
                     prepare("Adding what you pasted…") { try await PreparedAttachment.pasted(providers) }
                 }
                 #else
-                ComposerTextView(text: Bindable(draft).text, focused: $composing, placeholder: "Message Umpi") { providers in
+                // The phone's field reads the draft itself. `revision` and `focused` are passed so that SwiftUI updates
+                // the field when the app changes either; typing changes neither.
+                ComposerTextView(draft: draft, revision: draft.revision, focused: draft.focused, placeholder: "Message Umpi") { providers in
                     prepare("Adding what you pasted…") { try await PreparedAttachment.pasted(providers) }
                 }
                 #endif
@@ -332,7 +342,7 @@ struct ChatView: View {
                             .accessibilityLabel("Send")
                     } else {
                         // With nothing typed, the button opens voice mode: a spoken conversation with Umpi.
-                        Button { composing = false; talk() } label: { Image(systemName: "waveform").font(.system(size: 17, weight: .semibold)).frame(width: 34, height: ChatView.fieldHeight) }
+                        Button { draft.focused = false; talk() } label: { Image(systemName: "waveform").font(.system(size: 17, weight: .semibold)).frame(width: 34, height: ChatView.fieldHeight) }
                             .tint(.primary)
                             .accessibilityIdentifier("chat.voiceMode")
                             .accessibilityLabel("Talk to Umpi")
@@ -365,7 +375,7 @@ struct ChatView: View {
             store.queueChat(text: text, attachment: sending?.value, context: sending?.context, media: sending?.media, previews: sending?.previews)
         }
         guard queued else { return }
-        draft.text = ""; attachment = nil
+        draft.set(""); attachment = nil
         sendSettling = true
         sends += 1
         Task {
@@ -412,9 +422,51 @@ struct ChatView: View {
     }
 }
 
-/// The chat's message field text, observed on its own so typing does not redraw the conversation.
+/// The chat's message field: its text and whether it has the keyboard.
+///
+/// The field (the text view) owns what is typed and reports every change here at once with `typed`, so `text` is never
+/// older than the field. Typing is not observed: SwiftUI draws again only when `isEmpty`, `hasWords`, or `focused`
+/// changes, or when the app replaces the text with `set`, which counts up `revision`. The field takes `text` back only
+/// when `revision` changed since it last did, so nothing can write an older text over what was just typed or pasted.
 @MainActor @Observable final class ChatDraft {
-    var text = ""
+    /// What the field holds, as it last reported, or what the app set.
+    @ObservationIgnored private(set) var text = ""
+    private(set) var isEmpty = true
+    /// The text has something other than spaces and line breaks, so it can be sent.
+    private(set) var hasWords = false
+    /// Counts the times the app replaced the text (a formatting button, a send, a draft begun elsewhere). Typing
+    /// does not change it.
+    private(set) var revision = 0
+    /// Counts every change, typed or set, for a field that takes the text as a binding (the Mac's).
+    private(set) var edits = 0
+    /// The field has, or should take, the keyboard. Setting the value it already has redraws nothing.
+    var focused: Bool {
+        get { keyboard }
+        set { if newValue != keyboard { keyboard = newValue } }
+    }
+    private var keyboard = false
+
+    /// The field reports its text after a keystroke, a paste, or dictation.
+    func typed(_ text: String) {
+        guard text != self.text else { return }
+        self.text = text
+        edits += 1
+        settle()
+    }
+    /// The app replaces the text; the field takes it at its next update.
+    func set(_ text: String) {
+        self.text = text
+        revision += 1
+        edits += 1
+        settle()
+    }
+    /// The observed flags change only when their value does, so text that stays non-empty redraws nothing.
+    private func settle() {
+        let empty = text.isEmpty
+        if empty != isEmpty { isEmpty = empty }
+        let words = text.unicodeScalars.contains { !CharacterSet.whitespacesAndNewlines.contains($0) }
+        if words != hasWords { hasWords = words }
+    }
 }
 
 /// Builds its content in its own body, so observed values the content reads redraw this view alone, not the view
@@ -563,10 +615,17 @@ private struct ChatBubble: View {
         return t3.request(String(entry.id.dropFirst("umpi:t3-request:".count)))
     }
 
+    /// A memory update Umpi proposes, drawn as its card once the app has the review; until then, its text and buttons.
+    private var memoryReview: MemoryReview? {
+        entry.id.hasPrefix("umpi:memory:review:") ? MemoryReviewModel.shared.review(entry: entry.id) : nil
+    }
+
     var body: some View {
         VStack(alignment: entry.fromOwner ? .trailing : .leading, spacing: 6) {
             if let approval {
                 T3ApprovalCard(request: approval) { approve in Task { await t3.decide(store, approval.id, approve: approve) } }
+            } else if let memoryReview {
+                MemoryReviewCard(review: memoryReview) { approve in Task { await MemoryReviewModel.shared.decide(store, memoryReview.id, approve: approve) } }
             } else {
                 if entry.fromOwner { ownerBubble } else if entry.kind == "message" { messageCard } else { reply }
                 if let rows = entry.buttons { buttons(rows) }
@@ -670,6 +729,12 @@ private struct ChatBubble: View {
     }
 }
 
+/// A bubble shows its entry and status. Its button action differs only by the entry it presses for, so two bubbles
+/// with the same entry and status are the same, and SwiftUI need not draw the second.
+extension ChatBubble: @MainActor Equatable {
+    static func == (a: ChatBubble, b: ChatBubble) -> Bool { a.entry == b.entry && a.status == b.status }
+}
+
 /// One row of the conversation: an entry of the chat log, or one of the owner's messages not in it yet. A message
 /// keeps its row's identity from the moment it is sent, so its entry later takes its place without a redraw.
 struct ChatRow: Identifiable {
@@ -689,7 +754,8 @@ extension ChatView {
         let expected = pending.compactMap { item in CompanionStore.appOperation(device: device, message: item.message.id).map { ($0, item.message.id) } }
         let local = Dictionary(sent.map { ($0.operationID, $0.message.id) } + expected, uniquingKeysWith: { $1 })
         // An approval's outcome note is for Telegram; here the card itself shows what became of it.
-        let shown = entries.filter { !($0.id.hasPrefix("umpi:t3-request:") && $0.id.hasSuffix(":outcome")) }
+        // A memory review's outcome note is the same: its card shows the outcome.
+        let shown = entries.filter { !($0.id.hasPrefix("umpi:t3-request:") && $0.id.hasSuffix(":outcome")) && !$0.id.hasPrefix("umpi:memory:outcome:") }
         var rows = shown.map { entry in
             ChatRow(id: entry.fromOwner ? entry.operationId.flatMap { local[$0] } ?? entry.id : entry.id, entry: entry)
         }

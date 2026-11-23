@@ -8,7 +8,7 @@ enum ChatNotices {
     static func fresh<Entry>(_ entries: [Entry], after baseline: Int, seq: (Entry) -> Int, role: (Entry) -> String, id: (Entry) -> String) -> [Entry] {
         entries
             .filter { seq($0) > baseline && role($0) == "umpi" }
-            .filter { !(id($0).hasPrefix("umpi:t3-request:") && id($0).hasSuffix(":outcome")) }
+            .filter { !(id($0).hasPrefix("umpi:t3-request:") && id($0).hasSuffix(":outcome")) && !id($0).hasPrefix("umpi:memory:outcome:") }
             .sorted { seq($0) < seq($1) }
     }
 

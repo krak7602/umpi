@@ -65,3 +65,14 @@ struct CompanionDiskState: Codable {
     var remoteEffectsAllowed = false
     var lastSyncedAt: Date? = nil
 }
+
+extension DeviceSnapshot {
+    /// The same state as `other`, whenever each was read: `serverTime` and the device's `lastSeenAt` differ on every
+    /// read and nothing in the app shows them.
+    func hasSameContent(as other: DeviceSnapshot) -> Bool {
+        var copy = self
+        copy.serverTime = other.serverTime
+        copy.device.lastSeenAt = other.device.lastSeenAt
+        return copy == other
+    }
+}

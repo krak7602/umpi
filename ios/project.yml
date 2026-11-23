@@ -111,6 +111,7 @@ targets:
       - UmpiMacTests
       - path: UmpiMac/Shortcut.swift
       - path: UmpiMac/ChatNotifier.swift
+      - path: UmpiMac/ComposerTextView.swift
     settings:
       base:
         SDKROOT: macosx

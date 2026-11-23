@@ -67,19 +67,13 @@ struct ComposerTextView: NSViewRepresentable {
             scroll.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
         context.coordinator.textView = textView
+        context.coordinator.givenText = text
         return container
     }
 
     func updateNSView(_ view: NSView, context: Context) {
         context.coordinator.parent = self
-        guard let textView = context.coordinator.textView else { return }
-        if textView.string != text {
-            textView.string = text
-            textView.needsDisplay = true
-        }
-        let isFirst = textView.window?.firstResponder === textView
-        if focused, !isFirst, let window = textView.window { DispatchQueue.main.async { window.makeFirstResponder(textView) } }
-        if !focused, isFirst, let window = textView.window { DispatchQueue.main.async { window.makeFirstResponder(nil) } }
+        context.coordinator.follow(text: text, focused: focused)
     }
 
     /// One line up to eight, then it scrolls. Measured with a layout of its own: SwiftUI also asks about widths it
@@ -108,7 +102,39 @@ struct ComposerTextView: NSViewRepresentable {
     @MainActor final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: ComposerTextView
         weak var textView: ComposerNSTextView?
+        /// The text and the focus the chat last gave the field; see `follow(text:focused:)`.
+        var givenText = ""
+        var givenFocus = false
         init(_ parent: ComposerTextView) { self.parent = parent }
+
+        /// Brings the field in line with the chat, on each SwiftUI update. The field follows the chat only when the
+        /// chat changed the text (a send cleared it, a draft was put in) or the focus. Between such changes the field
+        /// holds the truth, because an update can carry a value older than the field's:
+        /// - Text that an input method has not finished (marked text) is in the field but not yet in the draft.
+        ///   Writing the draft back on every update erased the word being composed.
+        /// - Focus given from outside SwiftUI (the panel opening, Command-N) reaches `focused` one turn of the run
+        ///   loop later. An update in that turn still said "not focused"; following it took the cursor out of the
+        ///   field, and typing, a paste, or text from a dictation tool then went nowhere.
+        func follow(text: String, focused: Bool) {
+            guard let textView else { return }
+            if text != givenText {
+                givenText = text
+                if textView.string != text {
+                    textView.string = text
+                    textView.needsDisplay = true
+                }
+            }
+            guard focused != givenFocus, let window = textView.window else { return }
+            givenFocus = focused
+            // On the next turn, because a change of first responder writes `focused`, and an update must not. The
+            // chat may want something else by then, so its value is read again.
+            DispatchQueue.main.async { [self] in
+                guard parent.focused == focused else { return }
+                let isFirst = window.firstResponder === textView
+                if focused, !isFirst { window.makeFirstResponder(textView) }
+                if !focused, isFirst { window.makeFirstResponder(nil) }
+            }
+        }
 
         func textDidChange(_ notification: Notification) {
             guard let textView else { return }
@@ -117,8 +143,8 @@ struct ComposerTextView: NSViewRepresentable {
             textView.enclosingScrollView?.superview?.invalidateIntrinsicContentSize()
         }
         func textDidBeginEditing(_ notification: Notification) { if !parent.focused { parent.focused = true } }
-        /// Focus given to the field from outside SwiftUI (Command-N, the panel opening) is kept: the binding follows it,
-        /// so the next update does not take the focus away again.
+        /// Focus given to the field from outside SwiftUI (Command-N, the panel opening) is kept: the binding follows it
+        /// on the next turn of the run loop, as a binding cannot be written during a SwiftUI update.
         func focusChanged(_ focused: Bool) {
             DispatchQueue.main.async { [self] in if parent.focused != focused { parent.focused = focused } }
         }
@@ -184,6 +210,13 @@ final class ComposerNSTextView: NSTextView {
         if providers.isEmpty { pasteAsPlainText(sender) } else { onPaste?(providers) }
     }
 
+    /// Paste stays on when the clipboard has only an image, such as a copied screenshot. A text view reads no
+    /// images, so it turned Paste off for one, and Command-V never reached `paste`.
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(paste(_:)), isEditable, Self.hasMedia(NSPasteboard.general) { return true }
+        return super.validateUserInterfaceItem(item)
+    }
+
     // Files and images dropped on the field attach, as a paste does; dropped text is inserted as usual.
     override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
         super.acceptableDragTypes + [.fileURL, .tiff, .png]
@@ -202,6 +235,12 @@ final class ComposerNSTextView: NSTextView {
         guard !providers.isEmpty, let onPaste else { return super.performDragOperation(sender) }
         onPaste(providers)
         return true
+    }
+
+    /// Whether a paste attaches: the clipboard has files, or images without text. It reads no file and no image.
+    static func hasMedia(_ pasteboard: NSPasteboard) -> Bool {
+        if pasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) { return true }
+        return pasteboard.string(forType: .string) == nil && pasteboard.canReadObject(forClasses: [NSImage.self], options: nil)
     }
 
     /// Copied files (from Finder) and images without text, as item providers; empty when the paste is text.
