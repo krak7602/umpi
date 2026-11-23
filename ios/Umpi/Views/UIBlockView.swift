@@ -100,6 +100,8 @@ struct UIBlockView: View {
     var body: some View {
         if let root = UIProps(block), root.type != nil {
             UIComponent(node: root)
+                // A block keeps a readable measure in a wide Mac window instead of stretching across it.
+                .frame(maxWidth: 560, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityElement(children: .contain)
         }
@@ -136,6 +138,9 @@ struct UIComponent: View {
         }
     }
 
+    /// Components that have a natural size of their own, as opposed to text and containers, which fill the width.
+    static let compact: Set<String> = ["button", "badge", "link", "icon"]
+
     private func spacing(_ name: String?) -> CGFloat {
         switch name {
         case "none": 0
@@ -148,8 +153,20 @@ struct UIComponent: View {
     @ViewBuilder private var stack: some View {
         let gap = spacing(node.text("gap"))
         if node.text("direction") == "horizontal" {
-            let alignment: VerticalAlignment = switch node.text("align") { case "start": .top; case "end": .bottom; default: .center }
-            HStack(alignment: alignment, spacing: gap) { UIChildren.each(node.children) }
+            if node.children.allSatisfy({ UIComponent.compact.contains($0.type ?? "") }) {
+                // Buttons, badges, links, and icons keep their own size and wrap onto more lines as whole items, so a
+                // long label never squeezes its neighbour or breaks mid-phrase beside it.
+                UIFlow(spacing: max(gap, 6), alignment: node.text("align")) { UIChildren.each(node.children) }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                let alignment: VerticalAlignment = switch node.text("align") { case "start": .top; case "end": .bottom; default: .firstTextBaseline }
+                HStack(alignment: alignment, spacing: gap) {
+                    ForEach(Array(node.children.enumerated()), id: \.offset) { _, child in
+                        // An icon or a badge keeps its size; text takes the rest of the line and wraps there.
+                        if child.type == "icon" || child.type == "badge" { UIComponent(node: child).fixedSize() } else { UIComponent(node: child) }
+                    }
+                }
+            }
         } else {
             let alignment: HorizontalAlignment = switch node.text("align") { case "center": .center; case "end": .trailing; default: .leading }
             VStack(alignment: alignment, spacing: gap) { UIChildren.each(node.children) }
@@ -158,10 +175,7 @@ struct UIComponent: View {
     }
 
     private var grid: some View {
-        let count = min(max(Int(node.number("columns") ?? 2), 2), 4)
-        return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10, alignment: .topLeading), count: count), alignment: .leading, spacing: 10) {
-            UIChildren.each(node.children)
-        }
+        UIColumns(count: min(max(Int(node.number("columns") ?? 2), 2), 4)) { UIChildren.each(node.children) }
     }
 
     private var card: some View {
@@ -170,8 +184,8 @@ struct UIComponent: View {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     if let name = node.text("icon") { icon(name, size: "medium").foregroundStyle(node.tone ?? .accentColor) }
                     VStack(alignment: .leading, spacing: 1) {
-                        if let title = node.text("title") { Text(title).font(.headline) }
-                        if let subtitle = node.text("subtitle") { Text(subtitle).font(.footnote).foregroundStyle(.secondary) }
+                        if let title = node.text("title") { Text(title).font(.headline).lineLimit(2) }
+                        if let subtitle = node.text("subtitle") { Text(subtitle).font(.footnote).foregroundStyle(.secondary).lineLimit(2) }
                     }
                 }
             }
@@ -224,10 +238,12 @@ struct UIComponent: View {
     private var keyvalue: some View {
         VStack(spacing: 7) {
             ForEach(Array(node.list("rows").enumerated()), id: \.offset) { _, row in
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text(row.text("label") ?? "").foregroundStyle(.secondary)
-                    Spacer(minLength: 8)
-                    Text(row.text("value") ?? "").foregroundStyle(row.tone ?? .primary).multilineTextAlignment(.trailing).textSelection(.enabled)
+                let label = Text(row.text("label") ?? "").foregroundStyle(.secondary)
+                let value = Text(row.text("value") ?? "").foregroundStyle(row.tone ?? .primary)
+                // Side by side when both fit on one line; a long value goes under its label instead of wrapping in a narrow column.
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) { label.lineLimit(1).fixedSize(); Spacer(minLength: 8); value.lineLimit(1).fixedSize() }
+                    VStack(alignment: .leading, spacing: 1) { label.font(.caption); value.fixedSize(horizontal: false, vertical: true) }.frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .font(.subheadline)
                 .accessibilityElement(children: .combine)
@@ -241,14 +257,14 @@ struct UIComponent: View {
         let grid = Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 7) {
             GridRow {
                 ForEach(Array(columns.enumerated()), id: \.offset) { _, column in
-                    Text(column.text("title") ?? "").font(.caption.weight(.semibold)).foregroundStyle(.secondary).gridColumnAlignment(alignment(column))
+                    Text(column.text("title") ?? "").font(.caption.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1).fixedSize().gridColumnAlignment(alignment(column))
                 }
             }
             Divider()
             ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                 GridRow {
                     ForEach(Array(row.enumerated()), id: \.offset) { index, cell in
-                        Text(cell).font(.subheadline).monospacedDigit().gridColumnAlignment(alignment(index < columns.count ? columns[index] : nil))
+                        Text(cell).font(.subheadline).monospacedDigit().lineLimit(1).fixedSize().gridColumnAlignment(alignment(index < columns.count ? columns[index] : nil))
                     }
                 }
             }
@@ -304,6 +320,87 @@ struct UIComponent: View {
     @ViewBuilder private var link: some View {
         if let address = node.text("url"), let url = URL(string: address) {
             Link(destination: url) { Label(node.text("label") ?? address, systemImage: "arrow.up.right").font(.subheadline) }
+        }
+    }
+}
+
+/// Lays items out in rows at their own size and starts a new row when the next item does not fit: whole items wrap,
+/// never the words inside one beside its neighbours. An item wider than the row gets the row to itself and wraps inside.
+struct UIFlow: Layout {
+    var spacing: CGFloat = 8
+    var alignment: String?
+
+    private struct Row { var items: [(index: Int, size: CGSize)] = []; var width: CGFloat = 0; var height: CGFloat = 0 }
+
+    private func rows(_ subviews: Subviews, width: CGFloat) -> [Row] {
+        var rows: [Row] = [Row()]
+        for (index, subview) in subviews.enumerated() {
+            var size = subview.sizeThatFits(.unspecified)
+            if size.width > width { size = subview.sizeThatFits(ProposedViewSize(width: width, height: nil)) }
+            let needed = rows[rows.count - 1].items.isEmpty ? size.width : rows[rows.count - 1].width + spacing + size.width
+            if needed > width, !rows[rows.count - 1].items.isEmpty { rows.append(Row()) }
+            let last = rows.count - 1
+            rows[last].width = rows[last].items.isEmpty ? size.width : rows[last].width + spacing + size.width
+            rows[last].height = max(rows[last].height, size.height)
+            rows[last].items.append((index, size))
+        }
+        return rows.filter { !$0.items.isEmpty }
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = rows(subviews, width: proposal.width ?? .infinity)
+        return CGSize(width: rows.map(\.width).max() ?? 0, height: rows.map(\.height).reduce(0, +) + spacing * CGFloat(max(rows.count - 1, 0)))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in rows(subviews, width: bounds.width) {
+            var x = bounds.minX + (alignment == "center" ? (bounds.width - row.width) / 2 : alignment == "end" ? bounds.width - row.width : 0)
+            for item in row.items {
+                subviews[item.index].place(at: CGPoint(x: x, y: y + (row.height - item.size.height) / 2), proposal: ProposedViewSize(item.size))
+                x += item.size.width + spacing
+            }
+            y += row.height + spacing
+        }
+    }
+}
+
+/// Equal columns: as many as asked for, fewer when a cell would be narrower than `minimum`, so three stats sit side
+/// by side on a wide screen and step down to two or one on a narrow one instead of squeezing their text.
+struct UIColumns: Layout {
+    var count: Int
+    var minimum: CGFloat = 104
+    var spacing: CGFloat = 12
+
+    private func columns(_ width: CGFloat) -> Int {
+        guard width.isFinite else { return count }
+        return max(1, min(count, Int((width + spacing) / (minimum + spacing))))
+    }
+    private func cell(_ width: CGFloat) -> CGFloat {
+        let columns = CGFloat(columns(width))
+        return width.isFinite ? (width - spacing * (columns - 1)) / columns : minimum
+    }
+    private func heights(_ subviews: Subviews, width: CGFloat) -> [CGFloat] {
+        let columns = columns(width), cell = cell(width)
+        return stride(from: 0, to: subviews.count, by: columns).map { start in
+            subviews[start..<min(start + columns, subviews.count)].map { $0.sizeThatFits(ProposedViewSize(width: cell, height: nil)).height }.max() ?? 0
+        }
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .infinity, heights = heights(subviews, width: width)
+        let natural = cell(width) * CGFloat(columns(width)) + spacing * CGFloat(columns(width) - 1)
+        return CGSize(width: width.isFinite ? width : natural, height: heights.reduce(0, +) + spacing * CGFloat(max(heights.count - 1, 0)))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let columns = columns(bounds.width), cell = cell(bounds.width), heights = heights(subviews, width: bounds.width)
+        var y = bounds.minY
+        for (row, height) in heights.enumerated() {
+            for column in 0..<columns where row * columns + column < subviews.count {
+                subviews[row * columns + column].place(at: CGPoint(x: bounds.minX + CGFloat(column) * (cell + spacing), y: y), proposal: ProposedViewSize(width: cell, height: height))
+            }
+            y += height + spacing
         }
     }
 }
@@ -445,9 +542,15 @@ private struct UIButton: View {
             default: break
             }
         } label: {
-            Label(action == "copy" && done ? "Copied" : label, systemImage: action == "open" ? "arrow.up.right" : action == "copy" ? (done ? "checkmark" : "doc.on.doc") : "arrow.up.circle")
-                .labelStyle(.titleAndIcon).font(.subheadline.weight(.medium))
+            // A choice is its words alone, like a quick reply. Open and copy keep a small sign of what the tap does.
+            HStack(spacing: 5) {
+                if action == "open" { Image(systemName: "arrow.up.right").font(.caption.weight(.semibold)) }
+                if action == "copy" { Image(systemName: done ? "checkmark" : "doc.on.doc").font(.caption.weight(.semibold)) }
+                Text(action == "copy" && done ? "Copied" : label).lineLimit(2).multilineTextAlignment(.center)
+            }
+            .font(.subheadline.weight(.medium))
         }
+        .buttonBorderShape(.capsule)
         // A sent choice stays sent: a second tap would say it twice.
         .disabled(action == "send" && (send == nil || done))
         if style == "primary" { button.buttonStyle(.borderedProminent) } else { button.buttonStyle(.bordered) }
