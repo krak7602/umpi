@@ -563,3 +563,31 @@ test("core context remains available when transcript compaction omits its facts"
   assert.deepEqual(await readMemoryHistory(f.harness, context), history);
   assert.deepEqual(await readMemoryReview(f.harness, context, review.id), review);
 });
+
+test("approving a review of one topic leaves the reviews of other topics open; a review of the same topic goes stale", async t => {
+  const f = await fixture(t);
+  const preferences = await block("preferences", "Use short summaries."), routine = await block("routine", "Walk before breakfast.");
+  await replaceCoreContext(f.harness, context, { expectedRevision: 0, blocks: [preferences, routine] });
+  const a = await proposeMemoryUpdate(f.harness, context, { id: "topic-a", expectedRevision: 1, blockId: "preferences", text: "Use short summaries with one example.", reason: "Owner request." });
+  const a2 = await proposeMemoryUpdate(f.harness, context, { id: "topic-a-again", expectedRevision: 1, blockId: "preferences", text: "Use long summaries.", reason: "Owner request." });
+  const b = await proposeMemoryUpdate(f.harness, context, { id: "topic-b", expectedRevision: 1, blockId: "routine", text: "Walk after breakfast.", reason: "Owner request." });
+  assert.equal((await decideMemoryReview(f.harness, context, a.id, "approve")).status, "approved");
+  // The other topic's review is still open, although memory has a new revision.
+  assert.deepEqual((await readMemoryReviews(f.harness, context)).map(review => review.id), [b.id]);
+  assert.equal((await readMemoryReview(f.harness, context, b.id)).status, "pending");
+  // The second review of the same topic was written against text that is gone.
+  assert.equal((await readMemoryReview(f.harness, context, a2.id)).status, "stale");
+  assert.equal((await decideMemoryReview(f.harness, context, a2.id, "approve")).status, "stale");
+  const approved = await decideMemoryReview(f.harness, context, b.id, "approve");
+  assert.equal(approved.status, "approved"); assert.equal(approved.appliedRevision, 3);
+  const current = await readCoreContext(f.harness, context);
+  assert.deepEqual(current.blocks.map(item => item.text), ["Use short summaries with one example.", "Walk after breakfast."], "both approved changes are in memory, each on its own topic");
+  // A source edit to one topic also leaves a review of the other open. The bridge first writes both approved texts back.
+  const synced = await block("preferences", "Use short summaries with one example.");
+  await replaceCoreContext(f.harness, context, { expectedRevision: 3, blocks: [synced, await block("routine", "Walk after breakfast.")] });
+  const c = await proposeMemoryUpdate(f.harness, context, { id: "topic-a-later", expectedRevision: 4, blockId: "preferences", text: "Use short summaries with two examples.", reason: "Owner request." });
+  await replaceCoreContext(f.harness, context, { expectedRevision: 4, blocks: [synced, await block("routine", "Walk after lunch.")] });
+  assert.equal((await readMemoryReview(f.harness, context, c.id)).status, "pending");
+  await f.reopen();
+  assert.equal((await decideMemoryReview(f.harness, context, c.id, "approve")).status, "approved");
+});

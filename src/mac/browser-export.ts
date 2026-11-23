@@ -165,6 +165,7 @@ export async function buildBrowserExportHelper(output: string, syntheticFixture 
     const module = fileURLToPath(new URL("../browser/aside-export-system", import.meta.url));
     await processOutput("/usr/bin/xcrun", ["swiftc", "-O", "-I", module, "-framework", "Security", ...(syntheticFixture ? ["-D", "SYNTHETIC_FIXTURE"] : []), source, "-o", temporary], "", 65536, AbortSignal.timeout(120_000));
     await chmod(temporary, 0o700);
+    // publishable-ok-next-line: the helper's own product identifier, the same in every installation; not an owner's.
     await processOutput("/usr/bin/codesign", ["--force", "--sign", "-", "--identifier", syntheticFixture ? "io.umpi.aside-cookie-export.synthetic" : "io.umpi.aside-cookie-export", temporary], "", 65536, AbortSignal.timeout(30_000));
     await copyFile(temporary, destination, constants.COPYFILE_EXCL);
     await chmod(destination, 0o700);

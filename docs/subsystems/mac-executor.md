@@ -1,7 +1,7 @@
 ---
 title: Mac executor
 aliases: [native execution, execution journal, outbound Mac connection]
-updated: 2026-11-23
+updated: 2026-11-24
 ---
 
 # Mac executor
@@ -56,6 +56,7 @@ Idle, the executor makes a few hundred requests a day instead of several per sec
 
 ### Login item
 
+<!-- publishable-ok-next-line: Umpi's own product identifier, the same in every installation; not an owner's. -->
 `npm run mac -- service-install` runs the executor as a per-user launchd agent, `dev.umpi.executor`. It bundles `src/mac/cli.ts` with esbuild into `~/Library/Application Support/Umpi/executor/umpi-executor.mjs` and runs it with the installing Node, without a TypeScript loader or npm. launchd starts it through `Umpi Executor.app` in the same directory: a background-only app with an ad-hoc local signature and the bundle ID `dev.umpi.executor`, whose launcher runs Node with the bundle. The plist names that app in `AssociatedBundleIdentifiers`, so Login Items shows "Umpi Executor" rather than Node's signer. It is independent of terminal and Claude sessions and of later edits to the checkout. The agent starts at login and restarts after a crash or a failed start, at most every 30 seconds; an orderly stop stays stopped. Its PATH is the installing shell's PATH, so approved commands and coding tasks find the same tools. Output goes to `executor.log` beside the config, owner-only. The plist holds paths only, never a credential.
 
 Run `service-install` again after updating the code or Node; it replaces the running copy. It refuses while another executor runs, because the daemon lock would make the agent retry. `service-status` reports the launchd state, PID, last exit code, and the bundled commit. `service-restart` restarts it, and `service-uninstall` stops it and removes the plist and bundle while keeping config, journals and log.

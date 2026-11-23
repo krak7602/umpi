@@ -40,12 +40,19 @@ function copyReview(review: MemoryReview): MemoryReview {
   return { ...review, before: parseCoreBlock(review.before) };
 }
 
+/**
+ * Whether a review's topic is still as it was when the review was proposed. A review changes one topic, so only a
+ * change to that topic (or its removal) makes the review out of date. A change to another topic does not: approving
+ * one review leaves the reviews of other topics open.
+ */
+function topicUnchanged(review: MemoryReview, blocks: readonly CoreContext["blocks"][number][]): boolean {
+  const block = blocks.find(block => block.id === review.blockId);
+  return block !== undefined && JSON.stringify(parseCoreBlock(block)) === JSON.stringify(parseCoreBlock(review.before));
+}
+
 function effectiveReview(review: MemoryReview, current: CoreContext): MemoryReview {
   const result = copyReview(review);
-  const block = current.blocks.find(block => block.id === result.blockId);
-  if (result.status === "pending" && (result.expectedRevision !== current.revision || block === undefined || JSON.stringify(parseCoreBlock(block)) !== JSON.stringify(result.before))) {
-    result.status = "stale";
-  }
+  if (result.status === "pending" && !topicUnchanged(result, current.blocks)) result.status = "stale";
   return result;
 }
 
@@ -74,15 +81,17 @@ async function appendHistory(tx: Tx, entry: MemoryHistoryEntry): Promise<void> {
   history.entry = entry;
 }
 
-async function stalePending(tx: Tx, index: ReviewIndex, at: string): Promise<void> {
+/** Marks the pending reviews whose topic is not as proposed in `blocks`, the topics after this commit. The others stay open. */
+async function stalePending(tx: Tx, index: ReviewIndex, at: string, blocks: readonly CoreContext["blocks"][number][]): Promise<void> {
+  const open: string[] = [];
   for (const id of index.pendingIds) {
     const document = await tx.doc(MemoryReviews, id, null);
-    if (document.review?.status === "pending") {
-      document.review.status = "stale";
-      document.review.decidedAt = at;
-    }
+    if (document.review?.status !== "pending") continue;
+    if (topicUnchanged(document.review, blocks)) { open.push(id); continue; }
+    document.review.status = "stale";
+    document.review.decidedAt = at;
   }
-  index.pendingIds = [];
+  index.pendingIds = open;
 }
 
 export async function readCoreContext(harness: DocumentReader, context: Context): Promise<CoreContext> {
@@ -105,7 +114,7 @@ export async function replaceCoreContext(harness: Harness, context: Context, val
     const index = await tx.doc(MemoryReviewIndex);
     const at = new Date().toISOString();
     await baseline(tx, index, current, at);
-    await stalePending(tx, index, at);
+    await stalePending(tx, index, at, input.blocks);
     const result = { revision, blocks: input.blocks };
     await appendHistory(tx, { revision, at, source: "source_sync", context: result });
     current.blocks = input.blocks;
@@ -271,7 +280,7 @@ export async function decideMemoryReview(harness: Committer, context: Context, i
     review.status = "approved";
     review.decidedAt = at;
     review.appliedRevision = revision;
-    await stalePending(tx, index, at);
+    await stalePending(tx, index, at, blocks);
     current.blocks = blocks;
     current.revision = revision;
     return copyReview(review);

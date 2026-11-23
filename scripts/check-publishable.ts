@@ -15,7 +15,8 @@
 // handles, and private domains there. A deny-list hit cannot be allowed with a marker; change the pattern instead.
 //
 // Allow marker: a generic hit is accepted when its line contains `publishable-ok`, or when the line before it
-// contains `publishable-ok-next-line`. Use the marker only for an intended, invented example.
+// contains `publishable-ok-next-line`. Use the marker only for an intended, invented example, or for an identifier of
+// the product itself that is the same in every installation.
 //
 // File safety: the check opens only paths that git lists and does not ignore. It never opens a path that
 // `isPrivatePath` names (private Wrangler, `.dev.vars`, signing, and key files), never follows a symbolic link,
