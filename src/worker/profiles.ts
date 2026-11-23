@@ -22,7 +22,8 @@ import { situationTools, SITUATION_INSTRUCTIONS } from "./situation-tools.js";
 import type { ActivityStore } from "./activity-store.js";
 import { activityTools, ACTIVITY_INSTRUCTIONS } from "./activity-tools.js";
 import { contextHooks, contextTools, type ContextHealth } from "./context-health.js";
-import { WEB_INSTRUCTIONS, ownerWroteUrl, webForeground, webTools, type WebUsageStore } from "./web-search.js";
+import { WEB_INSTRUCTIONS, WebSeenStore, ownerWroteUrl, webForeground, webTools, type WebUsageStore } from "./web-search.js";
+import { WEB_WATCH_INSTRUCTIONS, webWatchTools, type WebWatcher } from "./web-watch.js";
 import type { BriefStore } from "./brief-store.js";
 import { briefTools, guardBriefReviewTools, BRIEF_INSTRUCTIONS } from "./brief-tools.js";
 import { journalTools, JOURNAL_INSTRUCTIONS, type JournalRuntime } from "./journal.js";
@@ -81,6 +82,7 @@ export interface ProfileSources {
   t3Watch: T3Watcher;
   cloud: CloudMachines;
   webUsage: WebUsageStore;
+  webWatch: WebWatcher;
   decisions: Decisions;
   history: HistoryIndex;
   contextHealth: ContextHealth;
@@ -145,9 +147,11 @@ export function buildProfiles(s: ProfileSources): Profiles {
   const planningReview = noted("planning-review", guardPlanningReviewTools), mailReview = noted("mail-review", guardMailReviewTools);
   const briefReview = noted("brief-review", guardBriefReviewTools), dreamReview = noted("dream-review", guardDreamReviewTools);
 
-  const web = webTools({ key: s.webKey, usage: s.webUsage, foreground: webForeground(id => s.store.isBackgroundSession(id) && !s.dream.ownsSession(id)),
-    // A link the owner wrote in the shared chat may be read. Background sessions, the nightly run included, get no owner links.
-    ownerWrote: (url, id) => !s.store.isBackgroundSession(id) && ownerWroteUrl(s.chat.ownerTexts(new URL(url).hostname), url) });
+  // A link the owner wrote in the shared chat may be read. Background sessions, the nightly run included, get no owner links.
+  const ownerWrote = (url: string, id: string) => !s.store.isBackgroundSession(id) && ownerWroteUrl(s.chat.ownerTexts(new URL(url).hostname), url);
+  const web = webTools({ key: s.webKey, usage: s.webUsage, foreground: webForeground(id => s.store.isBackgroundSession(id) && !s.dream.ownsSession(id)), ownerWrote });
+  // Watches are set up in the owner's own conversation only: not by a review, the nightly run, or a subagent.
+  const watches = webWatchTools(s.webWatch, { foreground: webForeground(id => s.store.isBackgroundSession(id)), ownerWrote, seen: new WebSeenStore(s.webUsage.db, s.webUsage.now) });
   const decision = decisionTools(s.decisions);
   const assistantChild = assistantSubagentExtension(s.store, s.timezone, s.wake, (api, context) => s.subagents.childScope(api, context), web, decision);
   const codingChild = codingSubagentExtension(s.codingRuntime, (api, context) => s.subagents.childScope(api, context));
@@ -158,7 +162,7 @@ export function buildProfiles(s: ProfileSources): Profiles {
     sections: [...codingBase.sections ?? [], { key: "delegation", tag: false, render: () => SUBAGENT_INSTRUCTIONS }],
   };
   const browserProfile = browserExtension(s.browserRuntime);
-  const foregroundTools = [...assistantTools(s.store, s.timezone, s.wake), ...coreContextTools(s.wake), ...companionTools(s.companion, s.wake), ...codingOwnerTools(s.codingRuntime), ...browserOwnerTools(s.browserRuntime), ...situationTools(s.store, s.situation, s.calendarCredentials), ...speechWordTools(s.speechWords, id => s.store.isBackgroundSession(id)), ...activityTools(s.store, s.activity, s.timezone, s.notifyExecutor), ...journalTools(s.journal, id => s.store.isBackgroundSession(id)), ...widgetTools(s.widgets, s.wake), ...t3CodeTools(s.t3, () => s.t3Watch.recent()), ...t3ActionTools(s.t3, s.t3Requests, s.t3Watch), ...t3WatchTools(s.t3, s.t3Watch), ...cloudMachineTools(s.cloud, s.t3Watch), ...web, ...decision, ...historyTools(s.dream, s.history, id => s.store.isBackgroundSession(id)), ...contextTools(s.contextHealth, id => !s.store.isBackgroundSession(id)), ...delegation.tools ?? []];
+  const foregroundTools = [...assistantTools(s.store, s.timezone, s.wake), ...coreContextTools(s.wake), ...companionTools(s.companion, s.wake), ...codingOwnerTools(s.codingRuntime), ...browserOwnerTools(s.browserRuntime), ...situationTools(s.store, s.situation, s.calendarCredentials), ...speechWordTools(s.speechWords, id => s.store.isBackgroundSession(id)), ...activityTools(s.store, s.activity, s.timezone, s.notifyExecutor), ...journalTools(s.journal, id => s.store.isBackgroundSession(id)), ...widgetTools(s.widgets, s.wake), ...t3CodeTools(s.t3, () => s.t3Watch.recent()), ...t3ActionTools(s.t3, s.t3Requests, s.t3Watch), ...t3WatchTools(s.t3, s.t3Watch), ...cloudMachineTools(s.cloud, s.t3Watch), ...web, ...watches, ...decision, ...historyTools(s.dream, s.history, id => s.store.isBackgroundSession(id)), ...contextTools(s.contextHealth, id => !s.store.isBackgroundSession(id)), ...delegation.tools ?? []];
   const guardedProactiveTools = dreamReview(briefReview(mailReview(planningReview(proactiveTools(s.proactive, s.wake), s.planningRuntime), s.mailRuntime), s.brief), s.dream);
   const briefSources = { brief: s.brief, situation: s.situation, mail: s.mail, planning: s.planningRuntime, calendarCredentials: s.calendarCredentials, activity: s.activity, dream: s.dream };
   const dreamSources = { dream: s.dream, mail: s.mail, situation: s.situation, activity: s.activity,
@@ -169,7 +173,7 @@ export function buildProfiles(s: ProfileSources): Profiles {
     conversations: s.conversations };
   const dreamExtra = (session: string, tool: string) => NIGHTLY_ONLY_TOOLS.includes(tool) && s.dream.ownsSession(session);
   const umpiExtension: Extension = { name: "umpi", hooks: contextHooks({ health: s.contextHealth, isForeground: id => !s.store.isBackgroundSession(id), summaryFor: instructions => s.dreamRuntime.summaryFor(instructions) }), tools: provenance([...background(foregroundTools, s.proactive, dreamExtra), ...guardedProactiveTools, ...planningTools(s.planningRuntime), ...mailTools(s.mailRuntime), ...briefTools(briefSources), ...dreamTools(dreamSources)], s.store, s.provenance),
-    sections: [{ key: "umpi", tag: false, render: () => `${ASSISTANT_INSTRUCTIONS}\n${PROVENANCE_INSTRUCTIONS}\n${COMPANION_INSTRUCTIONS}\n${PROACTIVE_INSTRUCTIONS}\n${PLANNING_INSTRUCTIONS}\n${MAIL_INSTRUCTIONS}\n${SITUATION_INSTRUCTIONS}\n${ACTIVITY_INSTRUCTIONS}\n${WEB_INSTRUCTIONS}\n${DECISION_INSTRUCTIONS}\n${JOURNAL_INSTRUCTIONS}\n${BRIEF_INSTRUCTIONS}\n${DREAM_INSTRUCTIONS}\n${CODING_OWNER_INSTRUCTIONS}\n${BROWSER_OWNER_INSTRUCTIONS}\n${SUBAGENT_INSTRUCTIONS}\nOwner timezone: ${s.timezone}.` }, coreContextSection, { key: "lessons", tag: false, render: () => s.dream.playbook() }, { key: "response-style", tag: false, render: () => RESPONSE_STYLE_INSTRUCTIONS }] };
+    sections: [{ key: "umpi", tag: false, render: () => `${ASSISTANT_INSTRUCTIONS}\n${PROVENANCE_INSTRUCTIONS}\n${COMPANION_INSTRUCTIONS}\n${PROACTIVE_INSTRUCTIONS}\n${PLANNING_INSTRUCTIONS}\n${MAIL_INSTRUCTIONS}\n${SITUATION_INSTRUCTIONS}\n${ACTIVITY_INSTRUCTIONS}\n${WEB_INSTRUCTIONS}\n${WEB_WATCH_INSTRUCTIONS}\n${DECISION_INSTRUCTIONS}\n${JOURNAL_INSTRUCTIONS}\n${BRIEF_INSTRUCTIONS}\n${DREAM_INSTRUCTIONS}\n${CODING_OWNER_INSTRUCTIONS}\n${BROWSER_OWNER_INSTRUCTIONS}\n${SUBAGENT_INSTRUCTIONS}\nOwner timezone: ${s.timezone}.` }, coreContextSection, { key: "lessons", tag: false, render: () => s.dream.playbook() }, { key: "response-style", tag: false, render: () => RESPONSE_STYLE_INSTRUCTIONS }] };
   // Background reviews get only the tools they may use: every request carries its tool list, and a review
   // pays for it in full on each cold start.
   const reviewTools = [...background(foregroundTools, s.proactive, dreamExtra).filter(tool => backgroundTools.has(tool.name) || NIGHTLY_ONLY_TOOLS.includes(tool.name)),

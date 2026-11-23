@@ -203,6 +203,21 @@ Background conversations, which run mail review, the brief, daily preparation, a
 - Both are for the owner's conversation and its assistant subagents. Background reviews of mail, notes and the brief cannot use them, so text from those sources cannot steer a query. Results are website text, not instructions. Queries leave Umpi, so the model is told not to put private details about the owner into them unless the owner asked.
 - Each request is counted before it is sent, in thousandths of a US dollar at Parallel's list prices: a quick search or one page costs 1, a thorough search 5. When the UTC month's total would pass `UMPI_WEB_MONTHLY_BUDGET` (default 4500, that is $4.50, below Parallel's $5 monthly free credit), the tools refuse until the next month. `GET /api/status` shows `web`: whether a key is set, the month's spend, searches and pages, and the last provider error, never the key.
 
+### Web watches
+
+`web-watch.ts` lets the owner ask once to be told when something on a public web page becomes true: a booking opens, a price passes a limit, an item is back in stock, a listing appears. Claude sets the watch up in the owner's conversation; after that no model turn runs.
+
+- **Setup.** `create_web_watch` takes a title, 1 to 3 URLs, what to look for, one condition statement, optional `requires` phrases that must be on the page, and for a price or count a `number` with one limit (`below` or `above`). The instructions tell Claude to find the page of the one thing, read how that page shows a case that is already true, and ask the owner for what the request leaves open. Each URL passes the same [URL provenance](#web-search) check as `read_web_page`.
+- **First check.** The tool reads the pages live once. A page that cannot be read live is refused, so a watch that could never fire is not left running. A condition that is already true is reported and nothing is saved.
+- **Scheduled checks.** The `web-watch` reconcile stage starts due checks beside the coordinator's other work. A check is code: a live read through Parallel with no saved copy as fallback, the phrase test, then one call to the [decision service](#decision-models). A statement is true from a probability of 0.7. A number is extracted and compared with the limit in code; a number that is missing or has confidence under 0.5 is an unknown check.
+- **Fallback without decision models.** A watch with `requires` phrases tells the owner that the page now has those phrases and that no model judged it. A watch without phrases, and every number watch, counts the check as unknown.
+- **Messages.** The owner gets one message when the condition is true (with the reason, a page excerpt, and the link), one after 6 unknown checks in a row, one when the watch stops after 72, and one when it reaches its end date. Messages respect quiet hours without being held.
+- **Limits.** A check every 30 to 1,440 minutes (default 60), for 1 to 90 days (default 14); at most 8 active watches; and at most 3,000 planned page reads in 30 days over all active watches. Each read is charged to the web budget first; a spent budget is an unknown check.
+- **Authority.** `create_web_watch` and `cancel_web_watch` are owner-directed tools: a turn that has read web pages proposes the watch, and the next owner message lets it be created. `create_web_watch` returns no page text, so one turn can set up several. `list_web_watches` and `check_web_watch` quote pages and mark the turn as having read outside text. Background reviews, the nightly run, and subagents have none of these tools.
+- **State.** `umpi_web_watches` keeps each watch for 30 days after it ends. Protected status reports counts, schedule, and last outcomes under `webWatches`, without titles, conditions, or page text.
+
+The evidence is unit tests and one hosted exercise; see [verification](../learning/assistant-core-verification.md#web-watch-verification). A watch reads only what Parallel can fetch: a page behind a login, or one that a site refuses to Parallel, cannot be watched.
+
 ### Decision models
 
 `decisions.ts` is the harness's decision service: small Cloudflare models on Workers AI, through the optional `AI` binding, that answer without writing prose. A call is billed for input only. Code asks them instead of starting a Claude turn when that is all it needs, and Claude calls them as tools over many items, the way it calls web search.
@@ -521,6 +536,7 @@ The [development and operation runbook](../runbooks/local-development.md) owns l
 - 2026-10-30: Added knocks: due reminders chime and prompt on the Mac, with Done and Snooze.
 - 2026-10-30: Set compaction to start at 550k tokens, stored long tool results behind handles, reset background reviews between runs, and added conversation sizes to status.
 - 2026-10-29: Added web search and page reading through Parallel, within a monthly budget.
+- 2026-11-23: Added live page reads (`fresh`) and web watches: scheduled checks of a page in code, with a message to the owner when a condition becomes true.
 - 2026-10-24: Added the executor wake socket, owned by a lifecycle capability, and protected `executor` status (online, last seen). After a day without the executor, one Telegram notice says Mac work is waiting.
 - 2026-11-05: Added `UMPI_TELEGRAM=off` to turn Telegram off without removing it, now that the app is the primary surface, and pairing from a paired device.
 - 2026-11-23: Every card's buttons are answered from the app when Telegram is off or has not sent the card; memory reviews lead with the changed lines; `edit_daily_note` changes or removes one existing note line on the owner's request.

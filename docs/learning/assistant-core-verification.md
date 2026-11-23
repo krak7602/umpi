@@ -206,6 +206,18 @@ Unit tests cover fact merging and expiry, owner corrections, rejected facts, fac
 
 On 2026-10-19 the 02:30 preparation and a manual retry both reported the private note workspace as unavailable. The situation record held an Obsidian Sync renewal failure from 2026-10-18. After the owner restored billing, a manual preparation synced the same evening. The failure mode is an external subscription, not a code defect.
 
+### Web watch verification
+
+On 2026-11-23 the hosted coordinator exercised [web watches](../subsystems/assistant-runtime.md#web-watches) against one public ticketing site that answers a plain automated fetch with a challenge page.
+
+- A saved copy of a venue page was five days old. The same read with `fresh` returned the day's own listing, and each page reported that day as `acquired`.
+- Asked in plain words to set up a monitor, the owner conversation found the venue page, read it live, reported what it showed, and asked the owner for the links of two later dates that no search result held, because `read_web_page` and `create_web_watch` refuse a URL the model composed.
+- `create_web_watch` on a condition that was already true saved nothing and reported it; the decision model gave the statement a probability of 0.88 on the live page text.
+- `create_web_watch` on a title the page did not list saved a watch with the first check "not yet", decided by the phrase test without a model call. `check_web_watch` repeated that.
+- `cancel_web_watch` in the same turn as `check_web_watch` was refused by the provenance guard, and ran on the owner's next message.
+
+Not verified: a scheduled check that turns true and its message to the owner, the unknown-streak and end-date messages (unit tests only), a number watch on a live page, and how often the provider's live fetch of this site fails over days.
+
 ### Automated checks and limits
 
 The publication check passed `npm run typecheck`, the full Node test suite (600 tests at that time: 597 passed, 3 environment-gated skips), and the complete `npm run build` Wrangler dry run with both container images. Root and vault-runtime `npm audit --audit-level=high` reported zero vulnerabilities. All 18 maintained documentation pages were reachable from `README.md` with no missing local target or heading fragment. Candidate-source privacy scanning and the public `/`, `/privacy`, and `/terms` smoke also passed.
@@ -231,3 +243,4 @@ Not established by the current evidence:
 - 2026-10-19: Diagnosed the stalled mail reviews, measured email cleaning, and added situation and brief test coverage.
 - 2026-10-19: Traced daily-note failures to a lapsed Obsidian Sync subscription.
 - 2026-11-23: Added authority tests, the capability manifest with a prompt-size limit, and the authority mutation check.
+- 2026-11-23: Added hosted evidence for live page reads and web watches.

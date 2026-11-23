@@ -33,6 +33,7 @@ import { T3ActionRequests } from "../../src/worker/t3-actions.js";
 import { T3CodeStore } from "../../src/worker/t3-code.js";
 import { T3Watcher } from "../../src/worker/t3-watch.js";
 import { WebUsageStore } from "../../src/worker/web-search.js";
+import { WebWatcher } from "../../src/worker/web-watch.js";
 import { WidgetStore } from "../../src/worker/widget.js";
 
 export const PROFILE_TZ = "UTC";
@@ -65,6 +66,7 @@ export function profileFixture(t: TestContext) {
   const t3 = new T3CodeStore(db, stub("network")), t3Requests = new T3ActionRequests(db, store, t3);
   const t3Watch = new T3Watcher(db, store, t3, { quiet: now => proactive.quiet(now), timezone: PROFILE_TZ });
   const decisions = new Decisions(db, undefined, () => 0), history = new HistoryIndex(db, decisions);
+  const webUsage = new WebUsageStore(db, () => 1_000);
   const host = { harness: stub("harness"), extension: stub("extension"), archive: () => undefined, cloud: () => undefined, cloudAvailable: () => false, modelReady: async () => false, wake, track };
   const ownerSessions = () => (["telegram", "control"] as const).flatMap(channel => { const session = store.session(channel); return session ? [{ channel, session }] : []; });
   const sources: ProfileSources = {
@@ -76,7 +78,7 @@ export function profileFixture(t: TestContext) {
     speechWords: new SpeechWordStore(db), widgets: new WidgetStore(db), t3, t3Requests, t3Watch,
     // Not built: its tools only close over it, and its constructor needs Durable Object stubs.
     cloud: {} as CloudMachines,
-    webUsage: new WebUsageStore(db, () => 1_000), decisions, history, contextHealth: new ContextHealth(db), chat: new ChatLog(db),
+    webUsage, webWatch: new WebWatcher(db, decisions, { key: () => undefined, usage: webUsage }, { notice: () => undefined }), decisions, history, contextHealth: new ContextHealth(db), chat: new ChatLog(db),
     planningRuntime: new PlanningRuntime(planning, () => undefined, async () => 1, calendarCredentials, wake),
     mailRuntime: new MailRuntime(mail, undefined, wake),
     codingRuntime: new CodingRuntime(coding, host),

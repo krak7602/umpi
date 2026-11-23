@@ -48,6 +48,7 @@ import { KnockStore } from "./knocks.js";
 import { KNOCK_SNOOZE_MINUTES } from "../shared/knock.js";
 import { CONTEXT_COMPACTION, ContextHealth, mayResetBackground } from "./context-health.js";
 import { DEFAULT_WEB_MONTHLY_BUDGET, WebUsageStore } from "./web-search.js";
+import { WebWatcher } from "./web-watch.js";
 import { BriefStore } from "./brief-store.js";
 import { briefRequest, enqueueBriefControls, formatBriefStatus, handleBriefCallback } from "./brief-telegram.js";
 import { AlertRuntime, AlertStore, alertRequest } from "./alerts.js";
@@ -189,6 +190,7 @@ class Coordinator extends LifecycleCapability {
       { name: "coding", run: () => a.codingRuntime.drive(), due: () => a.codingRuntime.nextDue() },
       { name: "t3-watch", run: () => a.t3Watch.kick(work => this.lifecycle.trackAlarmWork(work), () => this.wake()), due: () => a.t3Watch.nextDue() },
       { name: "cloud", run: () => a.cloud.drive(), due: () => a.cloud.nextDue() },
+      { name: "web-watch", run: () => a.webWatch.kick(work => this.lifecycle.trackAlarmWork(work), () => this.wake()), due: () => a.webWatch.nextDue() },
       { name: "browser", run: () => a.browserRuntime.drive(), due: () => a.browserRuntime.nextDue() },
       // A submitted turn is followed every two seconds. Missing credentials do not justify that loop; auth updates wake the queue.
       { name: "operations", run: () => this.driveOperations(), due: () => store.pendingOperations().some(op => op.status === "submitted") ? Date.now() + 2_000 : undefined },
@@ -346,6 +348,7 @@ export class Assistant extends Agent<Env> {
   readonly modelFallback: ModelFallback;
   readonly webUsage: WebUsageStore;
   readonly decisions: Decisions;
+  readonly webWatch: WebWatcher;
   readonly dream: DreamStore;
   readonly history: HistoryIndex;
   readonly dreamRuntime: DreamRuntime;
@@ -457,6 +460,9 @@ export class Assistant extends Agent<Env> {
       const budget = Number(env.UMPI_DECISION_MONTHLY_BUDGET);
       return Number.isInteger(budget) && budget >= 0 ? budget : DEFAULT_DECISION_MONTHLY_BUDGET;
     });
+    this.webWatch = new WebWatcher(this.store.db, this.decisions, { key: () => this.config.UMPI_PARALLEL_API_KEY, usage: this.webUsage }, {
+      notice: (group, text) => this.store.enqueue(group, "telegram", text, undefined, undefined, undefined, this.proactive.quiet(Date.now()) ? { quiet: true } : undefined),
+    });
     this.history = new HistoryIndex(this.store.db, this.decisions);
     this.dream.index = this.history;
     this.dream.backfillIndex();
@@ -528,7 +534,7 @@ export class Assistant extends Agent<Env> {
       conversations: async () => Promise.all(ownerSessions().map(async ({ channel, session }) => ({ channel, entries: await this.harness.messages({ session }) as never }))),
       provenance: this.provenance, companion: this.companion, proactive: this.proactive, situation: this.situation, activity: this.activity, mail: this.mail, brief: this.brief,
       dream: this.dream, coding: this.coding, browser: this.browser, journal: this.journal, speechWords: this.speechWords, widgets: this.widgets, t3: this.t3, t3Requests: this.t3Requests,
-      t3Watch: this.t3Watch, cloud: this.cloud, webUsage: this.webUsage, decisions: this.decisions, history: this.history, contextHealth: this.contextHealth, chat: this.chat,
+      t3Watch: this.t3Watch, cloud: this.cloud, webUsage: this.webUsage, webWatch: this.webWatch, decisions: this.decisions, history: this.history, contextHealth: this.contextHealth, chat: this.chat,
       planningRuntime: this.planningRuntime, mailRuntime: this.mailRuntime, codingRuntime: this.codingRuntime, browserRuntime: this.browserRuntime, dreamRuntime: this.dreamRuntime, subagents: this.subagents,
     });
     this.backgroundExtension = profiles.background;
@@ -971,6 +977,7 @@ export class Assistant extends Agent<Env> {
     return {
       model: { providerId: this.providerId, modelId: this.modelId, configured, issue: this.modelIssue ?? null, lastFailure: this.lastModelFailure ?? null, fallback: this.modelFallback.status() },
       web: this.webUsage.status(Boolean(this.config.UMPI_PARALLEL_API_KEY)),
+      webWatches: this.webWatch.status(),
       decisions: { ...this.decisions.status(), ownerEffort: this.efforts, effortCorrections: this.effortTally.status() },
       knocks: { ...this.knocks.status(), pushed: this.knockPushes.status() },
       chat: { ...this.chat.status(), sockets: this.chatSocket?.count() ?? 0 },
